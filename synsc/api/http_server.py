@@ -1,137 +1,59 @@
 """HTTP API Server for Synsc Context - enables tool calling from coding agents.
 
-This server supports multi-tenant operation where each user has isolated data.
-User ID is extracted from the API key authentication and passed to all services.
+Multi-user server with GitHub OAuth, JWT sessions, and DB-backed API keys.
 """
 
 import asyncio
 import hashlib
+import hmac
 import os
 import json
-import secrets
 import time
 import uuid as _uuid
 from dataclasses import dataclass
-from typing import Annotated, Optional
+from typing import Annotated
 
 import requests
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Header, Request, UploadFile, File
+from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
 from synsc import __version__
 from synsc.config import get_config
-from synsc.database.connection import init_db
-from synsc.api.mcp_server import create_server as create_mcp_server, set_current_api_key, _current_user_id
+from synsc.database.connection import init_db, get_session
+from synsc.api.mcp_server import (
+    create_server as create_mcp_server,
+    set_current_api_key,
+    set_current_user_id,
+)
+from synsc.auth.sessions import create_session_token, verify_session_token
 
 logger = structlog.get_logger(__name__)
 
-# Rate limiting — database-backed via Supabase check_rate_limit() RPC
-_RATE_LIMIT_WINDOW = 60  # seconds
 
-# =============================================================================
-# CLI AUTH SESSION STORAGE (database-backed via Supabase)
-# =============================================================================
+def _encrypt_if_configured(token: str) -> str:
+    """Encrypt a token if TOKEN_ENCRYPTION_KEY is set, else return plaintext."""
+    if not os.getenv("TOKEN_ENCRYPTION_KEY", ""):
+        return token
+    from synsc.services.token_encryption import encrypt_token
+    return encrypt_token(token)
 
-
-class CLIAuthSessions:
-    """Database-backed CLI auth sessions using Supabase.
-
-    Stores sessions in the ``cli_auth_sessions`` table so they are shared
-    across all Gunicorn workers and survive deploys.
-    """
-
-    def __init__(self, ttl_seconds: int = 600):
-        self._ttl = ttl_seconds
-
-    def _get_db(self):
-        from synsc.supabase_auth import get_supabase_client
-        return get_supabase_client()
-
-    def create_session(self) -> dict:
-        """Create a new CLI auth session in the database."""
-        user_code = f"{secrets.token_hex(2).upper()}-{secrets.token_hex(2).upper()}"
-        device_code = secrets.token_urlsafe(32)
-        now = time.time()
-
-        row = {
-            "device_code": device_code,
-            "user_code": user_code,
-            "status": "pending",
-            "created_at": now,
-            "expires_at": now + self._ttl,
-        }
-
-        try:
-            self._get_db().insert("cli_auth_sessions", row)
-        except Exception as e:
-            logger.error("Failed to create CLI auth session in DB", error=str(e))
-
-        return {**row, "user_id": None, "api_key": None, "user_name": None, "user_email": None}
-
-    def get_session(self, device_code: str) -> Optional[dict]:
-        """Get a session by device code."""
-        try:
-            rows = self._get_db().select("cli_auth_sessions", filters={"device_code": device_code})
-            if not rows:
-                return None
-            session = rows[0]
-            if time.time() > session["expires_at"] and session["status"] == "pending":
-                self._get_db().update("cli_auth_sessions", {"status": "expired"}, {"device_code": device_code})
-                session["status"] = "expired"
-            return session
-        except Exception as e:
-            logger.error("Failed to get CLI auth session", error=str(e))
-            return None
-
-    def get_session_by_user_code(self, user_code: str) -> Optional[dict]:
-        """Get a session by user code."""
-        try:
-            rows = self._get_db().select("cli_auth_sessions", filters={"user_code": user_code.upper()})
-            if not rows:
-                return None
-            session = rows[0]
-            if time.time() > session["expires_at"] and session["status"] == "pending":
-                self._get_db().update("cli_auth_sessions", {"status": "expired"}, {"device_code": session["device_code"]})
-                session["status"] = "expired"
-            return session
-        except Exception as e:
-            logger.error("Failed to get CLI auth session by user_code", error=str(e))
-            return None
-
-    def complete_session(self, device_code: str, user_id: str, api_key: str,
-                        user_name: str = None, user_email: str = None) -> bool:
-        """Mark a session as completed with user info."""
-        try:
-            rows = self._get_db().select("cli_auth_sessions", filters={"device_code": device_code})
-            if not rows or rows[0]["status"] != "pending":
-                return False
-            if time.time() > rows[0]["expires_at"]:
-                self._get_db().update("cli_auth_sessions", {"status": "expired"}, {"device_code": device_code})
-                return False
-
-            return self._get_db().update("cli_auth_sessions", {
-                "status": "completed",
-                "user_id": user_id,
-                "api_key": api_key,
-                "user_name": user_name,
-                "user_email": user_email,
-            }, {"device_code": device_code})
-        except Exception as e:
-            logger.error("Failed to complete CLI auth session", error=str(e))
-            return False
-
-
-cli_auth_sessions = CLIAuthSessions()
+def _decrypt_if_configured(stored: str) -> str:
+    """Decrypt a token if TOKEN_ENCRYPTION_KEY is set, else return as-is."""
+    if not os.getenv("TOKEN_ENCRYPTION_KEY", ""):
+        return stored
+    from synsc.services.token_encryption import decrypt_token
+    return decrypt_token(stored)
 
 
 @dataclass
 class AuthContext:
     """Authentication context containing user info."""
     api_key: str
-    user_id: str | None
+    user_id: str
 
 
 # =============================================================================
@@ -230,92 +152,126 @@ class CreateJobRequest(BaseModel):
 
 _start_time: float = time.time()
 
+# =============================================================================
+# Auth: GitHub OAuth + JWT Sessions + DB API Keys + SYSTEM_PASSWORD fallback
+# =============================================================================
+#
+# Credential types (checked in order):
+#   1. JWT session token — issued after GitHub OAuth login or SYSTEM_PASSWORD
+#      login. Contains user_id. Verified via SERVER_SECRET.
+#   2. DB API keys — created via dashboard, SHA-256 hashed in DB.
+#      Used by AI agents / MCP tools.
+#   3. SYSTEM_PASSWORD — optional admin fallback. If set, resolves to the
+#      first admin user or creates one.
+# =============================================================================
+
+
+def _hash_api_key(key: str) -> str:
+    """SHA-256 hash of an API key for DB lookup."""
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _validate_api_key_db(api_key: str) -> str | None:
+    """Validate an API key against the database. Returns user_id or None."""
+    if not api_key:
+        return None
+
+    key_hash = _hash_api_key(api_key)
+    try:
+        with get_session() as session:
+            row = session.execute(
+                text(
+                    "SELECT user_id, is_revoked FROM api_keys "
+                    "WHERE key_hash = :hash LIMIT 1"
+                ),
+                {"hash": key_hash},
+            ).mappings().first()
+
+            if not row or row["is_revoked"]:
+                return None
+
+            # Update last_used_at (best-effort)
+            try:
+                session.execute(
+                    text("UPDATE api_keys SET last_used_at = now() WHERE key_hash = :hash"),
+                    {"hash": key_hash},
+                )
+                session.commit()
+            except Exception:
+                pass
+
+            return row["user_id"]
+    except Exception as e:
+        logger.error("Error validating API key", error=str(e))
+        return None
+
+
+def _get_or_create_admin_user() -> str:
+    """Get the first admin user, or create one for SYSTEM_PASSWORD login."""
+    with get_session() as session:
+        row = session.execute(
+            text("SELECT id FROM users WHERE is_admin = true ORDER BY created_at LIMIT 1")
+        ).mappings().first()
+        if row:
+            return row["id"]
+
+        # Create an admin user for SYSTEM_PASSWORD access
+        import uuid
+        admin_id = str(uuid.uuid4())
+        session.execute(
+            text(
+                "INSERT INTO users (id, email, name, is_admin) "
+                "VALUES (:id, 'admin@localhost', 'Admin', true)"
+            ),
+            {"id": admin_id},
+        )
+        session.commit()
+        logger.info("Created admin user for SYSTEM_PASSWORD", user_id=admin_id)
+        return admin_id
+
 
 async def verify_api_key(
     x_api_key: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AuthContext:
-    """Verify API key from headers."""
-    config = get_config()
-    
-    if not config.api.require_auth:
-        # Use default dev user when auth is disabled
-        # This matches the user created in setup_supabase.sql
-        return AuthContext(api_key="dev-mode", user_id="00000000-0000-0000-0000-000000000001")
-    
-    api_key = x_api_key
-    if not api_key and authorization:
-        if authorization.startswith("Bearer "):
-            api_key = authorization[7:]
-    
-    if not api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing API key. Provide via X-API-Key header or Authorization: Bearer header",
-        )
-    
-    from synsc.supabase_auth import validate_api_key_hybrid
-    
-    is_valid, user_id = validate_api_key_hybrid(api_key)
-    if not is_valid:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    
-    return AuthContext(
-        api_key=api_key,
-        user_id=user_id if user_id != "local" else None,
-    )
+    """Verify credentials from request headers.
 
+    Checks (in order):
+      1. JWT session token (from OAuth login or password login)
+      2. DB-stored API key (for AI agents / MCP tools)
+      3. SYSTEM_PASSWORD (admin fallback)
+    Via: Authorization: Bearer <token> or X-API-Key: <token>
+    """
+    token = x_api_key
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization[7:]
 
-async def rate_limit(
-    request: Request,
-    auth: AuthContext = Depends(verify_api_key),
-) -> None:
-    """Apply rate limiting per API key via Supabase RPC."""
-    config = get_config()
-    key_hash = hashlib.sha256(auth.api_key.encode()).hexdigest()[:32]
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing credentials.")
 
-    try:
-        from synsc.supabase_auth import get_supabase_client
-        result = get_supabase_client().rpc("check_rate_limit", {
-            "p_key_hash": key_hash,
-            "p_limit": config.api.rate_limit_per_minute,
-            "p_window": _RATE_LIMIT_WINDOW,
-        })
-        # RPC returns a single boolean
-        allowed = result if isinstance(result, bool) else True
-        if not allowed:
-            raise HTTPException(
-                status_code=429,
-                detail=f"Rate limit exceeded. Max {config.api.rate_limit_per_minute} requests per minute.",
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        # Fail open: if Supabase is unreachable, allow the request through
-        logger.warning("Rate limit check failed, allowing request", error=str(e))
+    # 1. Check JWT session token
+    user_id = verify_session_token(token)
+    if user_id:
+        return AuthContext(api_key="session", user_id=user_id)
 
+    # 2. Check DB-stored API key
+    user_id = _validate_api_key_db(token)
+    if user_id:
+        return AuthContext(api_key=token, user_id=user_id)
 
-# Admin user IDs (comma-separated env var)
-_ADMIN_USER_IDS: set[str] = set(
-    uid.strip()
-    for uid in os.environ.get("ADMIN_USER_IDS", "").split(",")
-    if uid.strip()
-)
+    # 3. Check SYSTEM_PASSWORD (admin fallback)
+    system_pw = os.getenv("SYSTEM_PASSWORD", "")
+    if system_pw and hmac.compare_digest(token, system_pw):
+        admin_id = _get_or_create_admin_user()
+        return AuthContext(api_key="system_password", user_id=admin_id)
 
-
-def _is_admin(user_id: str | None) -> bool:
-    """Check if a user is an admin."""
-    if not user_id:
-        return False
-    return user_id in _ADMIN_USER_IDS
+    raise HTTPException(status_code=401, detail="Invalid credentials.")
 
 
 # =============================================================================
 # Response Cache (short TTL, per-user)
 # =============================================================================
 
-# Caches expensive query results to avoid repeated Supabase round-trips.
-# Keyed by (user_id, endpoint_key). Invalidated on mutation (index/delete).
 _RESPONSE_CACHE: dict[str, tuple[dict, float]] = {}
 _RESPONSE_CACHE_TTL = 30  # 30 seconds
 
@@ -345,43 +301,10 @@ def _cache_invalidate_user(user_id: str) -> None:
 # =============================================================================
 
 
-def _log_activity(
-    user_id: str | None,
-    action: str,
-    resource_type: str | None = None,
-    resource_id: str | None = None,
-    query: str | None = None,
-    results_count: int | None = None,
-    duration_ms: int | None = None,
-    metadata: dict | None = None,
-) -> None:
-    """Fire-and-forget activity logging for HTTP endpoints. Never raises."""
-    if not user_id:
-        return
-    try:
-        from synsc.supabase_auth import get_supabase_auth
-        auth_service = get_supabase_auth()
-        auth_service.log_activity(
-            user_id=user_id,
-            action=action,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            query=query,
-            results_count=results_count,
-            duration_ms=duration_ms,
-            metadata=metadata,
-        )
-    except Exception:
-        logger.debug("Activity logging failed (non-critical)")
-
-
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     import logging as _logging
 
-    # Ensure structlog routes through stdlib logging (needed for Sentry
-    # LoggingIntegration breadcrumbs).  When started via Gunicorn the
-    # module-level configure() in main.py doesn't run, so we do it here.
     if not isinstance(
         structlog.get_config().get("wrapper_class"),
         type,
@@ -395,8 +318,6 @@ def create_app() -> FastAPI:
         )
         import sys as _sys
 
-        # Use JSON in production (clean for Sentry/log drains),
-        # colored console only in a real terminal
         if _sys.stderr.isatty():
             _renderer = structlog.dev.ConsoleRenderer()
         else:
@@ -421,46 +342,6 @@ def create_app() -> FastAPI:
 
     config = get_config()
 
-    # Initialize Sentry if DSN is configured
-    sentry_dsn = os.environ.get("SENTRY_DSN")
-    if sentry_dsn:
-        import sentry_sdk
-        from sentry_sdk.integrations.fastapi import FastApiIntegration
-        from sentry_sdk.integrations.logging import LoggingIntegration
-        from sentry_sdk.integrations.starlette import StarletteIntegration
-
-        def before_send(event, hint):
-            """Filter out expected exceptions from Sentry reporting."""
-            if "exc_info" in hint:
-                exc_type, exc_value, tb = hint["exc_info"]
-                # Ignore CancelledError - normal flow control when clients disconnect during SSE streams
-                if exc_type.__name__ == "CancelledError":
-                    return None
-                # Ignore client disconnect errors during streaming
-                if "ClientDisconnect" in exc_type.__name__:
-                    return None
-            return event
-
-        sentry_sdk.init(
-            dsn=sentry_dsn,
-            integrations=[
-                FastApiIntegration(),
-                StarletteIntegration(),
-                # Breadcrumbs from INFO+ (context trail on errors),
-                # only ERROR+ logs create standalone Sentry events
-                LoggingIntegration(
-                    level=_logging.INFO,          # breadcrumbs from INFO+
-                    event_level=_logging.ERROR,   # Sentry events from ERROR+ only
-                ),
-            ],
-            before_send=before_send,  # Filter expected exceptions
-            traces_sample_rate=0.1,  # 10% of requests for performance monitoring
-            environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
-            release=f"synsc-context@{__version__}",
-            send_default_pii=False,
-        )
-        logger.info("Sentry initialized", environment=os.environ.get("SENTRY_ENVIRONMENT", "production"))
-
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
@@ -469,8 +350,8 @@ def create_app() -> FastAPI:
         init_db()
 
         # Load the sentence-transformers model (~500 MB) in this worker
-        # process.  Runs in a thread so the event loop (and Gunicorn
-        # heartbeat) stays alive during the ~15 s load.
+        # process.  Runs in a thread so the event loop stays alive during
+        # the ~15 s load.
         from synsc.embeddings.generator import get_paper_embedding_generator
         try:
             gen = await asyncio.to_thread(get_paper_embedding_generator)
@@ -489,7 +370,7 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
         lifespan=lifespan,
     )
-    
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.api.cors_origins,
@@ -497,11 +378,11 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+
     # ==========================================================================
     # Health & Info Endpoints
     # ==========================================================================
-    
+
     @app.get("/", tags=["Info"])
     async def root() -> dict:
         """API root - basic info."""
@@ -511,10 +392,10 @@ def create_app() -> FastAPI:
             "docs": "/docs",
             "health": "/health",
         }
-    
+
     @app.get("/health", response_model=HealthResponse, tags=["Info"])
     def health() -> HealthResponse:
-        """Health check endpoint.  Must be fast — Render pings every ~15s."""
+        """Health check endpoint."""
         return HealthResponse(
             status="healthy",
             version=__version__,
@@ -522,174 +403,193 @@ def create_app() -> FastAPI:
             uptime_seconds=time.time() - _start_time,
             database_backend="postgresql",
             vector_backend="pgvector",
-            auth_backend="supabase",
+            auth_backend="github_oauth+jwt",
         )
-    
+
     @app.get("/config", tags=["Info"])
     async def get_public_config() -> dict:
         """Get public configuration for frontend."""
+        github_client_id = os.getenv("GITHUB_CLIENT_ID", "")
         return {
-            "supabase_url": config.supabase.url,
-            "supabase_publishable_key": config.supabase.publishable_key,
             "api_url": f"http://{config.api.host}:{config.api.port}",
+            "github_oauth_enabled": bool(github_client_id),
+            "system_password_enabled": bool(os.getenv("SYSTEM_PASSWORD", "")),
         }
-    
+
     # ==========================================================================
-    # CLI Auth Endpoints (Device Flow for `npx synsc-context`)
+    # Auth Endpoints
     # ==========================================================================
-    
-    @app.post("/api/cli/auth/start", tags=["CLI Auth"])
-    def cli_auth_start() -> JSONResponse:
-        """Start a CLI authentication session (device flow).
-        
-        Returns a user_code for display and a device_code for polling.
-        The user authenticates in the browser, then the CLI polls for completion.
+
+    # In-memory CSRF state store for OAuth (short-lived)
+    _oauth_states: dict[str, float] = {}
+    _OAUTH_STATE_TTL = 600  # 10 minutes
+
+    def _cleanup_oauth_states() -> None:
+        """Remove expired OAuth states."""
+        now = time.time()
+        expired = [s for s, t in _oauth_states.items() if now - t > _OAUTH_STATE_TTL]
+        for s in expired:
+            _oauth_states.pop(s, None)
+
+    @app.get("/auth/github", tags=["Auth"])
+    async def auth_github(request: Request) -> RedirectResponse:
+        """Start GitHub OAuth flow — redirects to GitHub."""
+        from synsc.auth.oauth import build_authorize_url, generate_state
+
+        state = generate_state()
+        _cleanup_oauth_states()
+        _oauth_states[state] = time.time()
+
+        # Build callback URL from the incoming request
+        callback_url = str(request.url_for("auth_github_callback"))
+        authorize_url = build_authorize_url(redirect_uri=callback_url, state=state)
+        return RedirectResponse(url=authorize_url)
+
+    @app.get("/auth/github/callback", tags=["Auth"])
+    async def auth_github_callback(
+        request: Request,
+        code: str = Query(...),
+        state: str = Query(...),
+    ) -> RedirectResponse:
+        """GitHub OAuth callback — exchanges code for user, issues JWT session.
+
+        Redirects to the frontend with the session token as a query parameter.
+        The frontend stores it and uses it for subsequent API requests.
         """
-        session = cli_auth_sessions.create_session()
-        
-        logger.info("CLI auth session created", user_code=session["user_code"])
-        
-        return JSONResponse(content={
-            "device_code": session["device_code"],
-            "user_code": session["user_code"],
-            "verification_url": f"{config.api.cors_origins[0].rstrip('/')}/cli-auth" if config.api.cors_origins else None,
-            "expires_in": 600,   # 10 minutes
-            "interval": 5,       # poll every 5 seconds
-        })
-    
-    @app.get("/api/cli/auth/status/{device_code}", tags=["CLI Auth"])
-    def cli_auth_status(device_code: str) -> JSONResponse:
-        """Poll for CLI authentication completion.
-        
-        Returns 'pending', 'completed' (with api_key), or 'expired'.
+        from synsc.auth.oauth import exchange_code
+
+        # Verify CSRF state
+        if state not in _oauth_states:
+            raise HTTPException(status_code=400, detail="Invalid or expired OAuth state.")
+        _oauth_states.pop(state, None)
+
+        callback_url = str(request.url_for("auth_github_callback"))
+
+        try:
+            gh_user = await exchange_code(code=code, redirect_uri=callback_url)
+        except Exception as e:
+            logger.error("GitHub OAuth exchange failed", error=str(e))
+            raise HTTPException(status_code=400, detail="GitHub authentication failed.")
+
+        # Find or create user in DB
+        with get_session() as session:
+            row = session.execute(
+                text("SELECT id FROM users WHERE github_id = :gid"),
+                {"gid": gh_user.github_id},
+            ).mappings().first()
+
+            if row:
+                user_id = row["id"]
+                # Update profile fields
+                session.execute(
+                    text(
+                        "UPDATE users SET email = :email, name = :name, "
+                        "avatar_url = :avatar, github_username = :ghu, "
+                        "updated_at = now() WHERE id = :uid"
+                    ),
+                    {
+                        "email": gh_user.email,
+                        "name": gh_user.name,
+                        "avatar": gh_user.avatar_url,
+                        "ghu": gh_user.username,
+                        "uid": user_id,
+                    },
+                )
+            else:
+                import uuid
+                user_id = str(uuid.uuid4())
+                # First user is admin
+                is_first = session.execute(
+                    text("SELECT COUNT(*) AS cnt FROM users")
+                ).mappings().first()
+                is_admin = (is_first["cnt"] == 0) if is_first else True
+
+                session.execute(
+                    text(
+                        "INSERT INTO users (id, email, name, avatar_url, github_id, github_username, is_admin) "
+                        "VALUES (:id, :email, :name, :avatar, :gid, :ghu, :admin)"
+                    ),
+                    {
+                        "id": user_id,
+                        "email": gh_user.email,
+                        "name": gh_user.name,
+                        "avatar": gh_user.avatar_url,
+                        "gid": gh_user.github_id,
+                        "ghu": gh_user.username,
+                        "admin": is_admin,
+                    },
+                )
+                logger.info("New user created via GitHub OAuth", user_id=user_id, github=gh_user.username)
+            session.commit()
+
+        # Issue JWT session token
+        token = create_session_token(user_id=user_id, email=gh_user.email)
+
+        # Redirect to frontend with token
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        return RedirectResponse(url=f"{frontend_url}/auth/callback?token={token}")
+
+    class LoginRequest(BaseModel):
+        password: str = Field(description="System password (SYSTEM_PASSWORD env var)")
+
+    @app.post("/auth/login", tags=["Auth"])
+    async def login(request: LoginRequest) -> dict:
+        """Authenticate with the system password (admin fallback).
+
+        Returns a JWT session token for the admin user.
         """
-        session = cli_auth_sessions.get_session(device_code)
-        
-        if not session:
-            return JSONResponse(
-                content={"status": "expired", "error": "Session not found or expired"},
-                status_code=404,
-            )
-        
-        if session["status"] == "completed":
-            return JSONResponse(content={
-                "status": "completed",
-                "api_key": session["api_key"],
-                "user_name": session["user_name"],
-                "user_email": session["user_email"],
-            })
-        
-        if session["status"] == "expired":
-            return JSONResponse(content={"status": "expired"})
-        
-        return JSONResponse(content={"status": "pending"})
-    
-    @app.post("/api/cli/auth/complete", tags=["CLI Auth"])
-    async def cli_auth_complete(request: Request) -> JSONResponse:
-        """Complete a CLI auth session (called by the web frontend after GitHub OAuth).
+        system_pw = os.getenv("SYSTEM_PASSWORD", "")
+        if not system_pw:
+            raise HTTPException(status_code=501, detail="SYSTEM_PASSWORD not configured. Use GitHub OAuth.")
 
-        Requires a valid Supabase access_token — the user_id is extracted from
-        the verified JWT, never trusted from the request body.
-        """
-        body = await request.json()
-        user_code = body.get("user_code", "").strip().upper()
-        access_token = body.get("access_token", "").strip()
+        if not hmac.compare_digest(request.password, system_pw):
+            raise HTTPException(status_code=401, detail="Invalid password.")
 
-        if not user_code:
-            return JSONResponse(
-                content={"success": False, "error": "user_code is required"},
-                status_code=400,
-            )
+        admin_id = _get_or_create_admin_user()
+        token = create_session_token(user_id=admin_id, email="admin@localhost")
 
-        if not access_token:
-            return JSONResponse(
-                content={"success": False, "error": "access_token is required"},
-                status_code=401,
-            )
-
-        # Verify the Supabase JWT and extract the real user_id
-        from synsc.supabase_auth import get_supabase_auth
-        auth_service = get_supabase_auth()
-        user_id = auth_service.validate_jwt(access_token)
-
-        if not user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Invalid or expired access token"},
-                status_code=401,
-            )
-
-        session = cli_auth_sessions.get_session_by_user_code(user_code)
-
-        if not session:
-            return JSONResponse(
-                content={"success": False, "error": "Invalid or expired session code"},
-                status_code=404,
-            )
-
-        if session["status"] != "pending":
-            return JSONResponse(
-                content={"success": False, "error": f"Session already {session['status']}"},
-                status_code=409,
-            )
-
-        # User info from body is cosmetic only — user_id comes from the verified JWT
-        user_name = body.get("user_name", "")
-        user_email = body.get("user_email", "")
-        
-        # Generate API key for the user
-        api_key = f"synsc_{secrets.token_hex(24)}"
-        key_preview = api_key[:12]  # synsc_xxxx
-        
-        # Store the hashed key in the database if we have a user_id
-        if user_id:
-            try:
-                from synsc.supabase_auth import get_supabase_client, _hash_api_key
-                client = get_supabase_client()
-                client.insert("api_keys", {
-                    "user_id": user_id,
-                    "name": "CLI Setup Key",
-                    "key_hash": _hash_api_key(api_key),
-                    "key_preview": key_preview,
-                    "is_revoked": False,
-                })
-            except Exception as e:
-                logger.warning("Failed to persist CLI auth key", error=str(e))
-        
-        # Mark session as completed
-        success = cli_auth_sessions.complete_session(
-            device_code=session["device_code"],
-            user_id=user_id or "anonymous",
-            api_key=api_key,
-            user_name=user_name,
-            user_email=user_email,
-        )
-        
-        if not success:
-            return JSONResponse(
-                content={"success": False, "error": "Failed to complete session"},
-                status_code=500,
-            )
-        
-        logger.info("CLI auth completed", user_code=user_code, user_name=user_name)
-        
-        return JSONResponse(content={
+        return {
             "success": True,
-            "message": "Authentication completed. The CLI will pick up the key automatically.",
-        })
-    
+            "token": token,
+            "message": "Authenticated. Use this token in Authorization: Bearer <token> headers.",
+        }
+
+    @app.get("/auth/me", tags=["Auth"])
+    async def auth_me(auth: AuthContext = Depends(verify_api_key)) -> dict:
+        """Get the current authenticated user's profile."""
+        with get_session() as session:
+            row = session.execute(
+                text(
+                    "SELECT id, email, name, avatar_url, github_username, is_admin, created_at "
+                    "FROM users WHERE id = :uid"
+                ),
+                {"uid": auth.user_id},
+            ).mappings().first()
+
+        if not row:
+            return {"user_id": auth.user_id, "email": None, "name": None}
+
+        return {
+            "user_id": row["id"],
+            "email": row["email"],
+            "name": row["name"],
+            "avatar_url": row["avatar_url"],
+            "github_username": row["github_username"],
+            "is_admin": row["is_admin"],
+            "created_at": str(row["created_at"]) if row["created_at"] else None,
+        }
+
     # ==========================================================================
     # Repository Endpoints (Code Context)
     # ==========================================================================
-    
+
     @app.post("/v1/repositories/index", tags=["Code"])
     async def index_repository(
         request: IndexRepositoryRequest,
         auth: AuthContext = Depends(verify_api_key),
-        _: None = Depends(rate_limit),
     ) -> JSONResponse:
         """Index a GitHub repository for semantic code search."""
         logger.info("API: Indexing repository", url=request.url, branch=request.branch, user_id=auth.user_id)
-        start = time.time()
         try:
             from synsc.services.indexing_service import IndexingService
             service = IndexingService()
@@ -698,18 +598,12 @@ def create_app() -> FastAPI:
                 request.url, request.branch, user_id=auth.user_id,
                 deep_index=request.deep_index,
             )
-            if auth.user_id:
-                _cache_invalidate_user(auth.user_id)
-            _log_activity(
-                user_id=auth.user_id, action="index_repository", resource_type="repository",
-                resource_id=result.get("repo_id"), duration_ms=int((time.time() - start) * 1000),
-                metadata={"repo_url": request.url, "branch": request.branch, "source": "http"},
-            )
+            _cache_invalidate_user(auth.user_id)
             return JSONResponse(content=result)
         except Exception as e:
             logger.error("Indexing failed", error=str(e))
             return JSONResponse(content={"success": False, "error": "Repository indexing failed. Check server logs for details."}, status_code=500)
-    
+
     @app.post("/v1/repositories/index/stream", tags=["Code"])
     async def index_repository_stream(
         request: IndexRepositoryRequest,
@@ -717,20 +611,17 @@ def create_app() -> FastAPI:
     ):
         """Index a repository with Server-Sent Events for progress updates."""
         logger.info("API: Streaming index repository", url=request.url, branch=request.branch, user_id=auth.user_id)
-        
+
         async def event_stream():
             """Generate SSE events during indexing."""
             import asyncio
             import json
-            
-            start = time.time()
+
             progress_queue = asyncio.Queue()
-            
+
             # CRITICAL: capture the running event loop NOW (on the async thread).
-            # The progress_callback will be invoked from a ThreadPoolExecutor
-            # worker where asyncio.get_event_loop() does NOT return this loop.
             loop = asyncio.get_running_loop()
-            
+
             def progress_callback(stage: str, message: str, progress: float = 0, **kwargs):
                 """Callback to receive progress updates (called from worker thread)."""
                 try:
@@ -740,7 +631,7 @@ def create_app() -> FastAPI:
                     )
                 except Exception:
                     pass
-            
+
             async def run_indexing():
                 """Run indexing in thread pool."""
                 import concurrent.futures
@@ -763,13 +654,13 @@ def create_app() -> FastAPI:
                     except Exception as e:
                         logger.error("Stream indexing failed", error=str(e))
                         return {"success": False, "error": "Repository indexing failed."}
-            
+
             # Start indexing task
             task = asyncio.create_task(run_indexing())
-            
+
             # Send initial event
             yield f"data: {json.dumps({'stage': 'starting', 'message': 'Starting indexing...', 'progress': 0})}\n\n"
-            
+
             # Stream progress events
             while not task.done():
                 try:
@@ -778,23 +669,16 @@ def create_app() -> FastAPI:
                 except asyncio.TimeoutError:
                     # Send heartbeat
                     yield f"data: {json.dumps({'stage': 'heartbeat', 'message': 'Processing...', 'progress': -1})}\n\n"
-            
+
             # Get final result
             try:
                 result = await task
-                if auth.user_id:
-                    _cache_invalidate_user(auth.user_id)
-                _log_activity(
-                    user_id=auth.user_id, action="index_repository", resource_type="repository",
-                    resource_id=result.get("repo_id") if isinstance(result, dict) else None,
-                    duration_ms=int((time.time() - start) * 1000),
-                    metadata={"repo_url": request.url, "branch": request.branch, "source": "http_stream"},
-                )
+                _cache_invalidate_user(auth.user_id)
                 yield f"data: {json.dumps({'stage': 'complete', 'message': 'Indexing complete!', 'progress': 100, 'result': result})}\n\n"
             except Exception as e:
                 logger.error("Stream indexing failed", error=str(e))
                 yield f"data: {json.dumps({'stage': 'error', 'message': 'Repository indexing failed.', 'progress': 0})}\n\n"
-        
+
         return StreamingResponse(
             event_stream(),
             media_type="text/event-stream",
@@ -804,7 +688,7 @@ def create_app() -> FastAPI:
                 "X-Accel-Buffering": "no",
             }
         )
-    
+
     @app.get("/v1/repositories", tags=["Code"])
     def list_repositories(
         limit: int = 50,
@@ -814,23 +698,22 @@ def create_app() -> FastAPI:
         """List all indexed repositories."""
         try:
             cache_key = f"repos:{limit}:{offset}"
-            if auth.user_id:
-                cached = _cache_get(auth.user_id, cache_key)
-                if cached is not None:
-                    return JSONResponse(content=cached)
+            cached = _cache_get(auth.user_id, cache_key)
+            if cached is not None:
+                return JSONResponse(content=cached)
 
             from synsc.services.indexing_service import IndexingService
             service = IndexingService()
             result = service.list_repositories(limit=limit, offset=offset, user_id=auth.user_id)
 
-            if auth.user_id and result.get("success"):
+            if result.get("success"):
                 _cache_set(auth.user_id, cache_key, result)
 
             return JSONResponse(content=result)
         except Exception as e:
             logger.error("Failed to list repositories", error=str(e))
             return JSONResponse(content={"success": False, "error": "Failed to list repositories.", "repositories": [], "total": 0}, status_code=500)
-    
+
     @app.get("/v1/repositories/{repo_id}", tags=["Code"])
     def get_repository(
         repo_id: str,
@@ -849,15 +732,13 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error("Failed to get repository", error=str(e))
             return JSONResponse(content={"success": False, "error": "Failed to retrieve repository."}, status_code=500)
-    
+
     @app.delete("/v1/repositories/{repo_id}", tags=["Code"])
     def delete_repository(
         repo_id: str,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Delete a repository."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
         try:
             _uuid.UUID(repo_id)
         except ValueError:
@@ -867,15 +748,11 @@ def create_app() -> FastAPI:
             service = IndexingService()
             result = service.delete_repository(repo_id, user_id=auth.user_id)
             _cache_invalidate_user(auth.user_id)
-            _log_activity(
-                user_id=auth.user_id, action="delete_repository", resource_type="repository",
-                resource_id=repo_id, metadata={"source": "http"},
-            )
             return JSONResponse(content=result)
         except Exception as e:
             logger.error("Failed to delete repository", error=str(e))
             return JSONResponse(content={"success": False, "error": "Failed to delete repository."}, status_code=500)
-    
+
     @app.post("/v1/files/get", tags=["Code"])
     def get_file(
         request: GetFileRequest,
@@ -897,18 +774,16 @@ def create_app() -> FastAPI:
             start_line=request.start_line,
             end_line=request.end_line,
         )
-        
+
         return JSONResponse(content=result)
-    
+
     @app.post("/v1/search/code", tags=["Code"])
     def search_code(
         request: SearchCodeRequest,
         auth: AuthContext = Depends(verify_api_key),
-        _: None = Depends(rate_limit),
     ) -> JSONResponse:
         """Search code using natural language or keywords."""
         logger.info("API: Searching code", query=request.query, user_id=auth.user_id)
-        start = time.time()
         try:
             from synsc.services.search_service import SearchService
             service = SearchService(user_id=auth.user_id)
@@ -919,13 +794,6 @@ def create_app() -> FastAPI:
                 file_pattern=request.file_pattern,
                 top_k=request.top_k,
             )
-            results_count = len(result.get("results", [])) if isinstance(result, dict) else 0
-            _log_activity(
-                user_id=auth.user_id, action="search_code", resource_type="search",
-                query=request.query, results_count=results_count,
-                duration_ms=int((time.time() - start) * 1000),
-                metadata={"source": "http"},
-            )
             return JSONResponse(content=result)
         except Exception as e:
             logger.error("Code search failed", error=str(e))
@@ -933,16 +801,14 @@ def create_app() -> FastAPI:
                 content={"error": "Code search failed."},
                 status_code=500,
             )
-    
+
     @app.post("/v1/symbols/search", tags=["Code"])
     def search_symbols(
         request: SearchSymbolsRequest,
         auth: AuthContext = Depends(verify_api_key),
-        _: None = Depends(rate_limit),
     ) -> JSONResponse:
         """Search for code symbols (functions, classes, methods)."""
         logger.info("API: Searching symbols", name=request.name, user_id=auth.user_id)
-        start = time.time()
         from synsc.services.symbol_service import SymbolService
         service = SymbolService(user_id=auth.user_id)
         result = service.search_symbols(
@@ -953,57 +819,46 @@ def create_app() -> FastAPI:
             top_k=request.top_k,
             offset=request.offset,
         )
-        results_count = len(result.get("symbols", [])) if isinstance(result, dict) else 0
-        _log_activity(
-            user_id=auth.user_id, action="search_symbols", resource_type="search",
-            query=request.name, results_count=results_count,
-            duration_ms=int((time.time() - start) * 1000),
-            metadata={"source": "http"},
-        )
         return JSONResponse(content=result)
-    
+
     # ==========================================================================
     # Paper Endpoints (Research Context)
     # ==========================================================================
-    
+
     class IndexPaperRequest(BaseModel):
         url: str | None = Field(default=None, description="arXiv URL or paper URL")
         arxiv_id: str | None = Field(default=None, description="arXiv paper ID (e.g., 1706.03762)")
         source_type: str = Field(default="arxiv", description="Source type: arxiv or pdf")
-    
+
     @app.post("/v1/papers/index", tags=["Papers"])
     async def index_paper(
         request: IndexPaperRequest,
         auth: AuthContext = Depends(verify_api_key),
-        _: None = Depends(rate_limit),
     ) -> JSONResponse:
         """Index a research paper from arXiv or URL."""
         import tempfile
         import os
-        
+
         logger.info("API: Indexing paper", arxiv_id=request.arxiv_id, url=request.url, user_id=auth.user_id)
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
-        from synsc.services.paper_service_supabase import get_paper_service
+
+        from synsc.services.paper_service import get_paper_service
         from synsc.core.arxiv_client import parse_arxiv_id, download_arxiv_pdf, get_arxiv_metadata, ArxivError
-        
+
         service = get_paper_service(user_id=auth.user_id)
-        start = time.time()
-        
+
         # Determine source arXiv ID
         source_arxiv_id = request.arxiv_id
-        
+
         # Extract arXiv ID from URL if provided
         if request.url:
             try:
                 source_arxiv_id = parse_arxiv_id(request.url)
             except ArxivError:
                 pass
-        
+
         if not source_arxiv_id:
             return JSONResponse(content={"success": False, "error": "Please provide an arXiv ID or URL"}, status_code=400)
-        
+
         try:
             # Fetch arXiv metadata
             arxiv_metadata = None
@@ -1012,16 +867,15 @@ def create_app() -> FastAPI:
                 logger.info("Fetched arXiv metadata", arxiv_id=source_arxiv_id)
             except Exception as e:
                 logger.warning("Failed to fetch arXiv metadata", arxiv_id=source_arxiv_id)
-            
+
             # Download PDF to temp file
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_file:
                 pdf_path = tmp_file.name
-            
+
             try:
                 download_arxiv_pdf(source_arxiv_id, pdf_path)
-                
-                # Index the paper (run in thread pool to avoid blocking the event loop
-                # during CPU-bound embedding generation — keeps Gunicorn heartbeats alive)
+
+                # Index the paper (run in thread pool to avoid blocking the event loop)
                 import asyncio
                 result = await asyncio.to_thread(
                     service.index_paper,
@@ -1030,12 +884,6 @@ def create_app() -> FastAPI:
                     arxiv_id=source_arxiv_id,
                     arxiv_metadata=arxiv_metadata,
                 )
-                _log_activity(
-                    user_id=auth.user_id, action="index_paper", resource_type="paper",
-                    resource_id=result.get("paper_id") if isinstance(result, dict) else None,
-                    duration_ms=int((time.time() - start) * 1000),
-                    metadata={"arxiv_id": source_arxiv_id, "source": "http"},
-                )
                 return JSONResponse(content=result)
             finally:
                 # Clean up temp file
@@ -1043,47 +891,43 @@ def create_app() -> FastAPI:
                     os.unlink(pdf_path)
                 except OSError:
                     pass
-                    
+
         except ArxivError as e:
             logger.error("ArXiv error", error=str(e))
             return JSONResponse(content={"success": False, "error": f"ArXiv error: {e}"}, status_code=400)
         except Exception as e:
             logger.error("Paper indexing failed", error=str(e))
             return JSONResponse(content={"success": False, "error": "Paper indexing failed. Check server logs for details."}, status_code=500)
-    
+
     @app.post("/v1/papers/upload", tags=["Papers"])
     async def upload_paper(
         file: UploadFile = File(...),
         auth: AuthContext = Depends(verify_api_key),
-        _: None = Depends(rate_limit),
     ) -> JSONResponse:
         """Upload and index a PDF paper."""
         import tempfile
         import os
-        
+
         logger.info("API: Uploading paper", filename=file.filename, user_id=auth.user_id)
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
+
         # Validate file type
         if not file.filename or not file.filename.lower().endswith('.pdf'):
             return JSONResponse(content={"success": False, "error": "Only PDF files are supported"}, status_code=400)
-        
+
         # Validate file size (50MB max)
         contents = await file.read()
         if len(contents) > 50 * 1024 * 1024:
             return JSONResponse(content={"success": False, "error": "File size exceeds 50MB limit"}, status_code=400)
-        
-        start = time.time()
+
         try:
-            from synsc.services.paper_service_supabase import get_paper_service
+            from synsc.services.paper_service import get_paper_service
             service = get_paper_service(user_id=auth.user_id)
-            
+
             # Save to temp file for processing
             with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
                 tmp.write(contents)
                 tmp_path = tmp.name
-            
+
             try:
                 # Index the paper (run in thread pool to avoid blocking event loop)
                 import asyncio
@@ -1093,12 +937,6 @@ def create_app() -> FastAPI:
                     source="upload",
                     title=file.filename.replace('.pdf', ''),
                 )
-                _log_activity(
-                    user_id=auth.user_id, action="index_paper", resource_type="paper",
-                    resource_id=result.get("paper_id") if isinstance(result, dict) else None,
-                    duration_ms=int((time.time() - start) * 1000),
-                    metadata={"filename": file.filename, "source": "http_upload"},
-                )
                 return JSONResponse(content=result)
             finally:
                 # Clean up temp file
@@ -1106,7 +944,7 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error("Paper upload failed", error=str(e))
             return JSONResponse(content={"success": False, "error": "Paper upload failed. Check server logs for details."}, status_code=500)
-    
+
     @app.get("/v1/papers", tags=["Papers"])
     def list_papers(
         limit: int = 50,
@@ -1114,105 +952,78 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """List all indexed papers."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
-        from synsc.services.paper_service_supabase import get_paper_service
+        from synsc.services.paper_service import get_paper_service
         service = get_paper_service(user_id=auth.user_id)
         papers = service.list_papers(limit=limit)
-        
+
         return JSONResponse(content={
             "success": True,
             "papers": papers,
             "total": len(papers),
         })
-    
+
     @app.post("/v1/search/papers", tags=["Papers"])
     def search_papers(
         request: SearchPapersRequest,
         auth: AuthContext = Depends(verify_api_key),
-        _: None = Depends(rate_limit),
     ) -> JSONResponse:
         """Search papers using semantic search."""
         logger.info("API: Searching papers", query=request.query, user_id=auth.user_id)
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
-        start = time.time()
-        from synsc.services.paper_service_supabase import get_paper_service
+
+        from synsc.services.paper_service import get_paper_service
         service = get_paper_service(user_id=auth.user_id)
         result = service.search_papers(query=request.query, top_k=request.top_k)
-        results_count = len(result.get("results", [])) if isinstance(result, dict) else 0
-        _log_activity(
-            user_id=auth.user_id, action="search_papers", resource_type="search",
-            query=request.query, results_count=results_count,
-            duration_ms=int((time.time() - start) * 1000),
-            metadata={"source": "http"},
-        )
         return JSONResponse(content=result)
-    
+
     @app.get("/v1/papers/{paper_id}/citations", tags=["Papers"])
     def get_citations(
         paper_id: str,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Get citations from a paper."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
-        from synsc.services.paper_service_supabase import get_paper_service
+        from synsc.services.paper_service import get_paper_service
         service = get_paper_service(user_id=auth.user_id)
         citations = service.get_citations(paper_id)
-        
+
         return JSONResponse(content={
             "success": True,
             "paper_id": paper_id,
             "citations": citations,
             "count": len(citations),
         })
-    
+
     @app.get("/v1/papers/{paper_id}/equations", tags=["Papers"])
     def get_equations(
         paper_id: str,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Get equations from a paper."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
-        from synsc.services.paper_service_supabase import get_paper_service
+        from synsc.services.paper_service import get_paper_service
         service = get_paper_service(user_id=auth.user_id)
         equations = service.get_equations(paper_id)
-        
+
         return JSONResponse(content={
             "success": True,
             "paper_id": paper_id,
             "equations": equations,
             "count": len(equations),
         })
-    
+
     @app.delete("/v1/papers/{paper_id}", tags=["Papers"])
     def delete_paper(
         paper_id: str,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Delete a paper from user's library."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
-        from synsc.services.paper_service_supabase import get_paper_service
+        from synsc.services.paper_service import get_paper_service
         service = get_paper_service(user_id=auth.user_id)
         result = service.delete_paper(paper_id)
-        
+
         if not result.get("success"):
             return JSONResponse(content=result, status_code=404)
-        
-        _log_activity(
-            user_id=auth.user_id, action="delete_paper", resource_type="paper",
-            resource_id=paper_id, metadata={"source": "http"},
-        )
+
         return JSONResponse(content=result)
-    
+
     # ==========================================================================
     # Dataset Endpoints (HuggingFace)
     # ==========================================================================
@@ -1221,32 +1032,22 @@ def create_app() -> FastAPI:
     async def index_dataset(
         request: IndexDatasetRequest,
         auth: AuthContext = Depends(verify_api_key),
-        _: None = Depends(rate_limit),
     ) -> JSONResponse:
         """Index a HuggingFace dataset for semantic search."""
         logger.info("API: Indexing dataset", hf_id=request.hf_id, user_id=auth.user_id)
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
 
         hf_token = _get_user_hf_token(auth.user_id)
         if not hf_token:
             return JSONResponse(
-                content={"success": False, "error": "HuggingFace token required. Connect your HuggingFace account in Settings → API Keys."},
+                content={"success": False, "error": "HuggingFace token required. Store one via PUT /v1/huggingface/token."},
                 status_code=403,
             )
 
         from synsc.services.dataset_service import get_dataset_service
         service = get_dataset_service(user_id=auth.user_id)
 
-        start = time.time()
         result = await asyncio.to_thread(service.index_dataset, request.hf_id, hf_token)
 
-        _log_activity(
-            user_id=auth.user_id, action="index_dataset", resource_type="dataset",
-            resource_id=result.get("dataset_id") if isinstance(result, dict) else None,
-            duration_ms=int((time.time() - start) * 1000),
-            metadata={"hf_id": request.hf_id, "source": "http"},
-        )
         return JSONResponse(content=result)
 
     @app.get("/v1/datasets", tags=["Datasets"])
@@ -1256,12 +1057,9 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """List all indexed datasets."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-
         if not _user_has_hf_token(auth.user_id):
             return JSONResponse(
-                content={"success": False, "error": "HuggingFace token required. Connect your HuggingFace account in Settings → API Keys.", "requires_hf_token": True},
+                content={"success": False, "error": "HuggingFace token required.", "requires_hf_token": True},
                 status_code=403,
             )
 
@@ -1281,9 +1079,6 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Get detailed information about an indexed dataset."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-
         if not _user_has_hf_token(auth.user_id):
             return JSONResponse(
                 content={"success": False, "error": "HuggingFace token required.", "requires_hf_token": True},
@@ -1305,9 +1100,6 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Delete a dataset. Public datasets are unmapped; private ones are fully removed."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-
         if not _user_has_hf_token(auth.user_id):
             return JSONResponse(
                 content={"success": False, "error": "HuggingFace token required.", "requires_hf_token": True},
@@ -1321,22 +1113,15 @@ def create_app() -> FastAPI:
         if not result.get("success"):
             return JSONResponse(content=result, status_code=404)
 
-        _log_activity(
-            user_id=auth.user_id, action="delete_dataset", resource_type="dataset",
-            resource_id=dataset_id, metadata={"source": "http"},
-        )
         return JSONResponse(content=result)
 
     @app.post("/v1/search/datasets", tags=["Datasets"])
     def search_datasets(
         request: SearchDatasetsRequest,
         auth: AuthContext = Depends(verify_api_key),
-        _: None = Depends(rate_limit),
     ) -> JSONResponse:
         """Search datasets using semantic search."""
         logger.info("API: Searching datasets", query=request.query, user_id=auth.user_id)
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
 
         if not _user_has_hf_token(auth.user_id):
             return JSONResponse(
@@ -1344,23 +1129,15 @@ def create_app() -> FastAPI:
                 status_code=403,
             )
 
-        start = time.time()
         from synsc.services.dataset_service import get_dataset_service
         service = get_dataset_service(user_id=auth.user_id)
         result = service.search_datasets(query=request.query, top_k=request.top_k)
-        results_count = len(result.get("results", [])) if isinstance(result, dict) else 0
-        _log_activity(
-            user_id=auth.user_id, action="search_datasets", resource_type="search",
-            query=request.query, results_count=results_count,
-            duration_ms=int((time.time() - start) * 1000),
-            metadata={"source": "http"},
-        )
         return JSONResponse(content=result)
 
     # ==========================================================================
     # Job Queue Endpoints
     # ==========================================================================
-    
+
     @app.post("/v1/jobs", tags=["Jobs"])
     def create_job(
         request: CreateJobRequest,
@@ -1368,13 +1145,10 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """Create an async indexing job."""
         logger.info("API: Creating job", job_type=request.job_type, target=request.target, user_id=auth.user_id)
-        
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
+
         from synsc.services.job_queue_service import get_job_queue_service
         service = get_job_queue_service()
-        
+
         if request.job_type == "repository":
             result = service.create_job(
                 user_id=auth.user_id,
@@ -1388,9 +1162,9 @@ def create_app() -> FastAPI:
                 "message": f"Paper indexing job queued for: {request.target}",
                 "job_type": "paper",
             }
-        
+
         return JSONResponse(content=result)
-    
+
     @app.get("/v1/jobs/{job_id}", tags=["Jobs"])
     def get_job_status(
         job_id: str,
@@ -1405,7 +1179,7 @@ def create_app() -> FastAPI:
         service = get_job_queue_service()
         result = service.get_job(job_id, user_id=auth.user_id)
         return JSONResponse(content=result)
-    
+
     @app.get("/v1/jobs", tags=["Jobs"])
     def list_jobs(
         status: str | None = None,
@@ -1413,51 +1187,46 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """List jobs for the current user."""
-        if not auth.user_id:
-            return JSONResponse(content={"success": False, "error": "Authentication required"}, status_code=401)
-        
         from synsc.services.job_queue_service import get_job_queue_service
         service = get_job_queue_service()
         result = service.list_jobs(user_id=auth.user_id, status=status, limit=limit)
         return JSONResponse(content=result)
-    
+
     # ==========================================================================
     # API Key Management Endpoints
     # ==========================================================================
-    
+
     class CreateKeyRequest(BaseModel):
         name: str = Field(default="API Key", description="Name for the API key")
-    
+
     @app.get("/v1/keys", tags=["API Keys"])
     def list_api_keys(
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """List all API keys for the current user."""
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required", "keys": []}, 
-                status_code=401
-            )
-        
         try:
-            from synsc.supabase_auth import get_supabase_client
-            client = get_supabase_client()
-            
-            # Fetch keys (don't return full key, just preview)
-            keys = client.select_advanced(
-                "api_keys",
-                columns="id,name,key_preview,is_revoked,last_used_at,created_at",
-                filters={"user_id": auth.user_id},
-                order_by="created_at",
-                order_desc=True,
-            )
-            
+            with get_session() as session:
+                rows = session.execute(
+                    text(
+                        "SELECT id, name, key_preview, is_revoked, last_used_at, created_at "
+                        "FROM api_keys WHERE user_id = :uid ORDER BY created_at DESC"
+                    ),
+                    {"uid": auth.user_id},
+                ).mappings().all()
+
+            keys = [dict(r) for r in rows]
+            # Convert non-serializable types to strings
+            for k in keys:
+                for col in ("last_used_at", "created_at"):
+                    if k.get(col) is not None:
+                        k[col] = str(k[col])
+
             return JSONResponse(content={
                 "success": True,
                 "keys": keys,
                 "total": len(keys),
             })
-            
+
         except Exception as e:
             logger.error("Failed to fetch API keys", error=str(e))
             return JSONResponse(content={
@@ -1465,42 +1234,37 @@ def create_app() -> FastAPI:
                 "error": "Failed to retrieve API keys.",
                 "keys": []
             }, status_code=500)
-    
+
     @app.post("/v1/keys", tags=["API Keys"])
     def create_api_key(
         request: CreateKeyRequest,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Create a new API key for the current user."""
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"}, 
-                status_code=401
-            )
-        
+        import secrets
+        import hashlib
+
         try:
-            from synsc.supabase_auth import get_supabase_client, _hash_api_key
-            client = get_supabase_client()
-            
             # Generate API key
             key = f"synsc_{secrets.token_hex(24)}"
             key_preview = key[:12]  # synsc_xxxx
-            key_hash = _hash_api_key(key)
-            
-            # Insert hash into database (plaintext key is NEVER stored)
-            result = client.insert("api_keys", {
-                "user_id": auth.user_id,
-                "name": request.name,
-                "key_hash": key_hash,
-                "key_preview": key_preview,
-                "is_revoked": False,
-            })
-            
-            if result and result.get("id"):
+            key_hash = hashlib.sha256(key.encode()).hexdigest()
+
+            with get_session() as session:
+                result = session.execute(
+                    text(
+                        "INSERT INTO api_keys (user_id, name, key_hash, key_preview, is_revoked) "
+                        "VALUES (:uid, :name, :hash, :preview, false) RETURNING id"
+                    ),
+                    {"uid": auth.user_id, "name": request.name, "hash": key_hash, "preview": key_preview},
+                ).mappings().first()
+                session.commit()
+
+            if result:
                 return JSONResponse(content={
                     "success": True,
                     "key": key,  # Only returned once!
-                    "key_id": result["id"],
+                    "key_id": str(result["id"]),
                     "name": request.name,
                     "message": "API key created. Save it now - you won't see it again!"
                 })
@@ -1509,109 +1273,67 @@ def create_app() -> FastAPI:
                     "success": False,
                     "error": "Failed to create key"
                 })
-            
+
         except Exception as e:
             logger.error("Failed to create API key", error=str(e))
             return JSONResponse(content={
                 "success": False,
                 "error": "Failed to create API key."
             }, status_code=500)
-    
+
     @app.post("/v1/keys/{key_id}/revoke", tags=["API Keys"])
     def revoke_api_key(
         key_id: str,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Revoke an API key (it will no longer work)."""
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"}, 
-                status_code=401
-            )
-        
         try:
-            from synsc.supabase_auth import get_supabase_client
-            client = get_supabase_client()
-            
-            # Update key to revoked (only if owned by user)
-            success = client.update(
-                "api_keys",
-                {"is_revoked": True},
-                {"id": key_id, "user_id": auth.user_id}
-            )
-            
+            with get_session() as session:
+                result = session.execute(
+                    text("UPDATE api_keys SET is_revoked = true WHERE id = :kid AND user_id = :uid"),
+                    {"kid": key_id, "uid": auth.user_id},
+                )
+                session.commit()
+                success = result.rowcount > 0
+
             return JSONResponse(content={
                 "success": success,
                 "message": "API key revoked" if success else "Failed to revoke key"
             })
-            
+
         except Exception as e:
             logger.error("Failed to revoke API key", error=str(e))
             return JSONResponse(content={
                 "success": False,
                 "error": "Failed to revoke API key."
             }, status_code=500)
-    
+
     @app.delete("/v1/keys/{key_id}", tags=["API Keys"])
     def delete_api_key(
         key_id: str,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Permanently delete an API key."""
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"}, 
-                status_code=401
-            )
-        
         try:
-            from synsc.supabase_auth import get_supabase_client
-            client = get_supabase_client()
-            
-            # Delete key (only if owned by user)
-            success = client.delete(
-                "api_keys",
-                {"id": key_id, "user_id": auth.user_id}
-            )
-            
+            with get_session() as session:
+                result = session.execute(
+                    text("DELETE FROM api_keys WHERE id = :kid AND user_id = :uid"),
+                    {"kid": key_id, "uid": auth.user_id},
+                )
+                session.commit()
+                success = result.rowcount > 0
+
             return JSONResponse(content={
                 "success": success,
                 "message": "API key deleted" if success else "Failed to delete key"
             })
-            
+
         except Exception as e:
             logger.error("Failed to delete API key", error=str(e))
             return JSONResponse(content={
                 "success": False,
                 "error": "Failed to delete API key."
             }, status_code=500)
-    
-    # ==========================================================================
-    # Security Audit Logging
-    # ==========================================================================
-
-    def _log_security_audit(
-        user_id: str | None,
-        action: str,
-        resource_type: str,
-        resource_id: str | None = None,
-        metadata: dict | None = None,
-    ) -> None:
-        """Fire-and-forget security audit logging. Never raises."""
-        if not user_id:
-            return
-        try:
-            from synsc.supabase_auth import get_supabase_client
-            db = get_supabase_client()
-            db.insert("security_audit_log", {
-                "user_id": user_id,
-                "action": action,
-                "resource_type": resource_type,
-                "resource_id": resource_id,
-                "metadata": json.dumps(metadata) if metadata else "{}",
-            })
-        except Exception:
-            logger.debug("Security audit logging failed (non-critical)")
 
     # ==========================================================================
     # GitHub Token Endpoints
@@ -1627,12 +1349,6 @@ def create_app() -> FastAPI:
         Validates the token against the GitHub API before storing.
         The token is Fernet-encrypted at rest and never returned via any endpoint.
         """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
         # Validate token against GitHub API
         try:
             resp = requests.get(
@@ -1654,7 +1370,7 @@ def create_app() -> FastAPI:
                 )
             github_user = resp.json()
             github_username = github_user.get("login", "")
-            github_id = github_user.get("id")  # Capture numeric GitHub ID
+            github_id = github_user.get("id")
         except Exception as e:
             logger.error("GitHub token validation failed", error=str(e))
             return JSONResponse(
@@ -1664,54 +1380,36 @@ def create_app() -> FastAPI:
 
         # Encrypt and store
         try:
-            from synsc.services.token_encryption import encrypt_token
-            from synsc.supabase_auth import get_supabase_client
+            with get_session() as session:
+                existing = session.execute(
+                    text("SELECT id FROM github_tokens WHERE user_id = :uid"),
+                    {"uid": auth.user_id},
+                ).mappings().all()
 
-            encrypted = encrypt_token(request.token)
-            db = get_supabase_client()
-
-            # Check if token already exists for this user
-            existing = db.select("github_tokens", filters={"user_id": auth.user_id})
-
-            if existing:
-                # Update existing token
-                db.update("github_tokens", {
-                    "encrypted_token": encrypted,
-                    "token_label": request.label,
-                    "github_username": github_username,
-                    "github_id": github_id,
-                    "updated_at": "now()",
-                }, {"user_id": auth.user_id})
-            else:
-                # Insert new token
-                db.insert("github_tokens", {
-                    "user_id": auth.user_id,
-                    "encrypted_token": encrypted,
-                    "token_label": request.label,
-                    "github_username": github_username,
-                    "github_id": github_id,
-                })
-
-            _log_security_audit(
-                user_id=auth.user_id,
-                action="token.store",
-                resource_type="github_token",
-                metadata={"github_username": github_username},
-            )
+                if existing:
+                    session.execute(
+                        text(
+                            "UPDATE github_tokens SET encrypted_token = :tok, token_label = :label, "
+                            "github_username = :ghu, github_id = :ghi, updated_at = now() "
+                            "WHERE user_id = :uid"
+                        ),
+                        {"tok": _encrypt_if_configured(request.token), "label": request.label, "ghu": github_username, "ghi": github_id, "uid": auth.user_id},
+                    )
+                else:
+                    session.execute(
+                        text(
+                            "INSERT INTO github_tokens (user_id, encrypted_token, token_label, github_username, github_id) "
+                            "VALUES (:uid, :tok, :label, :ghu, :ghi)"
+                        ),
+                        {"uid": auth.user_id, "tok": _encrypt_if_configured(request.token), "label": request.label, "ghu": github_username, "ghi": github_id},
+                    )
+                session.commit()
 
             return JSONResponse(content={
                 "success": True,
                 "github_username": github_username,
                 "label": request.label,
             })
-
-        except RuntimeError as e:
-            # TOKEN_ENCRYPTION_KEY not set
-            logger.error("Token encryption not configured", error=str(e))
-            return JSONResponse(
-                content={"success": False, "error": "Token encryption is not configured on this server."},
-                status_code=500,
-            )
         except Exception as e:
             logger.error("Failed to store GitHub token", error=str(e))
             return JSONResponse(
@@ -1725,22 +1423,17 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """Check if a GitHub token is stored for the current user.
 
-        Returns token metadata only — never the token value itself.
+        Returns token metadata only -- never the token value itself.
         """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
         try:
-            from synsc.supabase_auth import get_supabase_client
-            db = get_supabase_client()
-            rows = db.select(
-                "github_tokens",
-                columns="token_label,github_username,last_used_at,created_at,updated_at",
-                filters={"user_id": auth.user_id},
-            )
+            with get_session() as session:
+                rows = session.execute(
+                    text(
+                        "SELECT token_label, github_username, last_used_at, created_at, updated_at "
+                        "FROM github_tokens WHERE user_id = :uid"
+                    ),
+                    {"uid": auth.user_id},
+                ).mappings().all()
 
             if not rows:
                 return JSONResponse(content={
@@ -1748,7 +1441,11 @@ def create_app() -> FastAPI:
                     "has_token": False,
                 })
 
-            token_info = rows[0]
+            token_info = dict(rows[0])
+            for col in ("last_used_at", "created_at", "updated_at"):
+                if token_info.get(col) is not None:
+                    token_info[col] = str(token_info[col])
+
             return JSONResponse(content={
                 "success": True,
                 "has_token": True,
@@ -1771,22 +1468,14 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Delete the stored GitHub token for the current user."""
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
         try:
-            from synsc.supabase_auth import get_supabase_client
-            db = get_supabase_client()
-            deleted = db.delete("github_tokens", {"user_id": auth.user_id})
-
-            _log_security_audit(
-                user_id=auth.user_id,
-                action="token.delete",
-                resource_type="github_token",
-            )
+            with get_session() as session:
+                result = session.execute(
+                    text("DELETE FROM github_tokens WHERE user_id = :uid"),
+                    {"uid": auth.user_id},
+                )
+                session.commit()
+                deleted = result.rowcount > 0
 
             return JSONResponse(content={
                 "success": True,
@@ -1812,29 +1501,21 @@ def create_app() -> FastAPI:
         Uses the stored (encrypted) GitHub token to query the GitHub API.
         Supports optional search filtering via the `q` parameter.
         """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
         # Retrieve and decrypt token
         try:
-            from synsc.supabase_auth import get_supabase_client
-            from synsc.services.token_encryption import decrypt_token
+            with get_session() as session:
+                rows = session.execute(
+                    text("SELECT encrypted_token FROM github_tokens WHERE user_id = :uid"),
+                    {"uid": auth.user_id},
+                ).mappings().all()
 
-            db = get_supabase_client()
-            rows = db.select(
-                "github_tokens", columns="encrypted_token",
-                filters={"user_id": auth.user_id},
-            )
             if not rows:
                 return JSONResponse(
                     content={"success": False, "error": "No GitHub token stored. Add one in Settings."},
                     status_code=404,
                 )
 
-            github_token = decrypt_token(rows[0]["encrypted_token"])
+            github_token = _decrypt_if_configured(rows[0]["encrypted_token"])
         except Exception as e:
             logger.error("Failed to retrieve GitHub token for repo listing", error=str(e))
             return JSONResponse(
@@ -1932,25 +1613,16 @@ def create_app() -> FastAPI:
         Uses the user's stored PAT if available (required for private repos),
         falls back to unauthenticated access for public repos.
         """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
-        # Try to get stored GitHub token (optional — public repos work without)
+        # Try to get stored GitHub token (optional -- public repos work without)
         github_token = None
         try:
-            from synsc.supabase_auth import get_supabase_client
-            from synsc.services.token_encryption import decrypt_token
-
-            db = get_supabase_client()
-            rows = db.select(
-                "github_tokens", columns="encrypted_token",
-                filters={"user_id": auth.user_id},
-            )
+            with get_session() as session:
+                rows = session.execute(
+                    text("SELECT encrypted_token FROM github_tokens WHERE user_id = :uid"),
+                    {"uid": auth.user_id},
+                ).mappings().all()
             if rows:
-                github_token = decrypt_token(rows[0]["encrypted_token"])
+                github_token = _decrypt_if_configured(rows[0]["encrypted_token"])
         except Exception:
             pass  # proceed without token
 
@@ -2006,9 +1678,11 @@ def create_app() -> FastAPI:
     def _user_has_hf_token(user_id: str) -> bool:
         """Check if a user has a stored HuggingFace token."""
         try:
-            from synsc.supabase_auth import get_supabase_client
-            db = get_supabase_client()
-            rows = db.select("huggingface_tokens", columns="id", filters={"user_id": user_id})
+            with get_session() as session:
+                rows = session.execute(
+                    text("SELECT id FROM huggingface_tokens WHERE user_id = :uid"),
+                    {"uid": user_id},
+                ).mappings().all()
             return bool(rows)
         except Exception:
             return False
@@ -2016,24 +1690,27 @@ def create_app() -> FastAPI:
     def _get_user_hf_token(user_id: str) -> str | None:
         """Retrieve and decrypt the user's HuggingFace token. Returns None if not set."""
         try:
-            from synsc.supabase_auth import get_supabase_client
-            from synsc.services.token_encryption import decrypt_token
+            with get_session() as session:
+                rows = session.execute(
+                    text("SELECT encrypted_token FROM huggingface_tokens WHERE user_id = :uid"),
+                    {"uid": user_id},
+                ).mappings().all()
 
-            db = get_supabase_client()
-            rows = db.select(
-                "huggingface_tokens", columns="encrypted_token",
-                filters={"user_id": user_id},
-            )
             if not rows:
                 return None
 
             # Update last_used_at
             try:
-                db.update("huggingface_tokens", {"last_used_at": "now()"}, {"user_id": user_id})
+                with get_session() as session:
+                    session.execute(
+                        text("UPDATE huggingface_tokens SET last_used_at = now() WHERE user_id = :uid"),
+                        {"uid": user_id},
+                    )
+                    session.commit()
             except Exception:
                 pass
 
-            return decrypt_token(rows[0]["encrypted_token"])
+            return _decrypt_if_configured(rows[0]["encrypted_token"])
         except Exception as e:
             logger.error("Failed to retrieve HuggingFace token", error=str(e))
             return None
@@ -2048,12 +1725,6 @@ def create_app() -> FastAPI:
         Validates the token against the HuggingFace API before storing.
         The token is Fernet-encrypted at rest and never returned via any endpoint.
         """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
         # Validate token against HuggingFace API
         try:
             resp = requests.get(
@@ -2078,37 +1749,31 @@ def create_app() -> FastAPI:
                 status_code=502,
             )
 
-        # Encrypt and store
+        # Store token
         try:
-            from synsc.services.token_encryption import encrypt_token
-            from synsc.supabase_auth import get_supabase_client
+            with get_session() as session:
+                existing = session.execute(
+                    text("SELECT id FROM huggingface_tokens WHERE user_id = :uid"),
+                    {"uid": auth.user_id},
+                ).mappings().all()
 
-            encrypted = encrypt_token(request.token)
-            db = get_supabase_client()
-
-            existing = db.select("huggingface_tokens", filters={"user_id": auth.user_id})
-
-            if existing:
-                db.update("huggingface_tokens", {
-                    "encrypted_token": encrypted,
-                    "token_label": request.label,
-                    "hf_username": hf_username,
-                    "updated_at": "now()",
-                }, {"user_id": auth.user_id})
-            else:
-                db.insert("huggingface_tokens", {
-                    "user_id": auth.user_id,
-                    "encrypted_token": encrypted,
-                    "token_label": request.label,
-                    "hf_username": hf_username,
-                })
-
-            _log_security_audit(
-                user_id=auth.user_id,
-                action="token.store",
-                resource_type="huggingface_token",
-                metadata={"hf_username": hf_username},
-            )
+                if existing:
+                    session.execute(
+                        text(
+                            "UPDATE huggingface_tokens SET encrypted_token = :tok, token_label = :label, "
+                            "hf_username = :hfu, updated_at = now() WHERE user_id = :uid"
+                        ),
+                        {"tok": _encrypt_if_configured(request.token), "label": request.label, "hfu": hf_username, "uid": auth.user_id},
+                    )
+                else:
+                    session.execute(
+                        text(
+                            "INSERT INTO huggingface_tokens (user_id, encrypted_token, token_label, hf_username) "
+                            "VALUES (:uid, :tok, :label, :hfu)"
+                        ),
+                        {"uid": auth.user_id, "tok": _encrypt_if_configured(request.token), "label": request.label, "hfu": hf_username},
+                    )
+                session.commit()
 
             return JSONResponse(content={
                 "success": True,
@@ -2135,22 +1800,17 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """Check if a HuggingFace token is stored for the current user.
 
-        Returns token metadata only — never the token value itself.
+        Returns token metadata only -- never the token value itself.
         """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
         try:
-            from synsc.supabase_auth import get_supabase_client
-            db = get_supabase_client()
-            rows = db.select(
-                "huggingface_tokens",
-                columns="token_label,hf_username,last_used_at,created_at,updated_at",
-                filters={"user_id": auth.user_id},
-            )
+            with get_session() as session:
+                rows = session.execute(
+                    text(
+                        "SELECT token_label, hf_username, last_used_at, created_at, updated_at "
+                        "FROM huggingface_tokens WHERE user_id = :uid"
+                    ),
+                    {"uid": auth.user_id},
+                ).mappings().all()
 
             if not rows:
                 return JSONResponse(content={
@@ -2158,7 +1818,11 @@ def create_app() -> FastAPI:
                     "has_token": False,
                 })
 
-            token_info = rows[0]
+            token_info = dict(rows[0])
+            for col in ("last_used_at", "created_at", "updated_at"):
+                if token_info.get(col) is not None:
+                    token_info[col] = str(token_info[col])
+
             return JSONResponse(content={
                 "success": True,
                 "has_token": True,
@@ -2181,22 +1845,14 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Delete the stored HuggingFace token for the current user."""
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
         try:
-            from synsc.supabase_auth import get_supabase_client
-            db = get_supabase_client()
-            deleted = db.delete("huggingface_tokens", {"user_id": auth.user_id})
-
-            _log_security_audit(
-                user_id=auth.user_id,
-                action="token.delete",
-                resource_type="huggingface_token",
-            )
+            with get_session() as session:
+                result = session.execute(
+                    text("DELETE FROM huggingface_tokens WHERE user_id = :uid"),
+                    {"uid": auth.user_id},
+                )
+                session.commit()
+                deleted = result.rowcount > 0
 
             return JSONResponse(content={
                 "success": True,
@@ -2211,272 +1867,155 @@ def create_app() -> FastAPI:
             )
 
     # ==========================================================================
-    # Activity Log Endpoints
+    # User Profile
+    # ==========================================================================
+
+    @app.get("/v1/user/profile", tags=["User"])
+    async def get_user_profile(auth: AuthContext = Depends(verify_api_key)):
+        """Get user profile. Tier/credits are always unlimited in Delphi."""
+        with get_session() as session:
+            row = session.execute(
+                text(
+                    "SELECT id, email, name, avatar_url, github_username, is_admin "
+                    "FROM users WHERE id = :uid"
+                ),
+                {"uid": auth.user_id},
+            ).mappings().first()
+
+        profile = {
+            "user_id": auth.user_id,
+            "email": row["email"] if row else None,
+            "name": row["name"] if row else None,
+            "avatar_url": row["avatar_url"] if row else None,
+            "github_username": row["github_username"] if row else None,
+            "is_admin": row["is_admin"] if row else False,
+            "tier": "unlimited",
+            "credits_used": 0,
+            "credits_limit": None,
+        }
+        return profile
+
+    # ==========================================================================
+    # Activity Endpoints
     # ==========================================================================
 
     @app.get("/v1/activity", tags=["Activity"])
-    def list_activity(
-        action: str | None = None,
+    def get_activity(
         time_range: str = "7d",
-        limit: int = 50,
+        limit: int = 100,
+        action: str | None = None,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
-        """List recent activity for the current user.
-        
-        Args:
-            action: Filter by action type (e.g., 'search_code', 'index_repository')
-            time_range: Time range filter ('24h', '7d', '30d')
-            limit: Maximum number of activities to return
-        """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required", "activities": []}, 
-                status_code=401
-            )
-        
+        """Get user activity log."""
+        # Parse time range
+        hours = 24 * 7  # default 7d
+        if time_range.endswith("h"):
+            hours = int(time_range[:-1])
+        elif time_range.endswith("d"):
+            hours = int(time_range[:-1]) * 24
+
         try:
-            from synsc.supabase_auth import get_supabase_client
-            from datetime import datetime, timedelta
-            
-            client = get_supabase_client()
-            
-            # Calculate time cutoff
-            time_deltas = {
-                "24h": timedelta(hours=24),
-                "7d": timedelta(days=7),
-                "30d": timedelta(days=30),
-            }
-            delta = time_deltas.get(time_range, timedelta(days=7))
-            cutoff = (datetime.utcnow() - delta).isoformat()
-            
-            # Build filters
-            filters = {"user_id": auth.user_id}
-            if action and action != "all":
-                filters["action"] = action
-            
-            # Fetch activities
-            raw_activities = client.select_advanced(
-                "activity_log",
-                columns="*",
-                filters=filters,
-                gte={"created_at": cutoff},
-                order_by="created_at",
-                order_desc=True,
-                limit=limit,
-            )
-            
-            # Transform DB rows → frontend-expected format
-            # DB has: id, user_id, action, resource_type, resource_id, query, 
-            #         results_count, duration_ms, metadata (JSONB), created_at
-            # Frontend expects: id, action, created_at, paper_id, paper_title,
-            #                   repo_id, query, results_count, duration_ms, details
-            activities = []
-            for row in raw_activities:
-                meta = row.get("metadata") or {}
-                if isinstance(meta, str):
-                    try:
-                        meta = json.loads(meta)
-                    except (json.JSONDecodeError, TypeError):
-                        meta = {}
-                
-                activity = {
-                    "id": row.get("id"),
-                    "action": row.get("action"),
-                    "created_at": row.get("created_at"),
-                    "query": row.get("query"),
-                    "results_count": row.get("results_count"),
-                    "duration_ms": row.get("duration_ms"),
-                    # Flatten metadata into expected fields
-                    "paper_id": meta.get("paper_id") or (row.get("resource_id") if row.get("resource_type") == "paper" else None),
-                    "paper_title": meta.get("paper_title"),
-                    "repo_id": meta.get("repo_id") or (row.get("resource_id") if row.get("resource_type") == "repository" else None),
-                    # Pass metadata as 'details' for the frontend
-                    "details": {
-                        **meta,
-                        "resource_type": row.get("resource_type"),
-                        "response_time_ms": row.get("duration_ms"),
-                    },
-                }
-                activities.append(activity)
-            
+            with get_session() as session:
+                query = (
+                    "SELECT id, action, resource_type, resource_id, query, "
+                    "results_count, duration_ms, metadata, created_at "
+                    "FROM activity_log WHERE user_id = :uid "
+                    "AND created_at > now() - interval ':hours hours' "
+                )
+                params: dict = {"uid": auth.user_id, "hours": hours}
+
+                if action:
+                    query += "AND action = :action "
+                    params["action"] = action
+
+                query += "ORDER BY created_at DESC LIMIT :lim"
+                params["lim"] = limit
+
+                # Can't use interval with param binding, use explicit timestamp
+                from datetime import datetime, timezone, timedelta
+                cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+                rows = session.execute(
+                    text(
+                        "SELECT id, action, resource_type, resource_id, query, "
+                        "results_count, duration_ms, metadata, created_at "
+                        "FROM activity_log WHERE user_id = :uid "
+                        "AND created_at > :cutoff "
+                        + ("AND action = :action " if action else "")
+                        + "ORDER BY created_at DESC LIMIT :lim"
+                    ),
+                    {"uid": auth.user_id, "cutoff": cutoff, "lim": limit, **({"action": action} if action else {})},
+                ).mappings().all()
+
+                activities = []
+                for r in rows:
+                    item = dict(r)
+                    item["id"] = str(item["id"])
+                    if item.get("resource_id"):
+                        item["resource_id"] = str(item["resource_id"])
+                    if item.get("created_at"):
+                        item["created_at"] = str(item["created_at"])
+                    if item.get("metadata") and isinstance(item["metadata"], dict):
+                        item["details"] = item.pop("metadata")
+                    else:
+                        item.pop("metadata", None)
+                    activities.append(item)
+
             return JSONResponse(content={
                 "success": True,
                 "activities": activities,
                 "total": len(activities),
             })
-            
         except Exception as e:
             logger.error("Failed to fetch activity", error=str(e))
-            return JSONResponse(content={
-                "success": False,
-                "error": "Failed to fetch activity.",
-                "activities": []
-            }, status_code=500)
-    
+            return JSONResponse(content={"success": True, "activities": [], "total": 0})
+
     @app.get("/v1/activity/stats", tags=["Activity"])
     def get_activity_stats(
         time_range: str = "7d",
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
-        """Get activity statistics for the current user.
-        
-        Returns total queries, success rate, average response time.
-        """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"}, 
-                status_code=401
-            )
-        
+        """Get aggregated activity stats for the user."""
+        hours = 24 * 7
+        if time_range.endswith("h"):
+            hours = int(time_range[:-1])
+        elif time_range.endswith("d"):
+            hours = int(time_range[:-1]) * 24
+
         try:
-            from synsc.supabase_auth import get_supabase_client
-            from datetime import datetime, timedelta
-            
-            client = get_supabase_client()
-            
-            # Calculate time cutoff
-            time_deltas = {
-                "24h": timedelta(hours=24),
-                "7d": timedelta(days=7),
-                "30d": timedelta(days=30),
-            }
-            delta = time_deltas.get(time_range, timedelta(days=7))
-            cutoff = (datetime.utcnow() - delta).isoformat()
-            
-            # Fetch activities
-            activities = client.select_advanced(
-                "activity_log",
-                columns="action,metadata,duration_ms,created_at",
-                filters={"user_id": auth.user_id},
-                gte={"created_at": cutoff},
-            )
-            
-            total = len(activities)
-            
-            # Calculate stats
-            successful = sum(1 for a in activities if not (a.get("metadata") or {}).get("error"))
-            success_rate = round((successful / total) * 100) if total > 0 else 100
-            
-            # Average response time
-            response_times = []
-            for a in activities:
-                meta = a.get("metadata") or {}
-                # duration_ms is a top-level column; also check metadata for legacy entries
-                if a.get("duration_ms") is not None:
-                    response_times.append(a["duration_ms"])
-                elif "response_time_ms" in meta:
-                    response_times.append(meta["response_time_ms"])
-                elif "duration_ms" in meta:
-                    response_times.append(meta["duration_ms"])
-            
-            avg_response_ms = sum(response_times) / len(response_times) if response_times else 0
-            
-            # Count by action
-            action_counts: dict[str, int] = {}
-            for a in activities:
-                action_type = a.get("action", "unknown")
-                action_counts[action_type] = action_counts.get(action_type, 0) + 1
-            
+            from datetime import datetime, timezone, timedelta
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+            with get_session() as session:
+                rows = session.execute(
+                    text(
+                        "SELECT action, COUNT(*) as cnt "
+                        "FROM activity_log WHERE user_id = :uid "
+                        "AND created_at > :cutoff "
+                        "GROUP BY action"
+                    ),
+                    {"uid": auth.user_id, "cutoff": cutoff},
+                ).mappings().all()
+
+            by_action = {r["action"]: r["cnt"] for r in rows}
+            total = sum(by_action.values())
+
             return JSONResponse(content={
                 "success": True,
                 "stats": {
                     "total": total,
-                    "success_rate": success_rate,
-                    "avg_response_ms": round(avg_response_ms, 2),
-                    "by_action": action_counts,
-                    "time_range": time_range,
-                }
+                    "by_action": by_action,
+                },
             })
-            
         except Exception as e:
             logger.error("Failed to fetch activity stats", error=str(e))
-            return JSONResponse(content={
-                "success": False,
-                "error": "Failed to fetch activity stats."
-            }, status_code=500)
-    
-    # ==========================================================================
-    # User Profile (Tier + Credits)
-    # ==========================================================================
-
-    @app.get("/v1/user/profile", tags=["User"])
-    def get_user_profile(
-        force_refresh: bool = False,
-        auth: AuthContext = Depends(verify_api_key),
-    ) -> JSONResponse:
-        """Get user profile including tier, credits used, and credits available.
-
-        Args:
-            force_refresh: If True, bypasses cache and fetches fresh tier from external DB.
-                          Frontend should use this on app load to ensure tier is current.
-        """
-        if not auth.user_id:
-            return JSONResponse(
-                content={"success": False, "error": "Authentication required"},
-                status_code=401,
-            )
-
-        try:
-            from synsc.supabase_auth import get_supabase_client
-            from synsc.services.tier_service import (
-                get_user_tier, get_credit_limit, usd_to_credits,
-                get_github_id_for_user
-            )
-
-            # Get tier (force refresh on app load to ensure tier upgrades are immediate)
-            tier = get_user_tier(auth.user_id, bypass_cache=force_refresh)
-            credits_limit = get_credit_limit(tier)
-
-            # Get cost summary (direct query, bypasses broken PostgREST RPC cache)
-            client = get_supabase_client()
-            rows = client.select("gemini_costs", "cost_usd", {"user_id": auth.user_id})
-            cost_usd_used = sum(float(r.get("cost_usd", 0)) for r in rows)
-
-            credits_used = usd_to_credits(cost_usd_used)
-            credits_available = max(0, credits_limit - credits_used)
-            credits_percent_used = (credits_used / credits_limit * 100) if credits_limit > 0 else 0
-
-            # Get GitHub info
-            github_id = get_github_id_for_user(auth.user_id)
-            github_username = None
-            if github_id:
-                rows = client.select(
-                    "github_tokens",
-                    columns="github_username",
-                    filters={"user_id": auth.user_id}
-                )
-                if rows:
-                    github_username = rows[0].get("github_username")
-
-            profile = {
-                "user_id": auth.user_id,
-                "tier": tier,
-                "credits_limit": credits_limit,
-                "credits_used": round(credits_used, 2),
-                "credits_available": round(credits_available, 2),
-                "credits_percent_used": round(credits_percent_used, 1),
-                "cost_usd_used": round(cost_usd_used, 4),
-                "github_id": github_id,
-                "github_username": github_username,
-            }
-
-            return JSONResponse(content={
-                "success": True,
-                "profile": profile,
-            })
-
-        except Exception as e:
-            logger.error("Failed to fetch user profile", error=str(e))
-            return JSONResponse(
-                content={"success": False, "error": "Failed to fetch user profile."},
-                status_code=500,
-            )
+            return JSONResponse(content={"success": True, "stats": {"total": 0, "by_action": {}}})
 
     # ==========================================================================
     # MCP JSON-RPC Bridge (enables remote streamable HTTP + uvx proxy)
     # ==========================================================================
 
-    # Create MCP server instance once (tools have activity logging built in)
+    # Create MCP server instance once
     _mcp_server = create_mcp_server()
 
     @app.post("/mcp", tags=["MCP"])
@@ -2492,9 +2031,9 @@ def create_app() -> FastAPI:
 
         All tool calls go through mcp_server.py where activity is logged.
         """
-        # Set auth context so MCP tools can resolve the user
-        set_current_api_key(auth.api_key)
-        _current_user_id.set(auth.user_id)
+        # Set contextvars so MCP tool functions know the authenticated user
+        set_current_api_key(auth.api_key if auth.api_key != "session" else None)
+        set_current_user_id(auth.user_id)
 
         body = await request.json()
         method = body.get("method")
@@ -2602,28 +2141,10 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-def run_http_server(host: str | None = None, port: int | None = None) -> None:
-    """Run the HTTP API server."""
+def run_http_server():
     import uvicorn
-    
     config = get_config()
-    
-    host = host or config.api.host
-    port = port or config.api.port
-    
-    logger.info(
-        "Starting Synsc Context HTTP API",
-        host=host, port=port,
-        docs=f"http://{host}:{port}/docs",
-        auth_required=config.api.require_auth,
-    )
-    
-    uvicorn.run(
-        "synsc.api.http_server:app",
-        host=host,
-        port=port,
-        log_level="info",
-    )
+    uvicorn.run(app, host=config.api.host, port=config.api.port)
 
 
 if __name__ == "__main__":

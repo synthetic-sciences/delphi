@@ -19,23 +19,6 @@ interface Stats {
   chartData: { d: string; v: number }[];
 }
 
-// Tier color mapping
-function getTierColor(tier: string) {
-  switch (tier) {
-    case "lab": return "bg-purple-500/10 text-purple-400 border border-purple-500/20";
-    case "researcher": return "bg-blue-500/10 text-blue-400 border border-blue-500/20";
-    default: return "bg-[#1a1a1a] text-[#666]";
-  }
-}
-
-// Credit status color (red when high usage)
-function getCreditColor(percentUsed: number) {
-  if (percentUsed >= 90) return "text-red-500";
-  if (percentUsed >= 70) return "text-orange-500";
-  if (percentUsed >= 50) return "text-yellow-500";
-  return "text-green-500";
-}
-
 export default function OverviewPage() {
   const { profile } = useUserProfile();
   const [stats, setStats] = useState<Stats>({
@@ -177,59 +160,33 @@ export default function OverviewPage() {
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-2xl font-medium lowercase">overview</h1>
             <span className="px-2 py-0.5 rounded bg-[#111] text-[10px] text-[#555] uppercase tracking-wider">personal</span>
-            {profile && (
-              <span className={`px-2 py-0.5 rounded text-[10px] uppercase ${getTierColor(profile.tier)}`}>
-                {profile.tier}
-              </span>
-            )}
           </div>
           <p className="text-sm text-[#555] lowercase">welcome back</p>
         </div>
       </div>
 
-      {/* credit usage card */}
+      {/* user info card */}
       {profile && (
         <div className="mb-6 p-6 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <h2 className="text-xs text-[#fa7315] font-medium uppercase tracking-wider mb-2">subscription</h2>
-              <div className="flex items-center gap-3">
-                <span className={`px-3 py-1 rounded text-sm uppercase font-medium ${getTierColor(profile.tier)}`}>
-                  {profile.tier}
-                </span>
-                {profile.github_username && (
-                  <span className="text-sm text-[#555]">@{profile.github_username}</span>
-                )}
-              </div>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-[#555] uppercase tracking-wider mb-1">
-                {profile.tier === 'free' ? 'credits (lifetime)' : 'credits this month'}
-              </p>
-              <p className={`text-2xl font-semibold tabular-nums ${getCreditColor(profile.credits_percent_used)}`}>
-                {profile.credits_used} <span className="text-lg text-[#555]">/ {profile.credits_limit}</span>
-              </p>
-              <p className="text-xs text-[#444] mt-0.5">${profile.cost_usd_used.toFixed(4)} used</p>
-            </div>
-          </div>
-
-          {/* Progress bar */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-[#555] uppercase tracking-wider">usage</span>
-              <span className={`text-xs font-mono font-medium ${getCreditColor(profile.credits_percent_used)}`}>
-                {profile.credits_percent_used.toFixed(1)}%
-              </span>
-            </div>
-            <div className="h-2 bg-[#111] rounded-full overflow-hidden">
-              <div
-                className={`h-full ${getCreditColor(profile.credits_percent_used)} bg-current transition-all`}
-                style={{ width: `${Math.min(100, profile.credits_percent_used)}%` }}
+          <div className="flex items-center gap-4">
+            {profile.avatar_url && (
+              <img
+                src={profile.avatar_url}
+                alt=""
+                className="w-10 h-10 rounded-full"
               />
+            )}
+            <div>
+              <p className="text-sm text-white font-medium">
+                {profile.name || profile.github_username || profile.email || "User"}
+              </p>
+              {profile.github_username && (
+                <p className="text-xs text-[#555]">@{profile.github_username}</p>
+              )}
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-[#444]">
-                {profile.credits_available.toFixed(2)} credits {profile.tier === 'free' ? 'remaining' : 'left this month'}
+            <div className="ml-auto">
+              <span className="px-3 py-1 rounded text-xs uppercase font-medium bg-green-500/10 text-green-400 border border-green-500/20">
+                self-hosted
               </span>
             </div>
           </div>

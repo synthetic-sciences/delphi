@@ -472,21 +472,6 @@ class SearchService:
             # Generate query embedding
             query_embedding = self.embedding_generator.generate_single(query)
 
-            # Record Gemini API cost for search query
-            try:
-                import tiktoken
-                _enc = tiktoken.get_encoding("cl100k_base")
-                query_tokens = len(_enc.encode(query))
-                from synsc.services.cost_tracker import record_gemini_cost
-                record_gemini_cost(
-                    user_id=effective_user_id,
-                    operation="search_code",
-                    token_count=query_tokens,
-                    metadata={"query": query[:200]},
-                )
-            except Exception:
-                pass  # fire-and-forget
-
             # Over-fetch for post-retrieval quality pipeline
             # Need extra candidates for: pattern filtering, symbol boosting
             # reordering, dynamic threshold pruning, and MMR selection

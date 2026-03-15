@@ -1,7 +1,7 @@
 [project]
-name = "synsc-context"
-version = "1.2.0"
-description = "Unified MCP server for indexing GitHub repositories, research papers, and HuggingFace datasets - provides deep context to AI agents."
+name = "synsc-delphi"
+version = "2.0.0"
+description = "Open-source MCP server for indexing GitHub repositories, research papers, and HuggingFace datasets — runs fully local."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -26,53 +26,56 @@ dependencies = [
     # MCP Framework
     # ===========================================
     "mcp[cli]>=1.4.1",
-    
+
     # ===========================================
-    # Vector Search & Embeddings
+    # Vector Search & Embeddings (all local)
     # ===========================================
     "faiss-cpu>=1.9.0",
-    "google-genai>=1.0.0",           # Gemini API for code embeddings
-    "sentence-transformers>=2.2.0",   # Local HF model for paper embeddings
-    "torch>=2.0.0",                   # Required by sentence-transformers
-    
+    "sentence-transformers>=2.2.0",
+    "torch>=2.0.0",
+
     # ===========================================
-    # Database
+    # Database (local PostgreSQL + pgvector)
     # ===========================================
     "sqlalchemy>=2.0.30",
-    "psycopg2-binary>=2.9.9",         # PostgreSQL driver for Supabase
-    "pgvector>=0.3.0",                # pgvector support
-    "alembic>=1.13.0",                # Database migrations
-    
+    "psycopg2-binary>=2.9.9",
+    "pgvector>=0.3.0",
+    "alembic>=1.13.0",
+
+    # ===========================================
+    # Auth & Security
+    # ===========================================
+    "PyJWT>=2.8.0",
+    "cryptography>=42.0.0",
+
     # ===========================================
     # Validation & Data
     # ===========================================
     "pydantic>=2.7.2",
     "numpy>=1.24.0",
-    
+
     # ===========================================
     # Token counting
     # ===========================================
     "tiktoken>=0.7.0",
-    
+
     # ===========================================
     # Logging
     # ===========================================
     "structlog>=24.1.0",
-    
+
     # ===========================================
     # HTTP client & server
     # ===========================================
     "httpx>=0.28.1",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    "gunicorn>=22.0.0",
-    "slowapi>=0.1.9",                 # Rate limiting
-    
+
     # ===========================================
-    # Git operations (for code-context)
+    # Git operations
     # ===========================================
     "dulwich>=0.22.0",
-    
+
     # ===========================================
     # AST parsing for symbol extraction
     # ===========================================
@@ -80,41 +83,29 @@ dependencies = [
     "tree-sitter-python>=0.22.0",
     "tree-sitter-javascript>=0.22.0",
     "tree-sitter-typescript>=0.22.0",
-    
+
     # ===========================================
     # PDF & Research Paper processing
     # ===========================================
-    "pymupdf>=1.23.0",                # PDF text extraction
-    "arxiv>=2.1.0",                   # arXiv API
-    "markdownify>=1.1.0",             # HTML to markdown
-    "scikit-learn>=1.3.0",            # For clustering/similarity
-    
+    "pymupdf>=1.23.0",
+    "arxiv>=2.1.0",
+    "markdownify>=1.1.0",
+    "scikit-learn>=1.3.0",
+
     # ===========================================
     # HuggingFace Hub
     # ===========================================
-    "huggingface-hub>=0.20.0",           # Dataset metadata & cards (no torch dependency)
+    "huggingface-hub>=0.20.0",
 
     # ===========================================
     # Configuration
     # ===========================================
     "pyyaml>=6.0.1",
-    
-    # ===========================================
-    # Observability
-    # ===========================================
-    "sentry-sdk[fastapi]>=2.0.0",     # Error tracking & performance monitoring
 
     # ===========================================
-    # Supabase & Auth
+    # Misc
     # ===========================================
-    "supabase>=2.0.0",
     "requests>=2.31.0",
-    "PyJWT>=2.8.0",
-
-    # ===========================================
-    # Token Encryption
-    # ===========================================
-    "cryptography>=42.0.0",           # Fernet encryption for GitHub PATs
 ]
 
 [project.optional-dependencies]
@@ -127,11 +118,6 @@ dev = [
     "pytest-timeout>=2.3.1",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
-]
-
-# Tree-sitter for additional languages (future)
-ast-extra = [
-    # Add more language parsers here as needed
 ]
 
 [project.scripts]

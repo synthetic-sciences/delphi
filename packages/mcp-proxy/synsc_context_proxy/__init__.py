@@ -1,9 +1,8 @@
 """
-Lightweight MCP stdio proxy for SyntheticSciences Context.
+Lightweight MCP stdio proxy for Delphi (synsc-context).
 
 Runs locally as an MCP stdio server and proxies all tool calls to the
-hosted backend API. Users only need SYNSC_API_KEY — no heavy dependencies,
-no Supabase credentials required.
+backend API. No heavy dependencies required.
 
 Install:
     uvx synsc-context-proxy
@@ -19,7 +18,7 @@ Setup (Claude Desktop / Cursor / Claude Code):
       }
     }
 
-Get your API key at https://context.syntheticsciences.ai
+Get your API key at http://localhost:8742
 """
 
 import json
@@ -31,7 +30,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 REMOTE_URL = os.environ.get(
-    "SYNSC_API_URL", "https://synsc-context.onrender.com"
+    "SYNSC_API_URL", "http://localhost:8742"
 )
 API_KEY = os.environ.get("SYNSC_API_KEY", "")
 
@@ -509,7 +508,7 @@ def main():
     if not API_KEY:
         print(
             "Error: SYNSC_API_KEY environment variable is not set.\n"
-            "Get your API key from https://context.syntheticsciences.ai",
+            "Get your API key from http://localhost:8742",
             file=sys.stderr,
         )
         sys.exit(1)

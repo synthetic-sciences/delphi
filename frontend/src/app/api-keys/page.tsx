@@ -55,7 +55,7 @@ function UsageConfigSection() {
   const httpConfig = `{
   "mcpServers": {
     "synsc-context": {
-      "url": "https://context.syntheticsciences.ai/mcp",
+      "url": "http://localhost:8742/mcp",
       "headers": {
         "Authorization": "Bearer your_api_key_here"
       }
@@ -119,12 +119,12 @@ function UsageConfigSection() {
           <p>
             <strong className="text-[#888]">how it works:</strong>{" "}
             <code className="text-[#fa7315]">uvx</code> installs a lightweight stdio proxy from pypi that runs locally
-            and forwards all tool calls to the cloud backend with your api key.
+            and forwards all tool calls to the local backend with your api key.
             requires <code className="text-[#fa7315]">uv</code> (<code className="text-[#888]">curl -LsSf https://astral.sh/uv/install.sh | sh</code>).
           </p>
         ) : (
           <p>
-            <strong className="text-[#888]">how it works:</strong> your agent connects directly to the cloud
+            <strong className="text-[#888]">how it works:</strong> your agent connects directly to the local
             mcp endpoint over http. no local process needed. your client must support
             the <code className="text-[#fa7315]">streamable-http</code> transport.
           </p>

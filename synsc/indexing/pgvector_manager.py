@@ -64,7 +64,7 @@ class PgVectorManager:
         
         embedding_ids = []
 
-        # Batch insert embeddings — larger batches reduce DB round-trips to Supabase.
+        # Batch insert embeddings — larger batches reduce DB round-trips.
         # Each embedding is 768 floats (~6KB as text), so 250 per batch ≈ 1.5MB payload.
         batch_size = 250
         total_batches = (len(chunk_ids) + batch_size - 1) // batch_size

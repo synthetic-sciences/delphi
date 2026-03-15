@@ -129,7 +129,7 @@ class TestPublicEndpoints:
         assert "version" in data
         assert data["database_backend"] == "postgresql"
         assert data["vector_backend"] == "pgvector"
-        assert data["auth_backend"] == "supabase"
+        assert data["auth_backend"] == "local"
         assert isinstance(data["uptime_seconds"], (int, float))
         assert isinstance(data["indexed_repos"], int)
         assert isinstance(data["indexed_papers"], int)
@@ -138,8 +138,6 @@ class TestPublicEndpoints:
         r = http.get("/config")
         assert r.status_code == 200
         data = r.json()
-        assert "supabase_url" in data
-        assert "supabase_publishable_key" in data
         assert "api_url" in data
 
     def test_openapi_docs(self, http: httpx.Client):

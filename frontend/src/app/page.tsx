@@ -2,88 +2,133 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Github } from "lucide-react";
-import { getSupabase } from "@/lib/supabase";
+import { getAccessToken, setAccessToken } from "@/lib/api";
+
+interface ServerConfig {
+  github_oauth_enabled: boolean;
+  system_password_enabled: boolean;
+}
 
 export default function LoginPage() {
   const router = useRouter();
-  const [checking, setChecking] = useState(true);
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [config, setConfig] = useState<ServerConfig | null>(null);
 
-  // If user already has a live Supabase session, skip login
+  // If already authenticated, redirect to overview
   useEffect(() => {
-    getSupabase()
-      .auth.getSession()
-      .then(({ data }) => {
-        if (data.session) {
-          router.replace("/overview");
-        } else {
-          setChecking(false);
-        }
-      })
-      .catch(() => setChecking(false));
-  }, [router]);
-
-  // Listen for OAuth callback — Supabase client picks up the hash automatically
-  useEffect(() => {
-    const {
-      data: { subscription },
-    } = getSupabase().auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session) {
-        router.replace("/overview");
-      }
+    getAccessToken().then((token) => {
+      if (token) router.replace("/overview");
     });
-    return () => subscription.unsubscribe();
   }, [router]);
 
-  async function handleGitHubLogin() {
-    try {
-      const { error } = await getSupabase().auth.signInWithOAuth({
-        provider: "github",
-        options: { redirectTo: window.location.origin + "/" },
-      });
-      if (error) throw error;
-    } catch {
-      alert("Could not start GitHub login. Please try again.");
-    }
+  // Fetch server config to know which auth methods are available
+  useEffect(() => {
+    fetch("/config")
+      .then((r) => r.json())
+      .then((data) => setConfig(data))
+      .catch(() => setConfig({ github_oauth_enabled: false, system_password_enabled: true }));
+  }, []);
+
+  function handleGitHubLogin() {
+    // Redirect to backend OAuth endpoint (proxied via next.config rewrites)
+    window.location.href = "/auth/github";
   }
 
-  if (checking) {
-    return (
-      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
-        <div className="w-5 h-5 border-2 border-[#fa7315] border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
+  async function handlePasswordLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    try {
+      const resp = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        setError(data.detail || "Invalid password");
+        setLoading(false);
+        return;
+      }
+
+      const data = await resp.json();
+      setAccessToken(data.token);
+      router.replace("/overview");
+    } catch {
+      setError("Could not connect to server");
+      setLoading(false);
+    }
   }
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
-      <div className="w-full max-w-sm mx-4">
-        {/* Logo */}
-        <div className="flex flex-col items-center mb-10">
-          <svg width="40" height="40" viewBox="800 350 450 450" fill="none" className="mb-4">
-            <path fill="#f97316" d="M1121.22,577.27c33.62-36.6,51.16-72.98,35.14-96.82-16.02-23.84-56.33-21.34-102.92-4.03-1.2-3.83-2.45-7.56-3.76-11.2-1.15-3.21-2.34-6.34-3.57-9.37-3.57-8.87-7.48-16.98-11.69-24.16-1.35-2.29-2.73-4.5-4.14-6.59-12.18-18.12-26.67-28.64-43.11-27.52-28.65,1.95-46.64,38.12-54.95,87.11-1.44,8.48-2.58,17.34-3.44,26.47-1.18,12.43-1.82,25.37-1.95,38.53-.11,10.84.13,21.83.72,32.83.01.33.03.65.05.98.12,2.31.27,4.63.43,6.94.16,2.31.33,4.62.52,6.93.03.33.05.66.09.99.58,7.02,1.3,14.02,2.16,20.96.48,3.91,1.01,7.8,1.58,11.65.77,5.24,1.61,10.43,2.54,15.54,2.76-1.19,5.54-2.42,8.33-3.7,5.49-2.51,11.02-5.19,16.57-8.02,5.92-3.02,11.85-6.21,17.77-9.55,9.72-5.48,19.4-11.37,28.89-17.57,1.94-1.27,3.88-2.55,5.8-3.84,1.93-1.29,3.84-2.6,5.75-3.92.35-.25.71-.49,1.06-.74,7.97-5.53,15.77-11.27,23.32-17.17-.35-.21-.71-.42-1.07-.63-7.89-4.67-16.01-9.17-24.26-13.46-1.5-.78-3.01-1.56-4.52-2.32-.29-.15-.58-.30-.88-.45-2.07-1.05-4.15-2.09-6.23-3.11-2.08-1.02-4.17-2.03-6.27-3.02-.29-.14-.59-.28-.88-.42-9.96-4.70-20.05-9.08-30.12-13.07-4.88-1.94-9.76-3.78-14.62-5.53.11-3.50.25-6.98.44-10.40.21-3.83.47-7.61.78-11.32.77-9.32,1.86-18.27,3.25-26.77,1.34-8.23,2.97-16.03,4.87-23.30,6.31-24.09,14.66-37.73,21.51-42.34,1.62-1.09,3.16-1.67,4.56-1.77,4.95-.34,12.32,5.08,20.19,17.32,3.84,5.95,7.78,13.53,11.64,22.84.12.30.24.60.36.90,1.35,3.29,2.65,6.71,3.90,10.24,1.29,3.64,2.53,7.40,3.72,11.28,2.53,8.23,4.82,16.96,6.85,26.08,8.45-4,16.76-7.53,24.80-10.58,7.80-2.95,15.37-5.44,22.62-7.43,29.69-8.14,47.12-5.60,51.24.52,4.12,6.13-.12,23.23-18.87,47.64-4.58,5.96-9.74,12.03-15.43,18.14-10.17-7.23-21.06-14.26-32.40-20.95-9.33-5.52-18.97-10.80-28.78-15.78-.29-.15-.58-.30-.88-.45-2.07-1.05-4.15-2.09-6.23-3.11-2.08-1.02-4.17-2.03-6.27-3.02-.29-.14-.59-.28-.88-.42-9.96-4.70-20.05-9.08-30.12-13.07-8.38-3.33-16.75-6.39-25.03-9.14-1.21,7.69-2.17,15.80-2.86,24.13-.08.94-.15,1.89-.22,2.85,9.87,3.43,19.96,7.35,30.14,11.71,7.82,3.35,15.70,6.96,23.57,10.82,5.50,2.70,10.92,5.46,16.21,8.30h0c2.28,1.21,4.54,2.45,6.78,3.69,6.08,3.38,12.01,6.83,17.74,10.34,3.63,2.22,7.18,4.47,10.65,6.74,3.21,2.09,6.35,4.20,9.42,6.33-2.74,2.53-5.57,5.05-8.47,7.55-8.08,7.02-16.72,13.97-25.82,20.77-6.81,5.10-13.88,10.11-21.16,15.01-7.28,4.89-14.59,9.54-21.89,13.92-9.73,5.85-19.44,11.23-28.99,16.06-3.42,1.73-6.81,3.40-10.19,4.99-8.45,3.99-16.75,7.53-24.80,10.58-7.80,2.95-15.37,5.44-22.61,7.43-29.68,8.14-47.13,5.60-51.24-.53-4.11-6.12.12-23.23,18.87-47.64,4.58-5.96,9.74-12.03,15.42-18.14,1.58-1.70,3.21-3.40,4.86-5.10.65-.66,1.30-1.33,1.96-1.99.55-.55,1.10-1.11,1.65-1.66.51-.50,1.01-1.01,1.53-1.51.70-.69,1.40-1.37,2.11-2.06,1.42-1.37,2.86-2.75,4.33-4.12.90-.84,1.81-1.68,2.72-2.52-1.02-.71-2.04-1.42-3.04-2.13-.95-.68-1.90-1.36-2.84-2.03-.86-.62-1.71-1.25-2.56-1.87-.65-.48-1.29-.95-1.93-1.43-.48-.36-.97-.72-1.44-1.08-.50-.37-.99-.74-1.48-1.12-.51-.39-1.02-.78-1.52-1.17-.06-.04-.11-.08-.16-.12-.74-.57-1.47-1.13-2.19-1.71-1.50-1.18-2.97-2.36-4.41-3.54-6.46-5.28-12.40-10.58-17.74-15.87-21.89-21.64-28.41-38.01-25.17-44.64,3.25-6.63,20.18-11.51,50.70-7.48,3.84.51,7.77,1.13,11.79,1.88.87-9.01,2.03-17.77,3.43-26.03.02-.12.04-.25.06-.37-32.80-5.95-60.83-4.83-77.54,6.40-5.32,3.58-9.49,8.19-12.30,13.92-12.63,25.79,9.69,59.45,47.97,91.14-33.62,36.59-51.17,72.98-35.15,96.81,16.02,23.84,56.34,21.34,102.92,4.03,8.06-2.99,16.31-6.43,24.65-10.25,11.35-5.20,22.88-11.11,34.34-17.58,9.72-5.48,19.40-11.37,28.89-17.57,1.94-1.27,3.88-2.55,5.80-3.84,1.93-1.29,3.84-2.60,5.75-3.92,9.33-6.45,18.43-13.18,27.18-20.11,10.32-8.17,20.15-16.61,29.25-25.16,6.46,5.28,12.40,10.58,17.74,15.87,21.89,21.64,28.41,38.01,25.16,44.64-3.25,6.62-20.18,11.51-50.70,7.48-3.83-.50-7.76-1.14-11.78-1.88-3.80-.71-7.69-1.51-11.63-2.41-.91-.21-1.82-.42-2.74-.64-.14-.03-.29-.06-.42-.10-.78-.19-1.56-.38-2.34-.58-.82-.20-1.64-.41-2.46-.62-1.07-.28-2.15-.56-3.22-.85-.90-.24-1.81-.49-2.72-.74-.69-.19-1.37-.38-2.05-.58-3.32-.94-6.68-1.94-10.06-3-.78,9.32-1.86,18.27-3.25,26.77-1.34,8.23-2.97,16.03-4.87,23.30-7.80,29.78-18.71,43.61-26.07,44.11-7.36.50-20.06-11.72-31.82-40.17-1.48-3.57-2.90-7.29-4.27-11.15-8.26,3.76-16.42,7.13-24.26,10.04-.12.04-.24.09-.35.13,14.84,41.38,36.18,69.45,62.52,67.65,6.37-.44,12.21-2.56,17.53-6.14,18.64-12.52,30.96-42.87,37.41-80.98,3.92.87,7.78,1.66,11.58,2.34,32.80,5.95,60.83,4.83,77.54-6.40,5.33-3.58,9.50-8.18,12.31-13.91,12.63-25.79-9.69-59.45-47.97-91.14ZM970.22,575.07c7.34,3.14,14.73,6.52,22.12,10.12-5.58,3.66-11.17,7.17-16.76,10.51-6.52,3.92-13.02,7.62-19.48,11.09-.62-5.98-1.15-12.04-1.56-18.15-.47-6.85-.79-13.64-.98-20.34,5.51,2.12,11.07,4.38,16.66,6.77Z"/>
-          </svg>
-          <h1 className="text-xl font-medium text-white lowercase tracking-wide">synthetic sciences</h1>
-          <p className="text-sm text-[#555] mt-1 lowercase">context for ai agents</p>
-        </div>
-
-        {/* Login card */}
-        <div className="p-6 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <h2 className="text-sm font-medium text-white mb-1 lowercase">sign in</h2>
-          <p className="text-xs text-[#555] mb-6 lowercase">authenticate with your github account to continue</p>
-
-          <button
-            onClick={handleGitHubLogin}
-            className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white text-black text-sm font-medium rounded-lg lowercase hover:bg-[#eee] transition-colors"
-          >
-            <Github size={18} />
-            continue with github
-          </button>
-        </div>
-
-        <p className="text-center text-[10px] text-[#333] mt-6 lowercase">
-          by signing in you agree to our terms of service
+      <div className="w-full max-w-sm p-8 rounded-xl bg-[#111] border border-[#1f1f1f]">
+        <h1 className="text-sm font-semibold text-white tracking-tight mb-1">
+          delphi
+        </h1>
+        <p className="text-[11px] text-[#555] mb-6">
+          Sign in to access your context server.
         </p>
+
+        {/* GitHub OAuth */}
+        {config?.github_oauth_enabled && (
+          <button
+            type="button"
+            onClick={handleGitHubLogin}
+            className="w-full py-2.5 bg-[#24292f] text-white text-xs font-medium rounded-md hover:bg-[#32383f] transition-colors flex items-center justify-center gap-2 mb-4"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+            </svg>
+            Sign in with GitHub
+          </button>
+        )}
+
+        {/* Divider */}
+        {config?.github_oauth_enabled && config?.system_password_enabled && (
+          <div className="flex items-center gap-3 mb-4">
+            <div className="flex-1 h-px bg-[#1f1f1f]" />
+            <span className="text-[10px] text-[#444] uppercase">or</span>
+            <div className="flex-1 h-px bg-[#1f1f1f]" />
+          </div>
+        )}
+
+        {/* Password login */}
+        {config?.system_password_enabled && (
+          <form onSubmit={handlePasswordLogin}>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="System password"
+              autoFocus={!config?.github_oauth_enabled}
+              className="w-full px-3 py-2 bg-[#0a0a0a] border border-[#1f1f1f] rounded-md text-sm text-white placeholder-[#444] focus:outline-none focus:border-[#333] mb-3"
+            />
+
+            {error && (
+              <p className="text-[11px] text-red-400 mb-3">{error}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading || !password}
+              className="w-full py-2 bg-[#fa7315] text-white text-xs font-medium rounded-md hover:bg-[#e5680f] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {loading ? "Authenticating..." : "Log in with password"}
+            </button>
+          </form>
+        )}
+
+        {/* No auth configured */}
+        {config && !config.github_oauth_enabled && !config.system_password_enabled && (
+          <p className="text-[11px] text-red-400">
+            No authentication method configured. Set GITHUB_CLIENT_ID + GITHUB_CLIENT_SECRET or SYSTEM_PASSWORD.
+          </p>
+        )}
       </div>
     </div>
   );

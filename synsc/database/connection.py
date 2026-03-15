@@ -1,7 +1,6 @@
-"""Database connection management for Supabase PostgreSQL.
+"""Database connection management for PostgreSQL.
 
-This module manages connections to Supabase's PostgreSQL database.
-All data is stored in the cloud - no local SQLite support.
+This module manages connections to the local PostgreSQL database with pgvector.
 """
 
 from contextlib import contextmanager
@@ -18,27 +17,20 @@ from synsc.config import get_config
 
 logger = structlog.get_logger(__name__)
 
-
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
 
 
 def get_engine() -> Engine:
-    """Get or create the PostgreSQL database engine.
-    
-    Configured for Supabase with connection pooling optimized for serverless.
-    """
+    """Get or create the PostgreSQL database engine."""
     global _engine
     if _engine is None:
         config = get_config()
         db_url = config.get_database_url()
-        
+
         safe_url = make_url(db_url).render_as_string(hide_password=True)
-        logger.info("Connecting to Supabase PostgreSQL", url=safe_url)
-        
-        # PostgreSQL configuration optimized for Supabase
-        # pool_pre_ping disabled: adds ~1s latency per request (Supabase round-trip).
-        # pool_recycle=1800 handles stale connections instead.
+        logger.info("Connecting to PostgreSQL", url=safe_url)
+
         _engine = create_engine(
             db_url,
             echo=config.database.echo,
@@ -47,57 +39,38 @@ def get_engine() -> Engine:
             max_overflow=config.database.max_overflow,
             pool_timeout=config.database.pool_timeout,
             pool_recycle=config.database.pool_recycle,
-            pool_pre_ping=False,
-            # Set a sane default statement timeout at the connection level.
-            # Supabase's default can be too low (60-120s).  Individual
-            # sessions can still override with SET LOCAL for long-running ops.
-            #
-            # TCP keepalives prevent Supabase/PgBouncer from killing long-lived
-            # connections during extended indexing transactions (20+ minutes).
-            # keepalives_idle=60: send first probe after 60s idle
-            # keepalives_interval=15: probe every 15s after that
-            # keepalives_count=4: give up after 4 missed probes (~2 min)
+            pool_pre_ping=True,
             connect_args={
                 "options": "-c statement_timeout=120s -c idle_in_transaction_session_timeout=300s",
-                "keepalives": 1,
-                "keepalives_idle": 60,
-                "keepalives_interval": 15,
-                "keepalives_count": 4,
             },
         )
-    
+
     return _engine
 
 
 def get_session_factory() -> sessionmaker[Session]:
-    """Get or create the session factory.
-    
-    OPTIMIZED: expire_on_commit=False avoids unnecessary DB roundtrips.
-    """
+    """Get or create the session factory."""
     global _SessionLocal
     if _SessionLocal is None:
         _SessionLocal = sessionmaker(
             bind=get_engine(),
             autocommit=False,
             autoflush=False,
-            expire_on_commit=False,  # Don't refresh objects after commit
+            expire_on_commit=False,
         )
     return _SessionLocal
 
 
 def init_db() -> None:
     """Initialize the database connection and verify setup.
-    
+
     Verifies that:
-    - Connection to Supabase PostgreSQL works
+    - Connection to PostgreSQL works
     - pgvector extension is enabled
     - Required tables exist
-    - Local dev user exists (for development without auth)
     """
-    from synsc.config import get_config
-    config = get_config()
     engine = get_engine()
-    
+
     try:
         with engine.connect() as conn:
             # Check if pgvector is available
@@ -110,104 +83,44 @@ def init_db() -> None:
             else:
                 raise RuntimeError(
                     "pgvector extension not found! "
-                    "Run supabase_setup.sql in your Supabase SQL editor first."
+                    "Run setup_local.sql or use Docker Compose."
                 )
-            
-            # Verify key tables exist (including user_repositories for deduplication)
+
+            # Verify key tables exist
             result = conn.execute(
                 text("""
-                    SELECT table_name FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name IN ('repositories', 'user_repositories', 'code_chunks', 'chunk_embeddings', 'api_keys')
+                    SELECT table_name FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                    AND table_name IN ('users', 'api_keys', 'repositories', 'user_repositories', 'code_chunks', 'chunk_embeddings')
                 """)
             )
             tables = [row[0] for row in result.fetchall()]
-            
-            required_tables = ['repositories', 'user_repositories', 'code_chunks', 'chunk_embeddings', 'api_keys']
+
+            required_tables = ['users', 'api_keys', 'repositories', 'user_repositories', 'code_chunks', 'chunk_embeddings']
             missing = set(required_tables) - set(tables)
-            
+
             if missing:
                 raise RuntimeError(
                     f"Missing required tables: {missing}. "
-                    f"Run supabase_setup.sql in your Supabase SQL editor first."
+                    f"Run setup_local.sql or use Docker Compose."
                 )
-            
-            logger.info("Supabase database verified", tables=tables)
-            
-            # For local development without auth, ensure local dev user exists
-            if not config.api.require_auth:
-                _ensure_local_dev_user(conn)
-                
+
+            logger.info("Database verified", tables=tables)
+
     except Exception as e:
-        logger.error("Failed to connect to Supabase database", error=str(e))
+        logger.error("Failed to connect to database", error=str(e))
         raise
-
-
-def _ensure_local_dev_user(conn) -> None:
-    """Ensure the local development user exists in Supabase auth.users table.
-    
-    This user is used when running without authentication (local development).
-    For local Supabase, we can insert directly into auth.users.
-    """
-    LOCAL_DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
-    
-    # Check if local dev user exists in auth.users
-    result = conn.execute(
-        text("SELECT id FROM auth.users WHERE id = :user_id"),
-        {"user_id": LOCAL_DEV_USER_ID}
-    )
-    
-    if result.fetchone() is None:
-        # Create local dev user in auth.users (Supabase's auth table)
-        conn.execute(
-            text("""
-                INSERT INTO auth.users (
-                    id, 
-                    instance_id,
-                    aud,
-                    role,
-                    email, 
-                    encrypted_password,
-                    email_confirmed_at,
-                    created_at, 
-                    updated_at,
-                    confirmation_token,
-                    recovery_token,
-                    email_change_token_new,
-                    email_change
-                )
-                VALUES (
-                    :user_id,
-                    '00000000-0000-0000-0000-000000000000',
-                    'authenticated',
-                    'authenticated',
-                    'local@dev.local',
-                    '',
-                    NOW(),
-                    NOW(), 
-                    NOW(),
-                    '',
-                    '',
-                    '',
-                    ''
-                )
-                ON CONFLICT (id) DO NOTHING
-            """),
-            {"user_id": LOCAL_DEV_USER_ID}
-        )
-        conn.commit()
-        logger.info("Created local development user in auth.users", user_id=LOCAL_DEV_USER_ID)
 
 
 def reset_engine() -> None:
     """Reset the database engine (useful for testing or reconfiguration)."""
     global _engine, _SessionLocal
-    
+
     if _engine is not None:
         _engine.dispose()
         _engine = None
     _SessionLocal = None
-    
+
     logger.info("Database engine reset")
 
 
@@ -233,5 +146,5 @@ def get_db_session() -> Session:
 
 
 def is_using_postgres() -> bool:
-    """Check if we're using PostgreSQL - always True in this version."""
+    """Check if we're using PostgreSQL - always True."""
     return True

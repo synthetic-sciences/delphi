@@ -32,7 +32,7 @@ def test_health_returns_healthy(client):
     assert data["version"] == "1.0.0"
     assert data["database_backend"] == "postgresql"
     assert data["vector_backend"] == "pgvector"
-    assert data["auth_backend"] == "supabase"
+    assert data["auth_backend"] == "local"
     assert isinstance(data["uptime_seconds"], float)
 
 

@@ -50,7 +50,7 @@ def _build_chunk_relationships(session: Session, repo_id: str) -> int:
     Returns the number of relationships created.
     """
     # Only fetch columns needed for relationship building (skip content to avoid
-    # transferring megabytes of code text over the network to Supabase).
+    # transferring megabytes of code text).
     chunks = (
         session.query(
             CodeChunk.chunk_id,
@@ -194,21 +194,24 @@ class IndexingService:
         Never logs the token value.
         """
         try:
-            from synsc.services.token_encryption import decrypt_token
-            from synsc.supabase_auth import get_supabase_client
+            from synsc.database.models import GitHubToken
 
-            db = get_supabase_client()
-            rows = db.select("github_tokens", columns="encrypted_token", filters={"user_id": user_id})
-            if not rows:
-                return None
+            with get_session() as session:
+                token_row = session.query(GitHubToken).filter(
+                    GitHubToken.user_id == user_id
+                ).first()
+                if not token_row:
+                    return None
 
-            plaintext = decrypt_token(rows[0]["encrypted_token"])
+                # Tokens stored in plaintext for local deployment
+                token = token_row.encrypted_token
 
-            # Update last_used_at (fire-and-forget)
-            with contextlib.suppress(Exception):
-                db.update("github_tokens", {"last_used_at": "now()"}, {"user_id": user_id})
+                # Update last_used_at (fire-and-forget)
+                with contextlib.suppress(Exception):
+                    from datetime import datetime, timezone
+                    token_row.last_used_at = datetime.now(timezone.utc)
 
-            return plaintext
+            return token
         except Exception as e:
             logger.error("Failed to retrieve GitHub token", error=str(e))
             return None
@@ -550,7 +553,7 @@ class IndexingService:
 
             # Build chunk relationships in a SEPARATE session (post-commit).
             # After long indexing transactions (20+ min), pooled connections are
-            # stale (SSL closed by Supabase/PgBouncer). Dispose the pool to force
+            # stale (closed by PgBouncer/timeout). Dispose the pool to force
             # a fresh connection, then build relationships.
             try:
                 report_progress("relationships", "Building chunk relationships...", 96)
@@ -674,7 +677,7 @@ class IndexingService:
         total_files = len(files)
 
         # OPTIMIZATION: Batch flush interval - flush every N files instead of every file
-        # Larger batches = fewer DB round-trips to Supabase (major bottleneck for remote DB)
+        # Larger batches = fewer DB round-trips
         # 500 files per flush: numpy (1430 files) = 3 flushes instead of 14
         FLUSH_BATCH_SIZE = 500
 
@@ -970,24 +973,10 @@ class IndexingService:
         
         # Generate embeddings in batch
         if chunks_to_embed:
-            # Check cost limit before calling Gemini API
             total_embed_tokens = sum(
                 db_chunk.token_count or 0
                 for db_chunk, _ in chunks_to_embed
             )
-            if user_id:
-                from synsc.services.cost_tracker import CostLimitExceeded, check_cost_limit
-                try:
-                    check_cost_limit(user_id, total_embed_tokens)
-                except CostLimitExceeded as e:
-                    raise ValueError(
-                        f"Embedding cost limit exceeded. "
-                        f"Current spend: ${e.current_cost:.4f}, "
-                        f"this repo would cost: ${e.estimated_cost:.4f}, "
-                        f"limit: ${e.limit:.2f}. "
-                        f"Contact the admin to increase your limit."
-                    ) from None
-
             report_progress(
                 "embeddings_start",
                 f"Generating embeddings for {len(chunks_to_embed)} chunks...",
@@ -1041,22 +1030,6 @@ class IndexingService:
                 )
             embeddings = np.vstack(all_embeddings)
 
-            # Record Gemini API cost (total_embed_tokens computed above)
-            try:
-                from synsc.services.cost_tracker import record_gemini_cost
-                record_gemini_cost(
-                    user_id=user_id,
-                    operation="index_repository",
-                    token_count=total_embed_tokens,
-                    resource_id=repo.repo_id,
-                    batch_count=total_batches,
-                    metadata={
-                        "repo_name": f"{owner}/{name}",
-                        "chunks_count": len(chunks_to_embed),
-                    },
-                )
-            except Exception:
-                pass  # fire-and-forget
 
             report_progress("embeddings_done", "Embeddings generated!", 90)
             
