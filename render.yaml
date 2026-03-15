@@ -1,0 +1,91 @@
+# =============================================================================
+# Synsc Context — Render Blueprint (Infrastructure as Code)
+# =============================================================================
+# Deploy with: render blueprint apply
+# Or connect your repo in Render dashboard → it auto-detects this file.
+#
+# This creates two services:
+#   1. synsc-api     — HTTP API (web service)
+#   2. synsc-worker  — Background indexing worker (background worker)
+# =============================================================================
+
+services:
+  # ──────────────────────────────────────────────────────────────────────────
+  # API Server (Web Service)
+  # ──────────────────────────────────────────────────────────────────────────
+  - type: web
+    name: synsc-api
+    runtime: python
+    region: oregon
+    plan: starter
+    buildCommand: ./render_build.sh
+    startCommand: ./render_deploy.sh
+    healthCheckPath: /health
+    buildFilter:
+      ignoredPaths:
+        - frontend/**
+    envVars:
+      # ── Supabase (required) ──
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_DATABASE_URL
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      # ── Embedding APIs (required) ──
+      - key: GEMINI_API_KEY
+        sync: false
+      # ── App config ──
+      - key: SYNSC_REQUIRE_AUTH
+        value: "true"
+      - key: SYNSC_SERVICE_TYPE
+        value: api
+      - key: SYNSC_LOG_LEVEL
+        value: INFO
+      - key: SYNSC_CORS_ORIGINS
+        sync: false    # Set to your Vercel frontend URL
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      # ── Gunicorn tuning ──
+      - key: WEB_CONCURRENCY
+        value: "1"            # Single worker — model is ~500 MB
+      - key: GUNICORN_TIMEOUT
+        value: "300"         # Paper/dataset indexing can take minutes
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Background Worker
+  # ──────────────────────────────────────────────────────────────────────────
+  - type: worker
+    name: synsc-worker
+    runtime: python
+    region: oregon
+    plan: starter
+    buildCommand: ./render_build.sh
+    startCommand: ./render_deploy.sh
+    buildFilter:
+      ignoredPaths:
+        - frontend/**
+    envVars:
+      # ── Supabase (same as API) ──
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_DATABASE_URL
+        sync: false
+      # ── Embedding APIs ──
+      - key: GEMINI_API_KEY
+        sync: false
+      # ── Worker config ──
+      - key: SYNSC_SERVICE_TYPE
+        value: worker
+      - key: SYNSC_WORKER_THREADS
+        value: "4"
+      - key: SYNSC_REQUIRE_AUTH
+        value: "false"
+      - key: PYTHONUNBUFFERED
+        value: "1"

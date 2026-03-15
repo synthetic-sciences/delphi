@@ -1,0 +1,50 @@
+{
+  "name": "synsc-context",
+  "version": "1.2.0",
+  "description": "SynSc Context — Unified MCP server for code repos, research papers & HuggingFace datasets. One command to connect your AI agent.",
+  "type": "module",
+  "bin": {
+    "synsc-context": "src/setup.js",
+    "synsc": "src/setup.js",
+    "synsc-context-keys": "src/keys.js"
+  },
+  "main": "./src/setup.js",
+  "scripts": {
+    "start": "node src/setup.js",
+    "keys": "node src/keys.js",
+    "dev": "node src/setup.js"
+  },
+  "keywords": [
+    "synsc",
+    "context",
+    "mcp",
+    "ai",
+    "cursor",
+    "claude",
+    "windsurf",
+    "code-search",
+    "research-papers",
+    "huggingface",
+    "datasets",
+    "semantic-search",
+    "github",
+    "arxiv"
+  ],
+  "author": "SynSc <hello@syntheticsciences.ai>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inkvell/synsc-context"
+  },
+  "homepage": "https://context.syntheticsciences.ai",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "gradient-string": "^3.0.0",
+    "open": "^10.1.0",
+    "ora": "^8.1.1",
+    "prompts": "^2.4.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

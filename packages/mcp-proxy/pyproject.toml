@@ -1,0 +1,42 @@
+[project]
+name = "synsc-context-proxy"
+version = "1.2.1"
+description = "Lightweight MCP proxy for SyntheticSciences Context — gives AI agents deep code, research paper, and HuggingFace dataset context."
+readme = {text = "Lightweight MCP proxy for [Synsc Context](https://context.syntheticsciences.ai). Gives AI agents (Claude, Cursor, etc.) deep code, research paper, and HuggingFace dataset context via 25 tools. Only needs an API key — no heavy dependencies.", content-type = "text/markdown"}
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "InkVell" }
+]
+keywords = ["mcp", "ai", "code-search", "research-papers", "huggingface", "datasets", "cursor", "claude", "semantic-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "mcp[cli]>=1.4.1",
+    "httpx>=0.27.0",
+]
+
+[project.urls]
+Homepage = "https://context.syntheticsciences.ai"
+Repository = "https://github.com/synthetic-sciences/synsc-context"
+
+[project.scripts]
+synsc-context-proxy = "synsc_context_proxy:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["synsc_context_proxy"]
