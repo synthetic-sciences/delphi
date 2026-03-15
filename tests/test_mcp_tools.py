@@ -1,7 +1,7 @@
 """Integration tests for every MCP server tool.
 
 These tests call the MCP tool functions DIRECTLY against the real database.
-No mocking — each tool hits Supabase/PostgreSQL for real.
+No mocking — each tool hits PostgreSQL for real.
 
 Requirements:
   • Real database credentials in the environment (loaded from .env)
@@ -83,10 +83,6 @@ def _init_real_db():
     # Reset config singleton so it picks up the real env vars
     import synsc.config as cfg
     cfg._config = None
-
-    # Reload supabase_auth so its module-level constants pick up the real env
-    import synsc.supabase_auth
-    importlib.reload(synsc.supabase_auth)
 
     from synsc.database.connection import init_db
     try:

@@ -1,144 +1,262 @@
 /**
- * API client for synsc-context backend
+ * API client for Delphi (synsc-context) backend.
  *
- * Uses the Supabase client for auth so tokens are auto-refreshed.
+ * Auth flow:
+ *   1. User clicks "Login with GitHub" → redirected to GitHub OAuth.
+ *   2. After OAuth, backend issues a JWT session token.
+ *   3. Frontend stores the JWT in localStorage and sends it as Bearer token.
+ *   4. Alternatively, admin can log in with SYSTEM_PASSWORD → also gets JWT.
+ *   5. User creates API keys for AI agents via the dashboard.
  */
 
-import { getSupabase } from "./supabase";
+export const API_URL = "";
 
-// Use relative URLs so browser requests go through Vercel/Next.js rewrites (no CORS).
-// NEXT_PUBLIC_API_URL is only used in next.config.mjs to configure the rewrite destination.
-const API_URL = "";
-
-// Direct backend URL for long-running requests (paper/repo indexing) that exceed
-// Vercel's proxy timeout (~60s). These bypass the proxy and hit Render directly.
 const DIRECT_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 /**
- * Get a valid access token.
- *
- * Priority:
- *   1. Supabase session (auto-refreshed JWT)
- *   2. Explicit API key in localStorage (`synsc_api_key` starting with `synsc_`)
- *   3. Dev fallback key in local development
+ * Get a valid access token (JWT session token from localStorage).
  */
 export async function getAccessToken(): Promise<string | null> {
-  // 1) Supabase session — always fresh
-  try {
-    const { data } = await getSupabase().auth.getSession();
-    const token = data.session?.access_token;
-    if (token) return token;
-  } catch {
-    // Supabase not configured / SSR — fall through
-  }
-
-  // 2) Explicit custom API key (e.g. `synsc_894f…`)
   if (typeof window !== "undefined") {
-    const stored = localStorage.getItem("synsc_api_key");
-    if (stored && stored.startsWith("synsc_")) return stored;
-  }
-
-  // 3) Dev fallback
-  if (process.env.NODE_ENV === "development") {
-    return (
-      process.env.NEXT_PUBLIC_DEV_API_KEY ||
-      "synsc_dev_key_for_local_testing_only_do_not_use_in_production"
-    );
-  }
-
-  return null;
-}
-
-/** Synchronous version — reads cached key (may be stale). Prefer getAccessToken(). */
-export function getApiKey(): string | null {
-  if (typeof window !== "undefined") {
-    const stored = localStorage.getItem("synsc_api_key");
+    const stored = localStorage.getItem("synsc_session_token");
     if (stored) return stored;
   }
-  if (process.env.NODE_ENV === "development") {
-    return (
-      process.env.NEXT_PUBLIC_DEV_API_KEY ||
-      "synsc_dev_key_for_local_testing_only_do_not_use_in_production"
-    );
-  }
   return null;
 }
 
 /**
- * Make an authenticated API request
+ * Store a session token (JWT from OAuth or password login).
  */
-export async function api<T = unknown>(
-  endpoint: string,
-  options: RequestInit = {}
-): Promise<{ ok: boolean; data?: T; error?: string; status: number }> {
-  const token = await getAccessToken();
-
-  const headers: HeadersInit = {
-    "Content-Type": "application/json",
-    ...(options.headers || {}),
-  };
-
-  if (token) {
-    (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
-  }
-
-  try {
-    const res = await fetch(`${API_URL}${endpoint}`, {
-      ...options,
-      headers,
-    });
-
-    if (!res.ok) {
-      const errorText = await res.text();
-      return {
-        ok: false,
-        error: errorText || `HTTP ${res.status}`,
-        status: res.status,
-      };
-    }
-
-    // Handle empty responses
-    const text = await res.text();
-    const data = text ? JSON.parse(text) : undefined;
-
-    return { ok: true, data, status: res.status };
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : "Network error",
-      status: 0,
-    };
+export function setAccessToken(token: string): void {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("synsc_session_token", token);
   }
 }
 
 /**
- * Convenience methods
+ * Clear stored credentials (logout).
  */
-export const apiGet = <T = unknown>(endpoint: string) =>
-  api<T>(endpoint, { method: "GET" });
-
-export const apiPost = <T = unknown>(endpoint: string, body?: unknown) =>
-  api<T>(endpoint, {
-    method: "POST",
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-export const apiDelete = <T = unknown>(endpoint: string) =>
-  api<T>(endpoint, { method: "DELETE" });
+export function clearAccessToken(): void {
+  if (typeof window !== "undefined") {
+    localStorage.removeItem("synsc_session_token");
+  }
+}
 
 /**
- * Get auth headers for raw fetch() calls.
- * Async because it may need to refresh the Supabase session.
+ * Get auth headers for direct fetch calls.
  */
-export async function getAuthHeaders(): Promise<HeadersInit> {
+export async function getAuthHeaders(): Promise<Record<string, string>> {
   const token = await getAccessToken();
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  return {};
+}
+
+async function apiFetch(
+  path: string,
+  options: RequestInit = {},
+  useDirect = false
+): Promise<Response> {
+  const token = await getAccessToken();
+  const base = useDirect ? DIRECT_API_URL : API_URL;
+  const url = `${base}${path}`;
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...(options.headers as Record<string, string>),
   };
+
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  return headers;
+
+  const resp = await fetch(url, { ...options, headers });
+
+  // If we get a 401, redirect to login
+  if (resp.status === 401 && typeof window !== "undefined") {
+    clearAccessToken();
+    window.location.href = "/";
+  }
+
+  return resp;
 }
 
-export { API_URL, DIRECT_API_URL };
+// ---------------------------------------------------------------------------
+// Repositories
+// ---------------------------------------------------------------------------
+
+export async function indexRepository(
+  url: string,
+  branch = "main",
+  deepIndex = false
+) {
+  return apiFetch(
+    "/v1/repositories/index",
+    {
+      method: "POST",
+      body: JSON.stringify({ url, branch, deep_index: deepIndex }),
+    },
+    true
+  );
+}
+
+export async function listRepositories(limit = 50, offset = 0) {
+  return apiFetch(`/v1/repositories?limit=${limit}&offset=${offset}`);
+}
+
+export async function getRepository(repoId: string) {
+  return apiFetch(`/v1/repositories/${repoId}`);
+}
+
+export async function deleteRepository(repoId: string) {
+  return apiFetch(`/v1/repositories/${repoId}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// Search
+// ---------------------------------------------------------------------------
+
+export async function searchCode(
+  query: string,
+  repoIds?: string[],
+  language?: string,
+  topK = 10
+) {
+  return apiFetch("/v1/search/code", {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      repo_ids: repoIds,
+      language,
+      top_k: topK,
+    }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Papers
+// ---------------------------------------------------------------------------
+
+export async function indexPaper(source: string) {
+  return apiFetch(
+    "/v1/papers/index",
+    { method: "POST", body: JSON.stringify({ source }) },
+    true
+  );
+}
+
+export async function listPapers(limit = 50) {
+  return apiFetch(`/v1/papers?limit=${limit}`);
+}
+
+export async function getPaper(paperId: string) {
+  return apiFetch(`/v1/papers/${paperId}`);
+}
+
+export async function searchPapers(query: string, topK = 10) {
+  return apiFetch("/v1/search/papers", {
+    method: "POST",
+    body: JSON.stringify({ query, top_k: topK }),
+  });
+}
+
+export async function deletePaper(paperId: string) {
+  return apiFetch(`/v1/papers/${paperId}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// Datasets
+// ---------------------------------------------------------------------------
+
+export async function indexDataset(hfId: string) {
+  return apiFetch(
+    "/v1/datasets/index",
+    { method: "POST", body: JSON.stringify({ hf_id: hfId }) },
+    true
+  );
+}
+
+export async function listDatasets(limit = 50) {
+  return apiFetch(`/v1/datasets?limit=${limit}`);
+}
+
+export async function getDataset(datasetId: string) {
+  return apiFetch(`/v1/datasets/${datasetId}`);
+}
+
+export async function deleteDataset(datasetId: string) {
+  return apiFetch(`/v1/datasets/${datasetId}`, { method: "DELETE" });
+}
+
+export async function searchDatasets(query: string, topK = 10) {
+  return apiFetch("/v1/search/datasets", {
+    method: "POST",
+    body: JSON.stringify({ query, top_k: topK }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// User / Profile
+// ---------------------------------------------------------------------------
+
+export async function getUserProfile() {
+  return apiFetch("/v1/user/profile");
+}
+
+// ---------------------------------------------------------------------------
+// Activity
+// ---------------------------------------------------------------------------
+
+export async function getActivity(limit = 50) {
+  return apiFetch(`/v1/activity?limit=${limit}`);
+}
+
+// ---------------------------------------------------------------------------
+// Symbols
+// ---------------------------------------------------------------------------
+
+export async function searchSymbols(
+  name: string,
+  repoIds?: string[],
+  symbolType?: string,
+  language?: string,
+  topK = 25
+) {
+  return apiFetch("/v1/search/symbols", {
+    method: "POST",
+    body: JSON.stringify({
+      name,
+      repo_ids: repoIds,
+      symbol_type: symbolType,
+      language,
+      top_k: topK,
+    }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+
+export async function getHealth() {
+  return apiFetch("/health");
+}
+
+// ---------------------------------------------------------------------------
+// Generic helpers
+// ---------------------------------------------------------------------------
+
+export async function apiGet<T = unknown>(
+  path: string,
+  useDirect = false
+): Promise<{ ok: boolean; data: T | null }> {
+  try {
+    const resp = await apiFetch(path, {}, useDirect);
+    if (!resp.ok) return { ok: false, data: null };
+    const data = await resp.json();
+    return { ok: true, data };
+  } catch {
+    return { ok: false, data: null };
+  }
+}

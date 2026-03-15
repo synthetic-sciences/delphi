@@ -1,18 +1,18 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { apiGet } from "@/lib/api";
+import { getUserProfile } from "@/lib/api";
 
 interface UserProfile {
   user_id: string;
-  tier: "free" | "researcher" | "lab";
-  credits_limit: number;
-  credits_used: number;
-  credits_available: number;
-  credits_percent_used: number;
-  cost_usd_used: number;
-  github_id: number | null;
+  email: string | null;
+  name: string | null;
+  avatar_url: string | null;
   github_username: string | null;
+  is_admin: boolean;
+  tier: string;
+  credits_used: number;
+  credits_limit: number | null;
 }
 
 interface UserProfileContextValue {
@@ -29,18 +29,16 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchProfile = async (forceRefresh: boolean = false) => {
+  const fetchProfile = async () => {
     try {
       setLoading(true);
       setError(null);
-      // Force refresh on app load to ensure tier upgrades are immediate
-      const endpoint = forceRefresh ? "/v1/user/profile?force_refresh=true" : "/v1/user/profile";
-      const result = await apiGet<{ success: boolean; profile: UserProfile }>(endpoint);
-
-      if (result.ok && result.data?.success) {
-        setProfile(result.data.profile);
+      const resp = await getUserProfile();
+      if (resp.ok) {
+        const data = await resp.json();
+        setProfile(data);
       } else {
-        setError(result.error || "Failed to load profile");
+        setError("Failed to load profile");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
@@ -50,12 +48,11 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    // Always force refresh on mount (user just logged in/opened app)
-    fetchProfile(true);
+    fetchProfile();
   }, []);
 
   return (
-    <UserProfileContext.Provider value={{ profile, loading, error, refresh: () => fetchProfile(true) }}>
+    <UserProfileContext.Provider value={{ profile, loading, error, refresh: fetchProfile }}>
       {children}
     </UserProfileContext.Provider>
   );

@@ -11,10 +11,13 @@ const nextConfig = {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8742';
     return {
       beforeFiles: [
-        { source: '/api/cli/:path*', destination: `${apiUrl}/api/cli/:path*` },
         { source: '/config', destination: `${apiUrl}/config` },
         { source: '/mcp', destination: `${apiUrl}/mcp` },
         { source: '/health', destination: `${apiUrl}/health` },
+        { source: '/auth/github', destination: `${apiUrl}/auth/github` },
+        { source: '/auth/github/callback', destination: `${apiUrl}/auth/github/callback` },
+        { source: '/auth/login', destination: `${apiUrl}/auth/login` },
+        { source: '/auth/me', destination: `${apiUrl}/auth/me` },
         { source: '/v1/:path*', destination: `${apiUrl}/v1/:path*` },
       ],
     };

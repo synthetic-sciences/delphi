@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: synsc
+      POSTGRES_PASSWORD: synsc
+      POSTGRES_DB: synsc
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./setup_local.sql:/docker-entrypoint-initdb.d/01-setup.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synsc -d synsc"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://synsc:synsc@postgres:5432/synsc
+      SERVER_SECRET: ${SERVER_SECRET:?Set SERVER_SECRET in .env}
+      SYSTEM_PASSWORD: ${SYSTEM_PASSWORD:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+      FRONTEND_URL: http://localhost:3000
+      SYNSC_API_HOST: "0.0.0.0"
+      SYNSC_API_PORT: "8742"
+    ports:
+      - "8742:8742"
+
+  worker:
+    build:
+      context: .
+      target: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://synsc:synsc@postgres:5432/synsc
+      SYNSC_WORKER_THREADS: "4"
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - api
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8742
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:

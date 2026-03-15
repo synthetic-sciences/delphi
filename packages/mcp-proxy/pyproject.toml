@@ -1,8 +1,8 @@
 [project]
 name = "synsc-context-proxy"
 version = "1.2.1"
-description = "Lightweight MCP proxy for SyntheticSciences Context — gives AI agents deep code, research paper, and HuggingFace dataset context."
-readme = {text = "Lightweight MCP proxy for [Synsc Context](https://context.syntheticsciences.ai). Gives AI agents (Claude, Cursor, etc.) deep code, research paper, and HuggingFace dataset context via 25 tools. Only needs an API key — no heavy dependencies.", content-type = "text/markdown"}
+description = "Lightweight MCP proxy for Delphi — gives AI agents deep code, research paper, and dataset context."
+readme = {text = "Lightweight MCP proxy for Delphi (synsc-context). Gives AI agents deep code, research paper, and HuggingFace dataset context via 25 tools.", content-type = "text/markdown"}
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
@@ -28,8 +28,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://context.syntheticsciences.ai"
-Repository = "https://github.com/synthetic-sciences/synsc-context"
+Repository = "https://github.com/InkVell/synsc-delphi"
 
 [project.scripts]
 synsc-context-proxy = "synsc_context_proxy:main"

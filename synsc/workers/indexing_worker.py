@@ -5,7 +5,7 @@ repositories in the background.
 
 Features:
 - Fully parallel pipeline: file reading, chunking, embedding
-- Rate-limited Gemini API calls via semaphore
+- Rate-limited embedding API calls via semaphore
 - Thread-safe progress tracking
 - Per-batch error isolation (one failure doesn't kill the job)
 - Graceful shutdown on SIGINT/SIGTERM
@@ -125,7 +125,7 @@ class IndexingWorker:
                 if "indexing_jobs" in error_str and "does not exist" in error_str:
                     if not table_missing_logged:
                         logger.warning(
-                            "indexing_jobs table not found - run migration SQL in Supabase. "
+                            "indexing_jobs table not found - run setup_local.sql. "
                             "Worker will retry silently. Use --no-worker flag to disable.",
                             worker_id=self.worker_id,
                         )
@@ -511,7 +511,7 @@ class IndexingWorker:
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # Phase 3: Embedding generation + storage (rate-limited parallel)
-        #   Gemini API calls are gated by a semaphore to avoid 429s.
+        #   Embedding API calls are gated by a semaphore to avoid 429s.
         #   DB writes happen outside the semaphore so they don't block
         #   the next API call (pipeline parallelism).
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -532,7 +532,7 @@ class IndexingWorker:
             embed_progress = {"done": 0}
             embed_errors: list[str] = []
             
-            # Gate concurrent Gemini API calls — 2 in-flight is safe;
+            # Gate concurrent embedding API calls — 2 in-flight is safe;
             # remaining threads pipeline the DB storage of prior results.
             max_concurrent_api = min(2, self.max_workers)
             api_semaphore = threading.Semaphore(max_concurrent_api)
@@ -540,14 +540,14 @@ class IndexingWorker:
             def embed_and_store(batch: list[tuple[str, str]], batch_num: int):
                 """Generate embeddings for one batch and store in pgvector.
                 
-                Retry logic handles transient Gemini 429s with exponential
+                Retry logic handles transient 429s with exponential
                 backoff.  DB writes happen outside the semaphore so they
                 overlap with the next API call.
                 """
                 chunk_ids = [c[0] for c in batch]
                 contents = [c[1] for c in batch]
                 
-                # ── Rate-limited Gemini API call ──
+                # ── Rate-limited embedding API call ──
                 embeddings = None
                 max_retries = 4
                 with api_semaphore:
@@ -564,7 +564,7 @@ class IndexingWorker:
                             if is_rate_limit and attempt < max_retries - 1:
                                 wait = 2 ** (attempt + 1)  # 2s, 4s, 8s, 16s
                                 logger.warning(
-                                    "Gemini rate-limited, backing off",
+                                    "Embedding API rate-limited, backing off",
                                     wait_seconds=wait,
                                     attempt=attempt + 1,
                                     batch=batch_num,

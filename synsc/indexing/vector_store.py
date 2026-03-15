@@ -1,6 +1,6 @@
 """Vector store using pgvector for semantic search.
 
-All vector storage is done in Supabase PostgreSQL using the pgvector extension.
+All vector storage is done in PostgreSQL using the pgvector extension.
 Embeddings are SHARED for public repos (no per-user duplication).
 """
 
@@ -16,7 +16,7 @@ logger = structlog.get_logger(__name__)
 
 
 class VectorStore:
-    """pgvector-based vector store for Supabase PostgreSQL.
+    """pgvector-based vector store for PostgreSQL.
     
     DEDUPLICATION: Embeddings are stored per-repo, NOT per-user.
     This saves 90%+ storage when multiple users index popular public repos.
