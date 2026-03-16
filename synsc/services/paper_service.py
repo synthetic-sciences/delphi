@@ -408,7 +408,127 @@ class PaperService:
                         chunks=len(chunks),
                     )
 
-                # Step 9: Grant user access
+                # Step 9: Extract citations, equations, and code snippets
+                if extracted and extracted.normalized_text:
+                    full_text = extracted.normalized_text
+                    try:
+                        from synsc.extractors.citations import CitationExtractor
+                        from synsc.extractors.equations import EquationExtractor
+                        from synsc.extractors.code_snippets import CodeSnippetExtractor
+
+                        # Citations
+                        raw_citations = CitationExtractor().extract(full_text)
+                        for c in raw_citations:
+                            ct = c.get("citation_text", "") or ""
+                            if not ct:
+                                continue
+                            session.add(Citation(
+                                paper_id=paper_id,
+                                citation_text=ct[:2000],
+                                citation_context=(c.get("citation_context") or "")[:2000] or None,
+                                citation_number=int(c["citation_number"]) if c.get("citation_number") and str(c["citation_number"]).isdigit() else None,
+                                page_number=c.get("page_number"),
+                                external_reference={"type": c.get("citation_type"), "author": c.get("author"), "year": c.get("year")} if c.get("author") else None,
+                            ))
+
+                        # Equations (LaTeX-based extractor)
+                        raw_equations = EquationExtractor().extract(full_text)
+
+                        # Also extract plain-text equations from PDF text
+                        # (PDF extraction strips LaTeX, leaving rendered equations)
+                        import re as _re
+                        _math_chars = set('∑∏√σαβγδεζηθλμπρτφψω∈∀∃∞±×÷∝∂∇≈≠≤≥')
+                        _math_words = {'softmax', 'argmax', 'argmin', 'log', 'exp', 'max', 'min',
+                                       'sqrt', 'relu', 'gelu', 'sigmoid', 'tanh', 'cos', 'sin'}
+                        # Skip equations that look like dollar amounts or examples
+                        _false_positive_markers = {'$', '<<', '####', 'dollars', 'cents', 'price'}
+
+                        def _is_math(t):
+                            tl = t.lower()
+                            if any(fp in tl for fp in _false_positive_markers):
+                                return False
+                            return (
+                                any(c in t for c in _math_chars)
+                                or any(w in tl for w in _math_words)
+                                or _re.search(r'[_^]|W\d|b\d|d[_a-z]', t)  # weight/bias/dim notation
+                            )
+
+                        _eq_patterns = [
+                            # Uppercase FunctionName(vars) = expression
+                            _re.compile(r'([A-Z][a-zA-Z]{2,}\s*\([^)]{1,60}\)\s*=\s*[^\n]{5,200})'),
+                            # Common ML functions: softmax(...), attention(...), etc.
+                            _re.compile(r'((?:softmax|attention|relu|gelu|sigmoid|tanh)\s*\([^)]+\)\s*=?\s*[^\n]{5,200})', _re.IGNORECASE),
+                            # MultiHead, Concat, LayerNorm patterns
+                            _re.compile(r'((?:MultiHead|Concat|LayerNorm|PE)\s*\([^)]{1,80}\)\s*=\s*[^\n]{5,300})'),
+                            # Multiline: FunctionName(vars) = ... across up to 3 lines
+                            _re.compile(r'([A-Z][a-zA-Z]{2,}\s*\([^)]{1,60}\)\s*=\s*(?:[^\n]*\n){0,2}[^\n]+)', _re.MULTILINE),
+                            # Equation with number at end of line: "expression (1)"
+                            _re.compile(r'([^\n]{15,300})\s+\((\d{1,2})\)\s*(?:\n|$)', _re.MULTILINE),
+                            # Equation with number on next line: "expression\n(1)"
+                            _re.compile(r'([^\n]{10,200})\n\s*\((\d{1,2})\)\s*$', _re.MULTILINE),
+                        ]
+                        _seen_eq = set()
+                        for pat in _eq_patterns:
+                            for m in pat.finditer(full_text):
+                                eq_text = ' '.join(m.group(0).split())  # normalize whitespace
+                                if not _is_math(eq_text) or len(eq_text) < 15:
+                                    continue
+                                # Dedup by checking substring overlap
+                                is_dup = any(eq_text in existing or existing in eq_text for existing in _seen_eq)
+                                if is_dup:
+                                    # Keep the longer version
+                                    _seen_eq = {s for s in _seen_eq if s not in eq_text}
+                                _seen_eq.add(eq_text)
+                                eq_num = None
+                                if m.lastindex and m.lastindex >= 2:
+                                    g2 = m.group(2)
+                                    if g2 and g2.isdigit():
+                                        eq_num = g2
+                                raw_equations.append({
+                                    "equation_text": eq_text,
+                                    "equation_type": "inline",
+                                    "equation_number": eq_num,
+                                    "context": full_text[max(0, m.start()-80):m.end()+80].strip(),
+                                })
+
+                        for eq in raw_equations:
+                            et = eq.get("equation_text", "") or ""
+                            if not et:
+                                continue
+                            session.add(Equation(
+                                paper_id=paper_id,
+                                equation_text=et[:5000],
+                                equation_number=eq.get("equation_number"),
+                                equation_type=eq.get("equation_type", "display"),
+                                context=(eq.get("context") or "")[:2000] or None,
+                                page_number=eq.get("page_number"),
+                            ))
+
+                        # Code snippets
+                        raw_snippets = CodeSnippetExtractor().extract(full_text)
+                        for s in raw_snippets:
+                            ct = s.get("code_text", s.get("text", "")) or ""
+                            if not ct:
+                                continue
+                            session.add(PaperCodeSnippet(
+                                paper_id=paper_id,
+                                code_text=ct[:10000],
+                                language=s.get("language"),
+                                page_number=s.get("page_number"),
+                                section_title=s.get("section_title"),
+                            ))
+
+                        logger.info(
+                            "Extracted paper features",
+                            paper_id=paper_id,
+                            citations=len(raw_citations),
+                            equations=len(raw_equations),
+                            code_snippets=len(raw_snippets),
+                        )
+                    except Exception as e:
+                        logger.warning("Feature extraction failed (non-fatal)", error=str(e))
+
+                # Step 10: Grant user access
                 existing_link = session.query(UserPaper).filter(
                     UserPaper.user_id == self.user_id,
                     UserPaper.paper_id == paper_id,

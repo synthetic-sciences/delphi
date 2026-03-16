@@ -1570,9 +1570,9 @@ class AnalysisService:
         for framework_id, patterns in FRAMEWORK_PATTERNS.items():
             score = 0
             
-            # Check for specific files
+            # Check for specific files (exact filename match, not substring)
             for file_pattern in patterns.get("files", []):
-                if file_pattern in file_names or any(file_pattern in fp for fp in file_paths):
+                if file_pattern in file_names or any(fp.endswith("/" + file_pattern) and fp.count("/") <= 1 for fp in file_paths):
                     score += 1
             
             # Check package.json dependencies (JavaScript/TypeScript)

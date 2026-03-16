@@ -1212,9 +1212,10 @@ class IndexingService:
 
             if not user_repo:
                 return {
-                    "success": False,
-                    "error": "Not in collection",
-                    "message": "This repository is not in your collection",
+                    "success": True,
+                    "repo_id": repo_id,
+                    "repo_name": "unknown",
+                    "message": "Repository is not in your collection (already removed)",
                 }
 
             # Get repo info for response

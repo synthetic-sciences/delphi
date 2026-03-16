@@ -31,7 +31,7 @@ from synsc.database.models import (
     CodeChunk,
     UserRepository,
 )
-from synsc.embeddings.generator import EmbeddingGenerator
+from synsc.embeddings.generator import get_embedding_generator
 from synsc.indexing.vector_store import get_vector_store
 
 logger = structlog.get_logger(__name__)
@@ -415,15 +415,12 @@ class SearchService:
         """
         self.config = get_config()
         self.user_id = user_id
-        self._embedding_generator = None
         self._vector_store = None
-    
+
     @property
     def embedding_generator(self):
-        """Lazy-load embedding generator."""
-        if self._embedding_generator is None:
-            self._embedding_generator = EmbeddingGenerator()
-        return self._embedding_generator
+        """Return the global singleton embedding generator."""
+        return get_embedding_generator()
     
     @property
     def vector_store(self):
