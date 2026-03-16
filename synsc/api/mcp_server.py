@@ -178,7 +178,7 @@ Provides deep context to AI agents through:
     # ==========================================================================
 
     @server.tool()
-    def index_repository(url: str, branch: str = "main", deep_index: bool = False) -> dict[str, Any]:
+    async def index_repository(url: str, branch: str = "main", deep_index: bool = False) -> dict[str, Any]:
         """Index a GitHub repository for semantic code search.
 
         Args:
@@ -189,12 +189,15 @@ Provides deep context to AI agents through:
         Returns:
             Dictionary with repo_id, files_indexed, chunks_created, etc.
         """
+        import asyncio
         from synsc.services.indexing_service import IndexingService
 
         service = IndexingService()
         user_id = get_authenticated_user_id()
 
-        result = service.index_repository(url, branch, user_id=user_id, deep_index=deep_index)
+        result = await asyncio.to_thread(
+            service.index_repository, url, branch, user_id=user_id, deep_index=deep_index,
+        )
         uid = get_authenticated_user_id()
         if uid:
             _log_activity(uid, "index_repository", resource_type="repository", metadata={"url": url, "branch": branch})
@@ -205,7 +208,7 @@ Provides deep context to AI agents through:
         """List all indexed repositories.
 
         Args:
-            limit: Maximum repositories to return
+            limit: Maximum repositories to return (max 200)
             offset: Pagination offset
 
         Returns:
@@ -213,6 +216,7 @@ Provides deep context to AI agents through:
         """
         from synsc.services.indexing_service import IndexingService
 
+        limit = min(limit, 200)
         service = IndexingService()
         user_id = get_authenticated_user_id()
 
@@ -259,7 +263,7 @@ Provides deep context to AI agents through:
         return result
 
     @server.tool()
-    def search_code(
+    async def search_code(
         query: str,
         repo_ids: list[str] | None = None,
         language: str | None = None,
@@ -278,12 +282,14 @@ Provides deep context to AI agents through:
         Returns:
             Search results with code snippets and relevance scores
         """
+        import asyncio
         from synsc.services.search_service import SearchService
 
         service = SearchService()
         user_id = get_authenticated_user_id()
 
-        result = service.search_code(
+        result = await asyncio.to_thread(
+            service.search_code,
             query=query, repo_ids=repo_ids, language=language,
             file_pattern=file_pattern, top_k=top_k, user_id=user_id,
         )
@@ -447,7 +453,7 @@ Provides deep context to AI agents through:
     # ==========================================================================
 
     @server.tool()
-    def index_paper(source: str) -> dict[str, Any]:
+    async def index_paper(source: str) -> dict[str, Any]:
         """Index a research paper from arXiv or local PDF.
 
         Supports multiple formats:
@@ -464,6 +470,7 @@ Provides deep context to AI agents through:
         Returns:
             Dictionary with paper_id, title, authors, chunks, etc.
         """
+        import asyncio
         import tempfile
         import os
         from synsc.services.paper_service import get_paper_service
@@ -472,10 +479,11 @@ Provides deep context to AI agents through:
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
 
-        # Check if source is a local PDF
-        if os.path.isfile(source) and source.lower().endswith(".pdf"):
-            result = service.index_paper(pdf_path=source, source="upload")
-        else:
+        def _do_index():
+            # Check if source is a local PDF
+            if os.path.isfile(source) and source.lower().endswith(".pdf"):
+                return service.index_paper(pdf_path=source, source="upload")
+
             # Treat as arXiv URL or ID
             try:
                 arxiv_id = parse_arxiv_id(source) if "arxiv" in source.lower() else source.strip()
@@ -492,7 +500,7 @@ Provides deep context to AI agents through:
                 pdf_path = tmp.name
             try:
                 download_arxiv_pdf(arxiv_id, pdf_path)
-                result = service.index_paper(
+                return service.index_paper(
                     pdf_path=pdf_path, source="arxiv",
                     arxiv_id=arxiv_id, arxiv_metadata=arxiv_metadata,
                 )
@@ -501,6 +509,8 @@ Provides deep context to AI agents through:
                     os.unlink(pdf_path)
                 except OSError:
                     pass
+
+        result = await asyncio.to_thread(_do_index)
 
         uid = get_authenticated_user_id()
         if uid:
@@ -512,7 +522,7 @@ Provides deep context to AI agents through:
         """List all indexed papers.
 
         Args:
-            limit: Maximum papers to return
+            limit: Maximum papers to return (max 200)
             offset: Pagination offset
 
         Returns:
@@ -520,6 +530,7 @@ Provides deep context to AI agents through:
         """
         from synsc.services.paper_service import get_paper_service
 
+        limit = min(limit, 200)
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
 
@@ -550,7 +561,7 @@ Provides deep context to AI agents through:
         return result
 
     @server.tool()
-    def search_papers(query: str, top_k: int = 5) -> dict[str, Any]:
+    async def search_papers(query: str, top_k: int = 5) -> dict[str, Any]:
         """Search papers using semantic search.
 
         Args:
@@ -560,12 +571,13 @@ Provides deep context to AI agents through:
         Returns:
             Matching papers with relevance scores
         """
+        import asyncio
         from synsc.services.paper_service import get_paper_service
 
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
 
-        result = service.search_papers(query=query, top_k=top_k)
+        result = await asyncio.to_thread(service.search_papers, query=query, top_k=top_k)
         uid = get_authenticated_user_id()
         if uid:
             _log_activity(uid, "search_papers", resource_type="paper", query=query, results_count=len(result.get("results", [])))
@@ -763,7 +775,7 @@ Provides deep context to AI agents through:
     # ==========================================================================
 
     @server.tool()
-    def index_dataset(source: str) -> dict[str, Any]:
+    async def index_dataset(source: str) -> dict[str, Any]:
         """Index a HuggingFace dataset for semantic search.
 
         Supports multiple formats:
@@ -782,6 +794,7 @@ Provides deep context to AI agents through:
         Returns:
             Dictionary with dataset_id, name, hf_id, chunks, etc.
         """
+        import asyncio
         from synsc.services.dataset_service import get_dataset_service
         from synsc.core.huggingface_client import parse_hf_dataset_id, HuggingFaceError
 
@@ -796,7 +809,7 @@ Provides deep context to AI agents through:
         except HuggingFaceError:
             hf_id = source.strip()
 
-        result = service.index_dataset(hf_id, hf_token=hf_token)
+        result = await asyncio.to_thread(service.index_dataset, hf_id, hf_token=hf_token)
         return result
 
     @server.tool()
@@ -806,7 +819,7 @@ Provides deep context to AI agents through:
         Shows datasets in your collection that have been indexed for search.
 
         Args:
-            limit: Maximum number of datasets to return (default: 50)
+            limit: Maximum number of datasets to return (default: 50, max 200)
             offset: Number of datasets to skip for pagination
 
         Returns:
@@ -814,6 +827,7 @@ Provides deep context to AI agents through:
         """
         from synsc.services.dataset_service import get_dataset_service
 
+        limit = min(limit, 200)
         user_id = get_authenticated_user_id()
 
         service = get_dataset_service(user_id=user_id)
@@ -847,10 +861,10 @@ Provides deep context to AI agents through:
         return {"success": True, "dataset": dataset}
 
     @server.tool()
-    def search_datasets(query: str, top_k: int = 10) -> dict[str, Any]:
+    async def search_datasets(query: str, top_k: int = 10) -> dict[str, Any]:
         """Search datasets using semantic search over dataset cards.
 
-        Uses Gemini embeddings to find relevant datasets by meaning.
+        Uses sentence-transformers embeddings to find relevant datasets by meaning.
         Searches through indexed dataset documentation (README cards).
 
         Args:
@@ -860,12 +874,13 @@ Provides deep context to AI agents through:
         Returns:
             Matching dataset chunks with relevance scores
         """
+        import asyncio
         from synsc.services.dataset_service import get_dataset_service
 
         user_id = get_authenticated_user_id()
 
         service = get_dataset_service(user_id=user_id)
-        result = service.search_datasets(query=query, top_k=top_k)
+        result = await asyncio.to_thread(service.search_datasets, query=query, top_k=top_k)
 
         return result
 
