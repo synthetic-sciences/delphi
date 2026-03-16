@@ -482,11 +482,11 @@ export default function RepositoriesPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-medium lowercase mb-1">repositories</h1>
-          <p className="text-sm text-[#555] lowercase">manage your indexed repositories</p>
+          <p className="text-sm text-[#8a7a72] lowercase">manage your indexed repositories</p>
         </div>
         <button
           onClick={() => { resetModal(); setShowIndexModal(true); setActiveJobId(null); }}
-          className="flex items-center gap-2 px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
         >
           <Plus size={14} />
           index new
@@ -495,16 +495,16 @@ export default function RepositoriesPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3 mb-6">
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <p className="text-[11px] text-[#666] uppercase tracking-wider mb-1">repositories</p>
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+          <p className="text-[11px] text-[#8a7a72] uppercase tracking-wider mb-1">repositories</p>
           <p className="text-2xl font-semibold tabular-nums">{repos.length}</p>
         </div>
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <p className="text-[11px] text-[#666] uppercase tracking-wider mb-1">files</p>
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+          <p className="text-[11px] text-[#8a7a72] uppercase tracking-wider mb-1">files</p>
           <p className="text-2xl font-semibold tabular-nums">{totalFiles.toLocaleString()}</p>
         </div>
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <p className="text-[11px] text-[#666] uppercase tracking-wider mb-1">chunks</p>
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+          <p className="text-[11px] text-[#8a7a72] uppercase tracking-wider mb-1">chunks</p>
           <p className="text-2xl font-semibold tabular-nums">{totalChunks.toLocaleString()}</p>
         </div>
       </div>
@@ -512,31 +512,31 @@ export default function RepositoriesPage() {
       {/* Search */}
       <div className="mb-4">
         <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#444]" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a09488]" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="search repositories..."
-            className="w-full h-9 pl-9 pr-4 rounded-lg bg-[#0f0f0f] border border-[#1a1a1a] text-sm text-white placeholder-[#444] focus:outline-none focus:border-[#222] lowercase transition-colors"
+            className="w-full h-9 pl-9 pr-4 rounded-lg bg-[#faf5ef] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] lowercase transition-colors"
           />
         </div>
       </div>
 
       {/* Repository List */}
-      <div className="rounded-xl bg-[#0f0f0f] border border-[#1a1a1a] overflow-hidden">
+      <div className="rounded-xl bg-[#faf5ef] border border-[#dfcdbf] overflow-hidden">
         {loading ? (
           <div className="p-12 text-center">
-            <RefreshCw size={24} className="text-[#333] animate-spin mx-auto mb-3" />
-            <p className="text-sm text-[#444] lowercase">loading repositories...</p>
+            <RefreshCw size={24} className="text-[#a09488] animate-spin mx-auto mb-3" />
+            <p className="text-sm text-[#a09488] lowercase">loading repositories...</p>
           </div>
         ) : filtered.length === 0 ? (
           <div className="p-12 text-center">
             <FolderGit2 size={32} className="text-[#222] mx-auto mb-3" />
-            <h3 className="text-sm text-[#555] lowercase mb-1">
+            <h3 className="text-sm text-[#8a7a72] lowercase mb-1">
               {repos.length === 0 ? "no repositories yet" : "no matching repositories"}
             </h3>
-            <p className="text-xs text-[#333] lowercase mb-4">
+            <p className="text-xs text-[#a09488] lowercase mb-4">
               {repos.length === 0
                 ? "index your first repository to get started with semantic code search."
                 : "try a different search term."}
@@ -544,30 +544,30 @@ export default function RepositoriesPage() {
             {repos.length === 0 && (
               <button
                 onClick={() => { resetModal(); setShowIndexModal(true); setActiveJobId(null); }}
-                className="px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
+                className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
               >
                 index your first repo
               </button>
             )}
           </div>
         ) : (
-          <div className="divide-y divide-[#1a1a1a]">
+          <div className="divide-y divide-[#dfcdbf]">
             {filtered.map((repo) => (
               <div
                 key={repo.repo_id}
-                className="flex items-center gap-4 px-4 py-4 hover:bg-[#111] transition-colors group"
+                className="flex items-center gap-4 px-4 py-4 hover:bg-[#efe7dd] transition-colors group"
               >
                 {/* Icon */}
-                <div className="w-10 h-10 rounded-lg bg-[#fa7315]/10 flex items-center justify-center flex-shrink-0">
-                  <GitBranch size={18} className="text-[#fa7315]" />
+                <div className="w-10 h-10 rounded-lg bg-[#b58a73]/10 flex items-center justify-center flex-shrink-0">
+                  <GitBranch size={18} className="text-[#b58a73]" />
                 </div>
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-white truncate mb-1">
+                  <div className="text-sm font-medium text-[#2e2522] truncate mb-1">
                     {repo.owner}/{repo.name}
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-[#444]">
+                  <div className="flex items-center gap-3 text-xs text-[#a09488]">
                     <span className="flex items-center gap-1">
                       <GitBranch size={10} />
                       {repo.branch}
@@ -592,7 +592,7 @@ export default function RepositoriesPage() {
                   <button
                     onClick={() => deleteRepo(repo.repo_id)}
                     disabled={actionLoading === repo.repo_id}
-                    className="p-2 rounded-lg hover:bg-[#1a1a1a] text-[#444] hover:text-red-500 transition-colors disabled:opacity-50"
+                    className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Delete repository"
                   >
                     <Trash2 size={14} />
@@ -611,17 +611,17 @@ export default function RepositoriesPage() {
             <button
               key={job.id}
               onClick={() => expandJob(job.id)}
-              className="flex items-center gap-3 pl-4 pr-3 py-3 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a] shadow-2xl shadow-black/40 hover:border-[#2a2a2a] transition-all group cursor-pointer"
+              className="flex items-center gap-3 pl-4 pr-3 py-3 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl shadow-black/10 hover:border-[#c5b5a5] transition-all group cursor-pointer"
             >
               {/* Animated spinner */}
-              <RefreshCw size={16} className="text-[#fa7315] animate-spin flex-shrink-0" />
+              <RefreshCw size={16} className="text-[#b58a73] animate-spin flex-shrink-0" />
 
               {/* Info */}
               <div className="flex-1 min-w-0 text-left">
-                <p className="text-xs font-medium text-white truncate lowercase">
+                <p className="text-xs font-medium text-[#2e2522] truncate lowercase">
                   {job.progress && (stageLabels[job.progress.stage] || job.progress.stage)}
                 </p>
-                <p className="text-[10px] text-[#444] truncate lowercase">
+                <p className="text-[10px] text-[#a09488] truncate lowercase">
                   {job.repoUrl.replace(/https?:\/\/(www\.)?github\.com\//, "")}
                 </p>
               </div>
@@ -631,23 +631,23 @@ export default function RepositoriesPage() {
                 <svg className="w-9 h-9 -rotate-90" viewBox="0 0 36 36">
                   <circle
                     cx="18" cy="18" r="15"
-                    fill="none" stroke="#1a1a1a" strokeWidth="3"
+                    fill="none" stroke="#dfcdbf" strokeWidth="3"
                   />
                   <circle
                     cx="18" cy="18" r="15"
-                    fill="none" stroke="#fa7315" strokeWidth="3"
+                    fill="none" stroke="#b58a73" strokeWidth="3"
                     strokeLinecap="round"
                     strokeDasharray={`${Math.max(0, Math.min(job.progress?.progress || 0, 100)) * 0.9425} 94.25`}
                     className="transition-all duration-500"
                   />
                 </svg>
-                <span className="absolute inset-0 flex items-center justify-center text-[9px] font-semibold text-[#fa7315] tabular-nums">
+                <span className="absolute inset-0 flex items-center justify-center text-[9px] font-semibold text-[#b58a73] tabular-nums">
                   {Math.round(Math.max(0, job.progress?.progress || 0))}%
                 </span>
               </div>
 
               {/* Expand icon */}
-              <Maximize2 size={14} className="text-[#333] group-hover:text-[#fa7315] transition-colors flex-shrink-0" />
+              <Maximize2 size={14} className="text-[#a09488] group-hover:text-[#b58a73] transition-colors flex-shrink-0" />
             </button>
           ))}
         </div>
@@ -667,7 +667,7 @@ export default function RepositoriesPage() {
               }
             }}
           />
-          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a] shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">index repository</h2>
               <div className="flex items-center gap-1">
@@ -675,7 +675,7 @@ export default function RepositoriesPage() {
                 {activeJob?.isIndexing && (
                   <button
                     onClick={() => minimizeJob(activeJob.id)}
-                    className="p-1.5 rounded-lg hover:bg-[#1a1a1a] text-[#555] hover:text-[#fa7315] transition-colors"
+                    className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#b58a73] transition-colors"
                     title="Minimize — indexing continues in the background"
                   >
                     <Minimize2 size={15} />
@@ -685,7 +685,7 @@ export default function RepositoriesPage() {
                 {!activeJob?.isIndexing && (
                   <button
                     onClick={() => { setShowIndexModal(false); resetModal(); }}
-                    className="p-1.5 rounded-lg hover:bg-[#1a1a1a] text-[#555] hover:text-white transition-colors"
+                    className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
                   >
                     <X size={15} />
                   </button>
@@ -697,12 +697,12 @@ export default function RepositoriesPage() {
             {!activeJob?.isIndexing && !activeJob?.success && !hasToken && (
               <Link
                 href="/api-keys#github-token"
-                className="flex items-start gap-2.5 mb-5 p-3 rounded-lg bg-[#fa7315]/8 border border-[#fa7315]/15 hover:border-[#fa7315]/30 transition-colors group"
+                className="flex items-start gap-2.5 mb-5 p-3 rounded-lg bg-[#b58a73]/8 border border-[#b58a73]/15 hover:border-[#b58a73]/30 transition-colors group"
               >
-                <Info size={14} className="text-[#fa7315] mt-0.5 flex-shrink-0" />
-                <p className="text-xs text-[#888] lowercase leading-relaxed">
+                <Info size={14} className="text-[#b58a73] mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-[#695954] lowercase leading-relaxed">
                   index your private repos by adding a github PAT in{" "}
-                  <span className="text-[#fa7315] group-hover:underline">api keys</span>
+                  <span className="text-[#b58a73] group-hover:underline">api keys</span>
                 </p>
               </Link>
             )}
@@ -713,32 +713,32 @@ export default function RepositoriesPage() {
                 {/* GitHub repo dropdown — only when user has a token */}
                 {hasToken && (
                   <div className="mb-4">
-                    <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">
+                    <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                       select private repo
                     </label>
                     <div>
                       <div className="relative">
-                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#444] z-10" />
+                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a09488] z-10" />
                         <input
                           type="text"
                           value={ghSearch}
                           onChange={(e) => { setGhSearch(e.target.value); setManualMode(false); }}
                           onFocus={() => setManualMode(false)}
                           placeholder="search your github repos..."
-                          className="w-full h-10 pl-9 pr-4 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#333] focus:outline-none focus:border-[#333] transition-colors lowercase"
+                          className="w-full h-10 pl-9 pr-4 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors lowercase"
                         />
                       </div>
                       {/* Repo list — inline, expands the modal */}
                       {!manualMode && (
-                        <div className="mt-1 max-h-48 overflow-y-auto rounded-lg bg-[#0a0a0a] border border-[#1a1a1a]">
+                        <div className="mt-1 max-h-48 overflow-y-auto rounded-lg bg-[#f7f0e8] border border-[#dfcdbf]">
                           {ghLoading ? (
                             <div className="p-4 text-center">
-                              <RefreshCw size={14} className="text-[#333] animate-spin mx-auto mb-1" />
-                              <p className="text-[10px] text-[#444] lowercase">loading...</p>
+                              <RefreshCw size={14} className="text-[#a09488] animate-spin mx-auto mb-1" />
+                              <p className="text-[10px] text-[#a09488] lowercase">loading...</p>
                             </div>
                           ) : ghRepos.length === 0 ? (
                             <div className="p-4 text-center">
-                              <p className="text-xs text-[#333] lowercase">
+                              <p className="text-xs text-[#a09488] lowercase">
                                 {ghSearch ? "no matching repos" : "no repos found"}
                               </p>
                             </div>
@@ -747,12 +747,12 @@ export default function RepositoriesPage() {
                               <button
                                 key={repo.full_name}
                                 onClick={() => selectRepo(repo)}
-                                className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[#151515] transition-colors text-left"
+                                className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[#e5d5c5] transition-colors text-left"
                               >
-                                <span className="text-[#333] flex-shrink-0">
+                                <span className="text-[#a09488] flex-shrink-0">
                                   {repo.private ? <Lock size={12} /> : <Globe size={12} />}
                                 </span>
-                                <span className="text-sm text-white truncate flex-1">{repo.full_name}</span>
+                                <span className="text-sm text-[#2e2522] truncate flex-1">{repo.full_name}</span>
                                 {repo.private && (
                                   <span className="px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase tracking-wider bg-yellow-500/15 text-yellow-500 flex-shrink-0">
                                     private
@@ -770,15 +770,15 @@ export default function RepositoriesPage() {
                 {/* OR divider — only when user has a token */}
                 {hasToken && (
                   <div className="flex items-center gap-3 my-4">
-                    <div className="flex-1 h-px bg-[#1a1a1a]" />
-                    <span className="text-[10px] text-[#333] uppercase tracking-wider">or</span>
-                    <div className="flex-1 h-px bg-[#1a1a1a]" />
+                    <div className="flex-1 h-px bg-[#dfcdbf]" />
+                    <span className="text-[10px] text-[#a09488] uppercase tracking-wider">or</span>
+                    <div className="flex-1 h-px bg-[#dfcdbf]" />
                   </div>
                 )}
 
                 {/* Manual URL input */}
                 <div className="mb-4">
-                  <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">
+                  <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                     {hasToken ? "enter repository url" : "repository url or shorthand"}
                   </label>
                   <input
@@ -787,33 +787,33 @@ export default function RepositoriesPage() {
                     onChange={(e) => setRepoUrl(e.target.value)}
                     onFocus={() => setManualMode(true)}
                     placeholder="facebook/react or https://github.com/facebook/react"
-                    className="w-full h-10 px-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#333] focus:outline-none focus:border-[#333] transition-colors"
+                    className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
                     autoFocus={!hasToken}
                   />
                 </div>
 
                 {/* Branch */}
                 <div className="mb-6" ref={branchDropdownRef}>
-                  <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">
+                  <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                     branch
                   </label>
                   <div className="relative">
                     <button
                       type="button"
                       onClick={() => !branchesLoading && setBranchDropdownOpen(!branchDropdownOpen)}
-                      className="w-full h-10 px-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-left flex items-center gap-2 hover:border-[#333] focus:outline-none focus:border-[#333] transition-colors"
+                      className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-left flex items-center gap-2 hover:border-[#c5b5a5] focus:outline-none focus:border-[#c5b5a5] transition-colors"
                     >
-                      <GitBranch size={12} className="text-[#444] flex-shrink-0" />
-                      <span className="text-white lowercase truncate flex-1">{branch}</span>
+                      <GitBranch size={12} className="text-[#a09488] flex-shrink-0" />
+                      <span className="text-[#2e2522] lowercase truncate flex-1">{branch}</span>
                       {branchesLoading ? (
-                        <RefreshCw size={12} className="text-[#444] animate-spin flex-shrink-0" />
+                        <RefreshCw size={12} className="text-[#a09488] animate-spin flex-shrink-0" />
                       ) : (
-                        <ChevronDown size={12} className={`text-[#444] flex-shrink-0 transition-transform ${branchDropdownOpen ? "rotate-180" : ""}`} />
+                        <ChevronDown size={12} className={`text-[#a09488] flex-shrink-0 transition-transform ${branchDropdownOpen ? "rotate-180" : ""}`} />
                       )}
                     </button>
 
                     {branchDropdownOpen && branches.length > 0 && (
-                      <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] shadow-xl shadow-black/50">
+                      <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] shadow-xl shadow-black/10">
                         {branches.map((b) => (
                           <button
                             key={b}
@@ -824,16 +824,16 @@ export default function RepositoriesPage() {
                             }}
                             className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left transition-colors lowercase ${
                               b === branch
-                                ? "bg-[#151515] text-white"
-                                : "text-[#888] hover:bg-[#111] hover:text-white"
+                                ? "bg-[#e5d5c5] text-[#2e2522]"
+                                : "text-[#695954] hover:bg-[#efe7dd] hover:text-[#2e2522]"
                             }`}
                           >
                             <span className="w-4 flex-shrink-0">
-                              {b === branch && <Check size={12} className="text-[#fa7315]" />}
+                              {b === branch && <Check size={12} className="text-[#b58a73]" />}
                             </span>
                             <span className="truncate">{b}</span>
                             {b === defaultBranch && (
-                              <span className="ml-auto px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase tracking-wider bg-[#1a1a1a] text-[#555] flex-shrink-0">
+                              <span className="ml-auto px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase tracking-wider bg-[#dfcdbf] text-[#8a7a72] flex-shrink-0">
                                 default
                               </span>
                             )}
@@ -847,10 +847,10 @@ export default function RepositoriesPage() {
                 {/* Deep index toggle */}
                 <div className="mb-6 flex items-center justify-between">
                   <div>
-                    <label className="block text-xs text-[#555] uppercase tracking-wider">
+                    <label className="block text-xs text-[#8a7a72] uppercase tracking-wider">
                       deep indexing
                     </label>
-                    <p className="text-[10px] text-[#333] mt-0.5">
+                    <p className="text-[10px] text-[#a09488] mt-0.5">
                       full AST chunking per function/class — slower, higher quality
                     </p>
                   </div>
@@ -858,7 +858,7 @@ export default function RepositoriesPage() {
                     type="button"
                     onClick={() => setDeepIndex(!deepIndex)}
                     className={`relative flex-shrink-0 w-9 h-5 rounded-full transition-colors ${
-                      deepIndex ? "bg-[#fa7315]" : "bg-[#1a1a1a] border border-[#333]"
+                      deepIndex ? "bg-[#b58a73]" : "bg-[#dfcdbf] border border-[#c5b5a5]"
                     }`}
                   >
                     <span
@@ -875,27 +875,27 @@ export default function RepositoriesPage() {
             {activeJob?.isIndexing && activeJob.progress && (
               <div className="mb-6">
                 <div className="text-center mb-4">
-                  <RefreshCw size={24} className="text-[#fa7315] animate-spin mx-auto mb-3" />
-                  <p className="text-sm font-medium text-white lowercase mb-1">
+                  <RefreshCw size={24} className="text-[#b58a73] animate-spin mx-auto mb-3" />
+                  <p className="text-sm font-medium text-[#2e2522] lowercase mb-1">
                     {stageLabels[activeJob.progress.stage] || activeJob.progress.stage}
                   </p>
-                  <p className="text-xs text-[#555] lowercase">{activeJob.progress.message}</p>
+                  <p className="text-xs text-[#8a7a72] lowercase">{activeJob.progress.message}</p>
                 </div>
 
                 {/* Progress bar */}
-                <div className="h-2 bg-[#1a1a1a] rounded-full overflow-hidden mb-2">
+                <div className="h-2 bg-[#dfcdbf] rounded-full overflow-hidden mb-2">
                   <div
-                    className="h-full bg-[#fa7315] rounded-full transition-all duration-300"
+                    className="h-full bg-[#b58a73] rounded-full transition-all duration-300"
                     style={{ width: `${Math.max(0, Math.min(activeJob.progress.progress, 100))}%` }}
                   />
                 </div>
-                <p className="text-[10px] text-[#333] text-center tabular-nums">
+                <p className="text-[10px] text-[#a09488] text-center tabular-nums">
                   {Math.round(Math.max(0, activeJob.progress.progress))}%
                 </p>
 
                 {/* File/chunk details */}
                 {(activeJob.progress.total_files || activeJob.progress.chunks_created) && (
-                  <div className="mt-4 p-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-xs text-[#444] space-y-1">
+                  <div className="mt-4 p-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-xs text-[#a09488] space-y-1">
                     {activeJob.progress.total_files && (
                       <p>files: {activeJob.progress.files_processed || 0}/{activeJob.progress.total_files}</p>
                     )}
@@ -906,7 +906,7 @@ export default function RepositoriesPage() {
                 )}
 
                 {/* Minimize hint */}
-                <p className="mt-4 text-[10px] text-[#333] text-center lowercase">
+                <p className="mt-4 text-[10px] text-[#a09488] text-center lowercase">
                   tip: click minimize or the backdrop to continue browsing while indexing
                 </p>
               </div>
@@ -931,14 +931,14 @@ export default function RepositoriesPage() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => { setShowIndexModal(false); resetModal(); }}
-                  className="px-4 py-2 text-sm text-[#555] hover:text-white rounded-lg border border-[#1a1a1a] hover:border-[#333] transition-colors lowercase"
+                  className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
                 >
                   cancel
                 </button>
                 <button
                   onClick={indexRepository}
                   disabled={!repoUrl.trim()}
-                  className="px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   index repository
                 </button>

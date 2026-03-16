@@ -19,8 +19,8 @@ export default function AuthCallbackPage() {
   }, [router, searchParams]);
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
-      <p className="text-sm text-[#555]">Completing sign in...</p>
+    <div className="min-h-screen bg-[#f7f0e8] flex items-center justify-center">
+      <p className="text-sm text-[#8a7a72]">Completing sign in...</p>
     </div>
   );
 }

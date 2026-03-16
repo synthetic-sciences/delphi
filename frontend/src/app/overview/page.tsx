@@ -159,15 +159,15 @@ export default function OverviewPage() {
         <div>
           <div className="flex items-center gap-3 mb-1">
             <h1 className="text-2xl font-medium lowercase">overview</h1>
-            <span className="px-2 py-0.5 rounded bg-[#111] text-[10px] text-[#555] uppercase tracking-wider">personal</span>
+            <span className="px-2 py-0.5 rounded bg-[#efe7dd] text-[10px] text-[#8a7a72] uppercase tracking-wider">personal</span>
           </div>
-          <p className="text-sm text-[#555] lowercase">welcome back</p>
+          <p className="text-sm text-[#8a7a72] lowercase">welcome back</p>
         </div>
       </div>
 
       {/* user info card */}
       {profile && (
-        <div className="mb-6 p-6 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
+        <div className="mb-6 p-6 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
           <div className="flex items-center gap-4">
             {profile.avatar_url && (
               <img
@@ -177,11 +177,11 @@ export default function OverviewPage() {
               />
             )}
             <div>
-              <p className="text-sm text-white font-medium">
+              <p className="text-sm text-[#2e2522] font-medium">
                 {profile.name || profile.github_username || profile.email || "User"}
               </p>
               {profile.github_username && (
-                <p className="text-xs text-[#555]">@{profile.github_username}</p>
+                <p className="text-xs text-[#8a7a72]">@{profile.github_username}</p>
               )}
             </div>
             <div className="ml-auto">
@@ -196,27 +196,27 @@ export default function OverviewPage() {
       {/* context stats */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-xs text-[#555] font-medium uppercase tracking-wider">your context</h2>
-          <span className="text-xs text-[#333] lowercase">last 7 days</span>
+          <h2 className="text-xs text-[#8a7a72] font-medium uppercase tracking-wider">your context</h2>
+          <span className="text-xs text-[#a09488] lowercase">last 7 days</span>
         </div>
         <div className="grid grid-cols-4 gap-3">
-          <Link href="/repositories" className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a] hover:border-[#2a2a2a] transition-colors group">
-            <p className="text-[11px] text-[#fa7315] uppercase tracking-wider mb-2 group-hover:text-[#ff8c3a] transition-colors">repos indexed</p>
+          <Link href="/repositories" className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors group">
+            <p className="text-[11px] text-[#b58a73] uppercase tracking-wider mb-2 group-hover:text-[#ff8c3a] transition-colors">repos indexed</p>
             <p className="text-2xl font-semibold tabular-nums">{stats.repos}</p>
             <p className="text-[10px] text-[#22d3ee]/50 mt-1.5 lowercase">code repositories</p>
           </Link>
-          <Link href="/papers" className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a] hover:border-[#2a2a2a] transition-colors group">
-            <p className="text-[11px] text-[#fa7315] uppercase tracking-wider mb-2 group-hover:text-[#ff8c3a] transition-colors">papers indexed</p>
+          <Link href="/papers" className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors group">
+            <p className="text-[11px] text-[#b58a73] uppercase tracking-wider mb-2 group-hover:text-[#ff8c3a] transition-colors">papers indexed</p>
             <p className="text-2xl font-semibold tabular-nums">{stats.papers}</p>
             <p className="text-[10px] text-[#22d3ee]/50 mt-1.5 lowercase">research papers</p>
           </Link>
-          <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-            <p className="text-[11px] text-[#fa7315] uppercase tracking-wider mb-2">searches</p>
+          <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+            <p className="text-[11px] text-[#b58a73] uppercase tracking-wider mb-2">searches</p>
             <p className="text-2xl font-semibold tabular-nums">{stats.searches}</p>
             <p className="text-[10px] text-[#22d3ee]/50 mt-1.5 lowercase">code &amp; paper searches</p>
           </div>
-          <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-            <p className="text-[11px] text-[#fa7315] uppercase tracking-wider mb-2">tool calls</p>
+          <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+            <p className="text-[11px] text-[#b58a73] uppercase tracking-wider mb-2">tool calls</p>
             <p className="text-2xl font-semibold tabular-nums">{stats.toolCalls}</p>
             <p className="text-[10px] text-[#22d3ee]/50 mt-1.5 lowercase">total mcp requests</p>
           </div>
@@ -226,9 +226,9 @@ export default function OverviewPage() {
       {/* api usage + recent queries */}
       <div className="grid grid-cols-2 gap-4 mb-6">
         {/* api usage */}
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs text-[#fa7315] font-medium uppercase tracking-wider">api usage</h3>
+            <h3 className="text-xs text-[#b58a73] font-medium uppercase tracking-wider">api usage</h3>
             <div className="flex items-center gap-2">
               <span className="text-2xl font-semibold tabular-nums">{stats.apiUsage}</span>
               {stats.apiChange > 0 && (
@@ -296,12 +296,12 @@ export default function OverviewPage() {
         </div>
 
         {/* recent queries */}
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xs text-[#fa7315] font-medium uppercase tracking-wider">recent queries</h3>
+            <h3 className="text-xs text-[#b58a73] font-medium uppercase tracking-wider">recent queries</h3>
             <Link 
               href="/activity" 
-              className="text-xs text-[#444] hover:text-white flex items-center gap-1 lowercase transition-colors"
+              className="text-xs text-[#a09488] hover:text-[#2e2522] flex items-center gap-1 lowercase transition-colors"
             >
               view all <ArrowRight size={10} />
             </Link>
@@ -309,18 +309,18 @@ export default function OverviewPage() {
           {stats.recentQueries.length > 0 ? (
             <div className="space-y-1">
               {stats.recentQueries.map((q, i) => (
-                <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-[#111] transition-colors group cursor-pointer">
-                  <div className="w-1.5 h-1.5 rounded-full bg-[#fa7315] flex-shrink-0" />
-                  <p className="text-xs text-white/70 group-hover:text-white font-mono truncate flex-1 lowercase transition-colors">
+                <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-[#efe7dd] transition-colors group cursor-pointer">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#b58a73] flex-shrink-0" />
+                  <p className="text-xs text-[#2e2522]/70 group-hover:text-[#2e2522] font-mono truncate flex-1 lowercase transition-colors">
                     {q.q}
                   </p>
-                  <span className="text-[10px] text-[#333] flex-shrink-0">{q.t}</span>
+                  <span className="text-[10px] text-[#a09488] flex-shrink-0">{q.t}</span>
                 </div>
               ))}
             </div>
           ) : (
             <div className="py-6 text-center">
-              <p className="text-xs text-[#333] lowercase">no recent queries</p>
+              <p className="text-xs text-[#a09488] lowercase">no recent queries</p>
             </div>
           )}
         </div>

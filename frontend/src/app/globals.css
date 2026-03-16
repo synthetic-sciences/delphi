@@ -1,21 +1,28 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,200;12..96,300;12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --bg-primary: #0a0a0a;
-  --bg-secondary: #111111;
-  --bg-tertiary: #161616;
-  --bg-card: #0f0f0f;
-  --bg-hover: #1a1a1a;
-  --border-color: #1a1a1a;
-  --border-subtle: #151515;
-  --text-primary: #ffffff;
-  --text-secondary: #888888;
-  --text-tertiary: #555555;
-  --accent-orange: #fa7315;
+  --paper: #f7f0e8;
+  --forest: #2e2522;
+  --coral: #b58a73;
+  --grid: #695954;
+  --line: #dfcdbf;
+  --line-s: rgba(66,45,34,0.14);
+
+  --bg-primary: #f7f0e8;
+  --bg-secondary: #efe7dd;
+  --bg-tertiary: #e8ddd2;
+  --bg-card: #faf5ef;
+  --bg-hover: #efe7dd;
+  --border-color: #dfcdbf;
+  --border-subtle: #e5d5c5;
+  --text-primary: #2e2522;
+  --text-secondary: #695954;
+  --text-tertiary: #8a7a72;
+  --accent-orange: #b58a73;
 }
 
 * {
@@ -27,8 +34,16 @@
 html, body {
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: 'Plus Jakarta Sans', sans-serif;
   min-height: 100vh;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Bricolage Grotesque', sans-serif;
+}
+
+code, pre, kbd, .font-mono {
+  font-family: 'IBM Plex Mono', monospace !important;
 }
 
 /* Custom scrollbar */
@@ -42,16 +57,16 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #222;
+  background: #c5b5a5;
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #333;
+  background: #b5a595;
 }
 
 /* Selection */
 ::selection {
-  background: rgba(250, 115, 21, 0.3);
-  color: white;
+  background: rgba(181, 138, 115, 0.3);
+  color: #2e2522;
 }
