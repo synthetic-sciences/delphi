@@ -470,7 +470,9 @@ class SearchService:
         
         try:
             # Generate query embedding
+            t_embed = time.time()
             query_embedding = self.embedding_generator.generate_single(query)
+            embed_ms = (time.time() - t_embed) * 1000
 
             # Over-fetch for post-retrieval quality pipeline
             # Need extra candidates for: pattern filtering, symbol boosting
@@ -478,6 +480,7 @@ class SearchService:
             fetch_k = max(top_k * 3, 20)
 
             # Search pgvector (access control is in the vector store)
+            t_db = time.time()
             raw_results = self.vector_store.search(
                 query_embedding=query_embedding,
                 user_id=effective_user_id,
@@ -485,6 +488,7 @@ class SearchService:
                 language=language,
                 top_k=fetch_k,
             )
+            db_ms = (time.time() - t_db) * 1000
 
             # Apply file pattern filter early (before quality pipeline)
             if file_pattern:
@@ -562,13 +566,27 @@ class SearchService:
                 })
             
             elapsed_time = (time.time() - start_time) * 1000
-            
+
+            logger.debug(
+                "Search timing breakdown",
+                embed_ms=round(embed_ms, 1),
+                db_ms=round(db_ms, 1),
+                total_ms=round(elapsed_time, 1),
+                pipeline_ms=round(elapsed_time - embed_ms - db_ms, 1),
+                results=len(results),
+            )
+
             return {
                 "success": True,
                 "query": query,
                 "results": results,
                 "count": len(results),
                 "search_time_ms": elapsed_time,
+                "timing": {
+                    "embedding_ms": round(embed_ms, 1),
+                    "db_search_ms": round(db_ms, 1),
+                    "pipeline_ms": round(elapsed_time - embed_ms - db_ms, 1),
+                },
             }
             
         except Exception as e:

@@ -324,7 +324,7 @@ class PaperService:
                 paper = Paper(
                     paper_id=paper_id,
                     title=final_title,
-                    authors=json.dumps(final_authors) if final_authors else None,
+                    authors=final_authors or None,
                     abstract=final_abstract,
                     arxiv_id=arxiv_id,
                     pdf_hash=pdf_hash,
@@ -713,13 +713,6 @@ class PaperService:
             return []
 
 
-# Singleton instance
-_service: PaperService | None = None
-
-
 def get_paper_service(user_id: str | None = None) -> PaperService:
-    """Get paper service instance."""
-    global _service
-    if _service is None:
-        _service = PaperService()
-    return _service
+    """Get paper service instance for the given user."""
+    return PaperService(user_id=user_id or "anonymous")

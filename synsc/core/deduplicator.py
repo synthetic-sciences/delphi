@@ -133,7 +133,6 @@ def get_or_create_paper_id(
             user_paper_repository.grant_access(
                 user_id=user_id,
                 paper_id=result.paper_id,
-                access_level="viewer",
             )
             return result.paper_id, False
 

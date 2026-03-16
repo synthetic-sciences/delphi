@@ -125,9 +125,11 @@ fi
 # Start frontend
 if [ "$START_FRONTEND" = true ]; then
     if [ -d "frontend" ]; then
-        echo -e "${CYAN}Starting frontend on port 3000...${NC}"
+        FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+        API_PORT="${SYNSC_API_PORT:-8742}"
+        echo -e "${CYAN}Starting frontend on port ${FRONTEND_PORT}...${NC}"
         cd frontend
-        npm run dev &
+        NEXT_PUBLIC_API_URL="http://localhost:${API_PORT}" PORT="$FRONTEND_PORT" npm run dev &
         PIDS+=($!)
         cd "$SCRIPT_DIR"
     else
@@ -141,7 +143,7 @@ echo -e "${GREEN}  Delphi is running!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo -e "  API:      ${CYAN}http://localhost:${SYNSC_API_PORT}${NC}"
 if [ "$START_FRONTEND" = true ]; then
-echo -e "  Frontend: ${CYAN}http://localhost:3000${NC}"
+echo -e "  Frontend: ${CYAN}http://localhost:${FRONTEND_PORT:-3000}${NC}"
 fi
 echo -e "  Health:   ${CYAN}http://localhost:${SYNSC_API_PORT}/health${NC}"
 echo ""

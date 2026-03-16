@@ -11,10 +11,68 @@ import json
 import time
 import uuid as _uuid
 from dataclasses import dataclass
+from datetime import datetime, date
 from typing import Annotated
+from uuid import UUID
+
+
+class _SafeEncoder(json.JSONEncoder):
+    """JSON encoder that handles UUID, datetime, and other DB types."""
+    def default(self, obj):
+        if isinstance(obj, UUID):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, date):
+            return obj.isoformat()
+        return super().default(obj)
+
+
+def SafeJSONResponse(content, **kwargs):
+    """JSONResponse that auto-serializes UUIDs and datetimes."""
+    from starlette.responses import Response
+    body = json.dumps(content, cls=_SafeEncoder).encode("utf-8")
+    return Response(content=body, media_type="application/json", **kwargs)
 
 import requests
 import structlog
+
+
+def _log_activity(
+    user_id: str,
+    action: str,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    query: str | None = None,
+    results_count: int | None = None,
+    duration_ms: int | None = None,
+    metadata: dict | None = None,
+) -> None:
+    """Log a user activity to the activity_log table (best-effort)."""
+    try:
+        from synsc.database.connection import get_session
+        from sqlalchemy import text as sa_text
+        with get_session() as session:
+            session.execute(
+                sa_text(
+                    "INSERT INTO activity_log "
+                    "(user_id, action, resource_type, resource_id, query, results_count, duration_ms, metadata) "
+                    "VALUES (:uid, :action, :rtype, :rid, :query, :rcnt, :dur, :meta)"
+                ),
+                {
+                    "uid": user_id,
+                    "action": action,
+                    "rid": resource_id,
+                    "rtype": resource_type,
+                    "query": query,
+                    "rcnt": results_count,
+                    "dur": duration_ms,
+                    "meta": json.dumps(metadata) if metadata else None,
+                },
+            )
+            session.commit()
+    except Exception as e:
+        structlog.get_logger().warning("Failed to log activity", error=str(e))
 from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
@@ -523,7 +581,7 @@ def create_app() -> FastAPI:
             session.commit()
 
         # Issue JWT session token
-        token = create_session_token(user_id=user_id, email=gh_user.email)
+        token = create_session_token(user_id=str(user_id), email=gh_user.email)
 
         # Redirect to frontend with token
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
@@ -546,7 +604,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=401, detail="Invalid password.")
 
         admin_id = _get_or_create_admin_user()
-        token = create_session_token(user_id=admin_id, email="admin@localhost")
+        token = create_session_token(user_id=str(admin_id), email="admin@localhost")
 
         return {
             "success": True,
@@ -599,10 +657,11 @@ def create_app() -> FastAPI:
                 deep_index=request.deep_index,
             )
             _cache_invalidate_user(auth.user_id)
-            return JSONResponse(content=result)
+            _log_activity(auth.user_id, "index_repository", "repository", metadata={"url": request.url, "branch": request.branch})
+            return SafeJSONResponse(content=result)
         except Exception as e:
             logger.error("Indexing failed", error=str(e))
-            return JSONResponse(content={"success": False, "error": "Repository indexing failed. Check server logs for details."}, status_code=500)
+            return SafeJSONResponse(content={"success": False, "error": "Repository indexing failed. Check server logs for details."}, status_code=500)
 
     @app.post("/v1/repositories/index/stream", tags=["Code"])
     async def index_repository_stream(
@@ -700,7 +759,7 @@ def create_app() -> FastAPI:
             cache_key = f"repos:{limit}:{offset}"
             cached = _cache_get(auth.user_id, cache_key)
             if cached is not None:
-                return JSONResponse(content=cached)
+                return SafeJSONResponse(content=cached)
 
             from synsc.services.indexing_service import IndexingService
             service = IndexingService()
@@ -709,10 +768,11 @@ def create_app() -> FastAPI:
             if result.get("success"):
                 _cache_set(auth.user_id, cache_key, result)
 
-            return JSONResponse(content=result)
+            _log_activity(auth.user_id, "list_repositories", "repository")
+            return SafeJSONResponse(content=result)
         except Exception as e:
             logger.error("Failed to list repositories", error=str(e))
-            return JSONResponse(content={"success": False, "error": "Failed to list repositories.", "repositories": [], "total": 0}, status_code=500)
+            return SafeJSONResponse(content={"success": False, "error": "Failed to list repositories.", "repositories": [], "total": 0}, status_code=500)
 
     @app.get("/v1/repositories/{repo_id}", tags=["Code"])
     def get_repository(
@@ -723,15 +783,15 @@ def create_app() -> FastAPI:
         try:
             _uuid.UUID(repo_id)
         except ValueError:
-            return JSONResponse(content={"success": False, "error": "Invalid repository ID format"}, status_code=400)
+            return SafeJSONResponse(content={"success": False, "error": "Invalid repository ID format"}, status_code=400)
         try:
             from synsc.services.indexing_service import IndexingService
             service = IndexingService()
             result = service.get_repository(repo_id, user_id=auth.user_id)
-            return JSONResponse(content=result)
+            return SafeJSONResponse(content=result)
         except Exception as e:
             logger.error("Failed to get repository", error=str(e))
-            return JSONResponse(content={"success": False, "error": "Failed to retrieve repository."}, status_code=500)
+            return SafeJSONResponse(content={"success": False, "error": "Failed to retrieve repository."}, status_code=500)
 
     @app.delete("/v1/repositories/{repo_id}", tags=["Code"])
     def delete_repository(
@@ -742,16 +802,16 @@ def create_app() -> FastAPI:
         try:
             _uuid.UUID(repo_id)
         except ValueError:
-            return JSONResponse(content={"success": False, "error": "Invalid repository ID format"}, status_code=400)
+            return SafeJSONResponse(content={"success": False, "error": "Invalid repository ID format"}, status_code=400)
         try:
             from synsc.services.indexing_service import IndexingService
             service = IndexingService()
             result = service.delete_repository(repo_id, user_id=auth.user_id)
             _cache_invalidate_user(auth.user_id)
-            return JSONResponse(content=result)
+            return SafeJSONResponse(content=result)
         except Exception as e:
             logger.error("Failed to delete repository", error=str(e))
-            return JSONResponse(content={"success": False, "error": "Failed to delete repository."}, status_code=500)
+            return SafeJSONResponse(content={"success": False, "error": "Failed to delete repository."}, status_code=500)
 
     @app.post("/v1/files/get", tags=["Code"])
     def get_file(
@@ -762,7 +822,7 @@ def create_app() -> FastAPI:
         try:
             _uuid.UUID(request.repo_id)
         except ValueError:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Invalid repository ID format"},
                 status_code=400,
             )
@@ -775,7 +835,8 @@ def create_app() -> FastAPI:
             end_line=request.end_line,
         )
 
-        return JSONResponse(content=result)
+        _log_activity(auth.user_id, "get_file", "repository", resource_id=request.repo_id, metadata={"file_path": request.file_path})
+        return SafeJSONResponse(content=result)
 
     @app.post("/v1/search/code", tags=["Code"])
     def search_code(
@@ -786,6 +847,7 @@ def create_app() -> FastAPI:
         logger.info("API: Searching code", query=request.query, user_id=auth.user_id)
         try:
             from synsc.services.search_service import SearchService
+            t0 = int(time.time() * 1000)
             service = SearchService(user_id=auth.user_id)
             result = service.search_code(
                 query=request.query,
@@ -794,10 +856,13 @@ def create_app() -> FastAPI:
                 file_pattern=request.file_pattern,
                 top_k=request.top_k,
             )
-            return JSONResponse(content=result)
+            dur = int(time.time() * 1000) - t0
+            rc = len(result.get("results", []))
+            _log_activity(auth.user_id, "search_code", "search", query=request.query, results_count=rc, duration_ms=dur)
+            return SafeJSONResponse(content=result)
         except Exception as e:
             logger.error("Code search failed", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"error": "Code search failed."},
                 status_code=500,
             )
@@ -810,6 +875,7 @@ def create_app() -> FastAPI:
         """Search for code symbols (functions, classes, methods)."""
         logger.info("API: Searching symbols", name=request.name, user_id=auth.user_id)
         from synsc.services.symbol_service import SymbolService
+        t0 = int(time.time() * 1000)
         service = SymbolService(user_id=auth.user_id)
         result = service.search_symbols(
             name=request.name,
@@ -819,7 +885,10 @@ def create_app() -> FastAPI:
             top_k=request.top_k,
             offset=request.offset,
         )
-        return JSONResponse(content=result)
+        dur = int(time.time() * 1000) - t0
+        rc = len(result.get("results", []))
+        _log_activity(auth.user_id, "search_symbols", "search", query=request.name, results_count=rc, duration_ms=dur)
+        return SafeJSONResponse(content=result)
 
     # ==========================================================================
     # Paper Endpoints (Research Context)
@@ -857,7 +926,7 @@ def create_app() -> FastAPI:
                 pass
 
         if not source_arxiv_id:
-            return JSONResponse(content={"success": False, "error": "Please provide an arXiv ID or URL"}, status_code=400)
+            return SafeJSONResponse(content={"success": False, "error": "Please provide an arXiv ID or URL"}, status_code=400)
 
         try:
             # Fetch arXiv metadata
@@ -884,7 +953,8 @@ def create_app() -> FastAPI:
                     arxiv_id=source_arxiv_id,
                     arxiv_metadata=arxiv_metadata,
                 )
-                return JSONResponse(content=result)
+                _log_activity(auth.user_id, "index_paper", "paper", metadata={"source": "arxiv", "arxiv_id": source_arxiv_id})
+                return SafeJSONResponse(content=result)
             finally:
                 # Clean up temp file
                 try:
@@ -894,10 +964,10 @@ def create_app() -> FastAPI:
 
         except ArxivError as e:
             logger.error("ArXiv error", error=str(e))
-            return JSONResponse(content={"success": False, "error": f"ArXiv error: {e}"}, status_code=400)
+            return SafeJSONResponse(content={"success": False, "error": f"ArXiv error: {e}"}, status_code=400)
         except Exception as e:
             logger.error("Paper indexing failed", error=str(e))
-            return JSONResponse(content={"success": False, "error": "Paper indexing failed. Check server logs for details."}, status_code=500)
+            return SafeJSONResponse(content={"success": False, "error": "Paper indexing failed. Check server logs for details."}, status_code=500)
 
     @app.post("/v1/papers/upload", tags=["Papers"])
     async def upload_paper(
@@ -912,12 +982,12 @@ def create_app() -> FastAPI:
 
         # Validate file type
         if not file.filename or not file.filename.lower().endswith('.pdf'):
-            return JSONResponse(content={"success": False, "error": "Only PDF files are supported"}, status_code=400)
+            return SafeJSONResponse(content={"success": False, "error": "Only PDF files are supported"}, status_code=400)
 
         # Validate file size (50MB max)
         contents = await file.read()
         if len(contents) > 50 * 1024 * 1024:
-            return JSONResponse(content={"success": False, "error": "File size exceeds 50MB limit"}, status_code=400)
+            return SafeJSONResponse(content={"success": False, "error": "File size exceeds 50MB limit"}, status_code=400)
 
         try:
             from synsc.services.paper_service import get_paper_service
@@ -937,13 +1007,13 @@ def create_app() -> FastAPI:
                     source="upload",
                     title=file.filename.replace('.pdf', ''),
                 )
-                return JSONResponse(content=result)
+                return SafeJSONResponse(content=result)
             finally:
                 # Clean up temp file
                 os.unlink(tmp_path)
         except Exception as e:
             logger.error("Paper upload failed", error=str(e))
-            return JSONResponse(content={"success": False, "error": "Paper upload failed. Check server logs for details."}, status_code=500)
+            return SafeJSONResponse(content={"success": False, "error": "Paper upload failed. Check server logs for details."}, status_code=500)
 
     @app.get("/v1/papers", tags=["Papers"])
     def list_papers(
@@ -956,7 +1026,8 @@ def create_app() -> FastAPI:
         service = get_paper_service(user_id=auth.user_id)
         papers = service.list_papers(limit=limit)
 
-        return JSONResponse(content={
+        _log_activity(auth.user_id, "list_papers", "paper")
+        return SafeJSONResponse(content={
             "success": True,
             "papers": papers,
             "total": len(papers),
@@ -971,9 +1042,13 @@ def create_app() -> FastAPI:
         logger.info("API: Searching papers", query=request.query, user_id=auth.user_id)
 
         from synsc.services.paper_service import get_paper_service
+        t0 = int(time.time() * 1000)
         service = get_paper_service(user_id=auth.user_id)
         result = service.search_papers(query=request.query, top_k=request.top_k)
-        return JSONResponse(content=result)
+        dur = int(time.time() * 1000) - t0
+        rc = len(result.get("results", []))
+        _log_activity(auth.user_id, "search_papers", "search", query=request.query, results_count=rc, duration_ms=dur)
+        return SafeJSONResponse(content=result)
 
     @app.get("/v1/papers/{paper_id}/citations", tags=["Papers"])
     def get_citations(
@@ -985,7 +1060,7 @@ def create_app() -> FastAPI:
         service = get_paper_service(user_id=auth.user_id)
         citations = service.get_citations(paper_id)
 
-        return JSONResponse(content={
+        return SafeJSONResponse(content={
             "success": True,
             "paper_id": paper_id,
             "citations": citations,
@@ -1002,7 +1077,7 @@ def create_app() -> FastAPI:
         service = get_paper_service(user_id=auth.user_id)
         equations = service.get_equations(paper_id)
 
-        return JSONResponse(content={
+        return SafeJSONResponse(content={
             "success": True,
             "paper_id": paper_id,
             "equations": equations,
@@ -1020,9 +1095,9 @@ def create_app() -> FastAPI:
         result = service.delete_paper(paper_id)
 
         if not result.get("success"):
-            return JSONResponse(content=result, status_code=404)
+            return SafeJSONResponse(content=result, status_code=404)
 
-        return JSONResponse(content=result)
+        return SafeJSONResponse(content=result)
 
     # ==========================================================================
     # Dataset Endpoints (HuggingFace)
@@ -1038,7 +1113,7 @@ def create_app() -> FastAPI:
 
         hf_token = _get_user_hf_token(auth.user_id)
         if not hf_token:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "HuggingFace token required. Store one via PUT /v1/huggingface/token."},
                 status_code=403,
             )
@@ -1047,8 +1122,8 @@ def create_app() -> FastAPI:
         service = get_dataset_service(user_id=auth.user_id)
 
         result = await asyncio.to_thread(service.index_dataset, request.hf_id, hf_token)
-
-        return JSONResponse(content=result)
+        _log_activity(auth.user_id, "index_dataset", "dataset", metadata={"hf_id": request.hf_id})
+        return SafeJSONResponse(content=result)
 
     @app.get("/v1/datasets", tags=["Datasets"])
     def list_datasets(
@@ -1058,7 +1133,7 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """List all indexed datasets."""
         if not _user_has_hf_token(auth.user_id):
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "HuggingFace token required.", "requires_hf_token": True},
                 status_code=403,
             )
@@ -1067,7 +1142,7 @@ def create_app() -> FastAPI:
         service = get_dataset_service(user_id=auth.user_id)
         datasets = service.list_datasets(limit=limit)
 
-        return JSONResponse(content={
+        return SafeJSONResponse(content={
             "success": True,
             "datasets": datasets,
             "total": len(datasets),
@@ -1080,7 +1155,7 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """Get detailed information about an indexed dataset."""
         if not _user_has_hf_token(auth.user_id):
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "HuggingFace token required.", "requires_hf_token": True},
                 status_code=403,
             )
@@ -1090,9 +1165,9 @@ def create_app() -> FastAPI:
         dataset = service.get_dataset(dataset_id)
 
         if not dataset:
-            return JSONResponse(content={"success": False, "error": "Dataset not found"}, status_code=404)
+            return SafeJSONResponse(content={"success": False, "error": "Dataset not found"}, status_code=404)
 
-        return JSONResponse(content={"success": True, "dataset": dataset})
+        return SafeJSONResponse(content={"success": True, "dataset": dataset})
 
     @app.delete("/v1/datasets/{dataset_id}", tags=["Datasets"])
     def delete_dataset(
@@ -1101,7 +1176,7 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """Delete a dataset. Public datasets are unmapped; private ones are fully removed."""
         if not _user_has_hf_token(auth.user_id):
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "HuggingFace token required.", "requires_hf_token": True},
                 status_code=403,
             )
@@ -1111,9 +1186,9 @@ def create_app() -> FastAPI:
         result = service.delete_dataset(dataset_id)
 
         if not result.get("success"):
-            return JSONResponse(content=result, status_code=404)
+            return SafeJSONResponse(content=result, status_code=404)
 
-        return JSONResponse(content=result)
+        return SafeJSONResponse(content=result)
 
     @app.post("/v1/search/datasets", tags=["Datasets"])
     def search_datasets(
@@ -1124,15 +1199,19 @@ def create_app() -> FastAPI:
         logger.info("API: Searching datasets", query=request.query, user_id=auth.user_id)
 
         if not _user_has_hf_token(auth.user_id):
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "HuggingFace token required.", "requires_hf_token": True},
                 status_code=403,
             )
 
         from synsc.services.dataset_service import get_dataset_service
+        t0 = int(time.time() * 1000)
         service = get_dataset_service(user_id=auth.user_id)
         result = service.search_datasets(query=request.query, top_k=request.top_k)
-        return JSONResponse(content=result)
+        dur = int(time.time() * 1000) - t0
+        rc = len(result.get("results", []))
+        _log_activity(auth.user_id, "search_datasets", "search", query=request.query, results_count=rc, duration_ms=dur)
+        return SafeJSONResponse(content=result)
 
     # ==========================================================================
     # Job Queue Endpoints
@@ -1163,7 +1242,7 @@ def create_app() -> FastAPI:
                 "job_type": "paper",
             }
 
-        return JSONResponse(content=result)
+        return SafeJSONResponse(content=result)
 
     @app.get("/v1/jobs/{job_id}", tags=["Jobs"])
     def get_job_status(
@@ -1174,11 +1253,11 @@ def create_app() -> FastAPI:
         try:
             _uuid.UUID(job_id)
         except ValueError:
-            return JSONResponse(content={"success": False, "error": "Invalid job ID format"}, status_code=400)
+            return SafeJSONResponse(content={"success": False, "error": "Invalid job ID format"}, status_code=400)
         from synsc.services.job_queue_service import get_job_queue_service
         service = get_job_queue_service()
         result = service.get_job(job_id, user_id=auth.user_id)
-        return JSONResponse(content=result)
+        return SafeJSONResponse(content=result)
 
     @app.get("/v1/jobs", tags=["Jobs"])
     def list_jobs(
@@ -1190,7 +1269,7 @@ def create_app() -> FastAPI:
         from synsc.services.job_queue_service import get_job_queue_service
         service = get_job_queue_service()
         result = service.list_jobs(user_id=auth.user_id, status=status, limit=limit)
-        return JSONResponse(content=result)
+        return SafeJSONResponse(content=result)
 
     # ==========================================================================
     # API Key Management Endpoints
@@ -1217,11 +1296,11 @@ def create_app() -> FastAPI:
             keys = [dict(r) for r in rows]
             # Convert non-serializable types to strings
             for k in keys:
-                for col in ("last_used_at", "created_at"):
+                for col in ("id", "last_used_at", "created_at"):
                     if k.get(col) is not None:
                         k[col] = str(k[col])
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "keys": keys,
                 "total": len(keys),
@@ -1229,7 +1308,7 @@ def create_app() -> FastAPI:
 
         except Exception as e:
             logger.error("Failed to fetch API keys", error=str(e))
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": False,
                 "error": "Failed to retrieve API keys.",
                 "keys": []
@@ -1261,7 +1340,7 @@ def create_app() -> FastAPI:
                 session.commit()
 
             if result:
-                return JSONResponse(content={
+                return SafeJSONResponse(content={
                     "success": True,
                     "key": key,  # Only returned once!
                     "key_id": str(result["id"]),
@@ -1269,14 +1348,14 @@ def create_app() -> FastAPI:
                     "message": "API key created. Save it now - you won't see it again!"
                 })
             else:
-                return JSONResponse(content={
+                return SafeJSONResponse(content={
                     "success": False,
                     "error": "Failed to create key"
                 })
 
         except Exception as e:
             logger.error("Failed to create API key", error=str(e))
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": False,
                 "error": "Failed to create API key."
             }, status_code=500)
@@ -1296,14 +1375,14 @@ def create_app() -> FastAPI:
                 session.commit()
                 success = result.rowcount > 0
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": success,
                 "message": "API key revoked" if success else "Failed to revoke key"
             })
 
         except Exception as e:
             logger.error("Failed to revoke API key", error=str(e))
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": False,
                 "error": "Failed to revoke API key."
             }, status_code=500)
@@ -1323,14 +1402,14 @@ def create_app() -> FastAPI:
                 session.commit()
                 success = result.rowcount > 0
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": success,
                 "message": "API key deleted" if success else "Failed to delete key"
             })
 
         except Exception as e:
             logger.error("Failed to delete API key", error=str(e))
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": False,
                 "error": "Failed to delete API key."
             }, status_code=500)
@@ -1361,7 +1440,7 @@ def create_app() -> FastAPI:
                 timeout=10,
             )
             if resp.status_code != 200:
-                return JSONResponse(
+                return SafeJSONResponse(
                     content={
                         "success": False,
                         "error": "Invalid GitHub token. Ensure the token is valid and not expired.",
@@ -1373,7 +1452,7 @@ def create_app() -> FastAPI:
             github_id = github_user.get("id")
         except Exception as e:
             logger.error("GitHub token validation failed", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Could not validate token with GitHub API."},
                 status_code=502,
             )
@@ -1405,14 +1484,14 @@ def create_app() -> FastAPI:
                     )
                 session.commit()
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "github_username": github_username,
                 "label": request.label,
             })
         except Exception as e:
             logger.error("Failed to store GitHub token", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to store token."},
                 status_code=500,
             )
@@ -1436,7 +1515,7 @@ def create_app() -> FastAPI:
                 ).mappings().all()
 
             if not rows:
-                return JSONResponse(content={
+                return SafeJSONResponse(content={
                     "success": True,
                     "has_token": False,
                 })
@@ -1446,7 +1525,7 @@ def create_app() -> FastAPI:
                 if token_info.get(col) is not None:
                     token_info[col] = str(token_info[col])
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "has_token": True,
                 "label": token_info.get("token_label"),
@@ -1458,7 +1537,7 @@ def create_app() -> FastAPI:
 
         except Exception as e:
             logger.error("Failed to check GitHub token", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to check token status."},
                 status_code=500,
             )
@@ -1477,14 +1556,14 @@ def create_app() -> FastAPI:
                 session.commit()
                 deleted = result.rowcount > 0
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "deleted": deleted,
             })
 
         except Exception as e:
             logger.error("Failed to delete GitHub token", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to delete token."},
                 status_code=500,
             )
@@ -1510,7 +1589,7 @@ def create_app() -> FastAPI:
                 ).mappings().all()
 
             if not rows:
-                return JSONResponse(
+                return SafeJSONResponse(
                     content={"success": False, "error": "No GitHub token stored. Add one in Settings."},
                     status_code=404,
                 )
@@ -1518,7 +1597,7 @@ def create_app() -> FastAPI:
             github_token = _decrypt_if_configured(rows[0]["encrypted_token"])
         except Exception as e:
             logger.error("Failed to retrieve GitHub token for repo listing", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to retrieve token."},
                 status_code=500,
             )
@@ -1545,7 +1624,7 @@ def create_app() -> FastAPI:
                     timeout=15,
                 )
                 if resp.status_code != 200:
-                    return JSONResponse(
+                    return SafeJSONResponse(
                         content={"success": False, "error": "GitHub API error", "detail": resp.text[:200]},
                         status_code=502,
                     )
@@ -1566,7 +1645,7 @@ def create_app() -> FastAPI:
                     timeout=15,
                 )
                 if resp.status_code != 200:
-                    return JSONResponse(
+                    return SafeJSONResponse(
                         content={"success": False, "error": "GitHub API error", "detail": resp.text[:200]},
                         status_code=502,
                     )
@@ -1574,7 +1653,7 @@ def create_app() -> FastAPI:
                 # GitHub returns total in Link header; approximate from page size
                 total = None
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "repos": [
                     {
@@ -1597,7 +1676,7 @@ def create_app() -> FastAPI:
 
         except Exception as e:
             logger.error("GitHub repo listing failed", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to fetch repos from GitHub."},
                 status_code=502,
             )
@@ -1641,7 +1720,7 @@ def create_app() -> FastAPI:
                 timeout=10,
             )
             if resp.status_code != 200:
-                return JSONResponse(
+                return SafeJSONResponse(
                     content={"success": False, "error": "Could not fetch branches"},
                     status_code=resp.status_code if resp.status_code in (403, 404) else 502,
                 )
@@ -1658,7 +1737,7 @@ def create_app() -> FastAPI:
             if repo_resp.status_code == 200:
                 default_branch = repo_resp.json().get("default_branch", "main")
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "branches": branches,
                 "default_branch": default_branch,
@@ -1666,7 +1745,7 @@ def create_app() -> FastAPI:
 
         except Exception as e:
             logger.error("GitHub branch listing failed", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to fetch branches."},
                 status_code=502,
             )
@@ -1733,7 +1812,7 @@ def create_app() -> FastAPI:
                 timeout=10,
             )
             if resp.status_code != 200:
-                return JSONResponse(
+                return SafeJSONResponse(
                     content={
                         "success": False,
                         "error": "Invalid HuggingFace token. Ensure the token is valid and not expired.",
@@ -1744,7 +1823,7 @@ def create_app() -> FastAPI:
             hf_username = hf_user.get("name", "")
         except Exception as e:
             logger.error("HuggingFace token validation failed", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Could not validate token with HuggingFace API."},
                 status_code=502,
             )
@@ -1775,7 +1854,7 @@ def create_app() -> FastAPI:
                     )
                 session.commit()
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "hf_username": hf_username,
                 "label": request.label,
@@ -1783,13 +1862,13 @@ def create_app() -> FastAPI:
 
         except RuntimeError as e:
             logger.error("Token encryption not configured", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Token encryption is not configured on this server."},
                 status_code=500,
             )
         except Exception as e:
             logger.error("Failed to store HuggingFace token", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to store token."},
                 status_code=500,
             )
@@ -1813,7 +1892,7 @@ def create_app() -> FastAPI:
                 ).mappings().all()
 
             if not rows:
-                return JSONResponse(content={
+                return SafeJSONResponse(content={
                     "success": True,
                     "has_token": False,
                 })
@@ -1823,7 +1902,7 @@ def create_app() -> FastAPI:
                 if token_info.get(col) is not None:
                     token_info[col] = str(token_info[col])
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "has_token": True,
                 "label": token_info.get("token_label"),
@@ -1835,7 +1914,7 @@ def create_app() -> FastAPI:
 
         except Exception as e:
             logger.error("Failed to check HuggingFace token", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to check token status."},
                 status_code=500,
             )
@@ -1854,14 +1933,14 @@ def create_app() -> FastAPI:
                 session.commit()
                 deleted = result.rowcount > 0
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "deleted": deleted,
             })
 
         except Exception as e:
             logger.error("Failed to delete HuggingFace token", error=str(e))
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={"success": False, "error": "Failed to delete token."},
                 status_code=500,
             )
@@ -1961,14 +2040,14 @@ def create_app() -> FastAPI:
                         item.pop("metadata", None)
                     activities.append(item)
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "activities": activities,
                 "total": len(activities),
             })
         except Exception as e:
             logger.error("Failed to fetch activity", error=str(e))
-            return JSONResponse(content={"success": True, "activities": [], "total": 0})
+            return SafeJSONResponse(content={"success": True, "activities": [], "total": 0})
 
     @app.get("/v1/activity/stats", tags=["Activity"])
     def get_activity_stats(
@@ -2000,7 +2079,7 @@ def create_app() -> FastAPI:
             by_action = {r["action"]: r["cnt"] for r in rows}
             total = sum(by_action.values())
 
-            return JSONResponse(content={
+            return SafeJSONResponse(content={
                 "success": True,
                 "stats": {
                     "total": total,
@@ -2009,7 +2088,7 @@ def create_app() -> FastAPI:
             })
         except Exception as e:
             logger.error("Failed to fetch activity stats", error=str(e))
-            return JSONResponse(content={"success": True, "stats": {"total": 0, "by_action": {}}})
+            return SafeJSONResponse(content={"success": True, "stats": {"total": 0, "by_action": {}}})
 
     # ==========================================================================
     # MCP JSON-RPC Bridge (enables remote streamable HTTP + uvx proxy)
