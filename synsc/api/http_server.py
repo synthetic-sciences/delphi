@@ -374,29 +374,32 @@ def create_app() -> FastAPI:
             format="%(message)s",
             level=_logging.INFO,
         )
-        import sys as _sys
-
-        if _sys.stderr.isatty():
-            _renderer = structlog.dev.ConsoleRenderer()
-        else:
-            _renderer = structlog.processors.JSONRenderer()
 
         structlog.configure(
             processors=[
                 structlog.stdlib.filter_by_level,
-                structlog.stdlib.add_logger_name,
                 structlog.stdlib.add_log_level,
-                structlog.processors.TimeStamper(fmt="iso"),
+                structlog.processors.TimeStamper(fmt="%H:%M:%S"),
                 structlog.processors.StackInfoRenderer(),
                 structlog.processors.format_exc_info,
                 structlog.processors.UnicodeDecoder(),
-                _renderer,
+                structlog.dev.ConsoleRenderer(
+                    colors=False,
+                    pad_event_to=40,
+                ),
             ],
             wrapper_class=structlog.stdlib.BoundLogger,
             context_class=dict,
             logger_factory=structlog.stdlib.LoggerFactory(),
             cache_logger_on_first_use=True,
         )
+
+    # Silence noisy loggers
+    _logging.getLogger("httpx").setLevel(_logging.WARNING)
+    _logging.getLogger("httpcore").setLevel(_logging.WARNING)
+    _logging.getLogger("sentence_transformers").setLevel(_logging.WARNING)
+    _logging.getLogger("mcp.server.streamable_http").setLevel(_logging.WARNING)
+    _logging.getLogger("mcp.server.lowlevel.server").setLevel(_logging.WARNING)
 
     config = get_config()
 
@@ -418,7 +421,29 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.warning("Paper model load/warm-up failed: %s", exc)
 
-        yield
+        # Start MCP Streamable HTTP session manager (if attached to app)
+        if hasattr(app, "_mcp_session_mgr") and app._mcp_session_mgr:
+            import anyio
+            mgr = app._mcp_session_mgr
+            mgr._has_started = True
+            tg = anyio.create_task_group()
+            await tg.__aenter__()
+            mgr._task_group = tg
+            logger.info("MCP session manager task group initialized")
+            try:
+                yield
+            finally:
+                tg.cancel_scope.cancel()
+                mgr._task_group = None
+                try:
+                    with anyio.fail_after(3):
+                        await tg.__aexit__(None, None, None)
+                except TimeoutError:
+                    logger.warning("MCP task group shutdown timed out")
+                except BaseException:
+                    pass
+        else:
+            yield
 
     app = FastAPI(
         title="Synsc Context API",
@@ -2090,134 +2115,81 @@ def create_app() -> FastAPI:
             logger.error("Failed to fetch activity stats", error=str(e))
             return SafeJSONResponse(content={"success": True, "stats": {"total": 0, "by_action": {}}})
 
-    # ==========================================================================
-    # MCP JSON-RPC Bridge (enables remote streamable HTTP + uvx proxy)
-    # ==========================================================================
+    # Return empty 404 (not JSON) for OAuth discovery so clients skip OAuth gracefully
+    @app.get("/.well-known/{path:path}", include_in_schema=False)
+    async def well_known_fallback(path: str):
+        return JSONResponse(
+            {"error": "not_supported", "error_description": "OAuth not supported"},
+            status_code=404,
+        )
 
-    # Create MCP server instance once
-    _mcp_server = create_mcp_server()
-
-    @app.post("/mcp", tags=["MCP"])
-    async def mcp_endpoint(
-        request: Request,
-        auth: AuthContext = Depends(verify_api_key),
-    ):
-        """MCP JSON-RPC endpoint.
-
-        Bridges HTTP to the MCP tool server. Used by:
-        - Remote agents (streamable HTTP config)
-        - Local uvx stdio proxy
-
-        All tool calls go through mcp_server.py where activity is logged.
-        """
-        # Set contextvars so MCP tool functions know the authenticated user
-        set_current_api_key(auth.api_key if auth.api_key != "session" else None)
-        set_current_user_id(auth.user_id)
-
-        body = await request.json()
-        method = body.get("method")
-        params = body.get("params", {})
-        request_id = body.get("id")
-
-        try:
-            # --- initialize ---
-            if method == "initialize":
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {
-                            "name": "synsc-context",
-                            "version": "0.1.0",
-                        },
-                    },
-                }
-
-            # --- tools/list ---
-            elif method == "tools/list":
-                tools_list = await _mcp_server.list_tools()
-                tools = [
-                    {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "inputSchema": tool.inputSchema,
-                    }
-                    for tool in tools_list
-                ]
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {"tools": tools},
-                }
-
-            # --- tools/call ---
-            elif method == "tools/call":
-                tool_name = params.get("name")
-                arguments = params.get("arguments", {})
-
-                try:
-                    result = await _mcp_server.call_tool(tool_name, arguments)
-
-                    # Handle tuple (content, structured) or list (content only)
-                    if isinstance(result, tuple) and len(result) == 2:
-                        content_blocks, structured_content = result
-                    else:
-                        content_blocks = result
-                        structured_content = None
-
-                    content = []
-                    for block in content_blocks:
-                        if hasattr(block, "type") and hasattr(block, "text"):
-                            content.append({"type": block.type, "text": block.text})
-                        elif isinstance(block, dict):
-                            content.append(block)
-                        else:
-                            content.append({"type": "text", "text": str(block)})
-
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {
-                            "content": content,
-                            "structuredContent": structured_content,
-                            "isError": False,
-                        },
-                    }
-
-                except Exception as tool_error:
-                    logger.exception("MCP tool execution error", tool=tool_name)
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {
-                            "content": [{"type": "text", "text": f"Tool error: {tool_error}"}],
-                            "isError": True,
-                        },
-                    }
-
-            # --- unknown method ---
-            else:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32601, "message": f"Unknown method: {method}"},
-                }
-
-        except Exception as e:
-            logger.exception("MCP endpoint internal error")
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": -32603, "message": "Internal server error"},
-            }
+    @app.post("/register", include_in_schema=False)
+    async def register_fallback():
+        return JSONResponse(
+            {"error": "not_supported", "error_description": "OAuth not supported"},
+            status_code=404,
+        )
 
     return app
 
 
+class _MCPMiddleware:
+    """ASGI middleware that intercepts /mcp and routes to MCP transport."""
+
+    def __init__(self, app, session_mgr):
+        self.app = app
+        self.session_mgr = session_mgr
+
+    async def __call__(self, scope, receive, send):
+        # Pass lifespan events to the inner app (triggers startup/shutdown hooks)
+        if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+
+        if scope["type"] == "http" and scope["path"] == "/mcp":
+            # Extract Bearer token from headers
+            headers = dict(scope.get("headers", []))
+            auth_header = headers.get(b"authorization", b"").decode()
+            token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+
+            if not token:
+                resp = JSONResponse({"error": "Missing credentials"}, status_code=401)
+                await resp(scope, receive, send)
+                return
+
+            # Validate credentials
+            user_id = verify_session_token(token)
+            api_key = None
+            if not user_id:
+                user_id = _validate_api_key_db(token)
+                api_key = token
+            if not user_id:
+                system_pw = os.getenv("SYSTEM_PASSWORD", "")
+                if system_pw and hmac.compare_digest(token, system_pw):
+                    user_id = _get_or_create_admin_user()
+            if not user_id:
+                resp = JSONResponse({"error": "Invalid credentials"}, status_code=401)
+                await resp(scope, receive, send)
+                return
+
+            set_current_api_key(api_key)
+            set_current_user_id(user_id)
+
+            await self.session_mgr.handle_request(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
+
+
 # Production app
-app = create_app()
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager as _SHSM
+
+_mcp_srv = create_mcp_server()
+_mcp_session_mgr = _SHSM(app=_mcp_srv._mcp_server, stateless=True)
+
+_fastapi_app = create_app()
+_fastapi_app._mcp_session_mgr = _mcp_session_mgr  # type: ignore[attr-defined]
+app = _MCPMiddleware(_fastapi_app, _mcp_session_mgr)
 
 
 def run_http_server():
