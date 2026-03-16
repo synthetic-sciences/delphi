@@ -48,108 +48,114 @@ function ConfigBlock({ code, lang = "json" }: { code: string; lang?: string }) {
   );
 }
 
-/* ── Usage config section with local/remote tabs ────────────────────── */
+/* ── Usage config section with per-agent tabs ────────────────────── */
 function UsageConfigSection() {
-  const [mode, setMode] = useState<"http" | "stdio">("stdio");
+  const [agent, setAgent] = useState<"claude-code" | "cursor" | "windsurf" | "claude-desktop">("claude-code");
 
-  const httpConfig = `{
+  const configs: Record<string, { config: string; path: string; note: string }> = {
+    "claude-code": {
+      config: `// .mcp.json (in your project root)
+{
   "mcpServers": {
-    "synsc-context": {
+    "delphi": {
+      "type": "http",
       "url": "http://localhost:8742/mcp",
       "headers": {
         "Authorization": "Bearer your_api_key_here"
       }
     }
   }
-}`;
-
-  const stdioConfig = `{
+}`,
+      path: ".mcp.json (project) or ~/.claude.json (global)",
+      note: "place in project root for project-scoped, or add to ~/.claude.json mcpServers for global access. restart claude code after editing.",
+    },
+    cursor: {
+      config: `// ~/.cursor/mcp.json
+{
   "mcpServers": {
-    "synsc-context": {
-      "command": "uvx",
-      "args": ["synsc-context-proxy"],
-      "env": {
-        "SYNSC_API_KEY": "your_api_key_here"
+    "delphi": {
+      "url": "http://localhost:8742/mcp",
+      "headers": {
+        "Authorization": "Bearer your_api_key_here"
       }
     }
   }
-}`;
+}`,
+      path: "~/.cursor/mcp.json",
+      note: "cursor supports http mcp natively. restart cursor after editing the config.",
+    },
+    windsurf: {
+      config: `// ~/.codeium/windsurf/mcp_config.json
+{
+  "mcpServers": {
+    "delphi": {
+      "serverUrl": "http://localhost:8742/mcp",
+      "headers": {
+        "Authorization": "Bearer your_api_key_here"
+      }
+    }
+  }
+}`,
+      path: "~/.codeium/windsurf/mcp_config.json",
+      note: "windsurf uses serverUrl instead of url. restart windsurf after editing.",
+    },
+    "claude-desktop": {
+      config: `// claude_desktop_config.json
+{
+  "mcpServers": {
+    "delphi": {
+      "url": "http://localhost:8742/mcp",
+      "headers": {
+        "Authorization": "Bearer your_api_key_here"
+      }
+    }
+  }
+}`,
+      path: "~/Library/Application Support/Claude/claude_desktop_config.json",
+      note: "on linux: ~/.config/Claude/claude_desktop_config.json. restart claude desktop after editing.",
+    },
+  };
+
+  const current = configs[agent];
 
   return (
     <div className="mt-6 p-5 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
-      <h3 className="text-xs text-[#8a7a72] font-medium uppercase tracking-wider mb-4">mcp configuration</h3>
+      <h3 className="text-xs text-[#8a7a72] font-medium uppercase tracking-wider mb-4">connect to your agent</h3>
 
       <p className="text-xs text-[#a09488] mb-4">
-        add this to your agent&apos;s mcp config file to connect synsc context.
+        delphi uses <code className="text-[#b58a73]">streamable http</code> — your agent connects directly to the local server.
         replace <code className="text-[#b58a73]">your_api_key_here</code> with an active key from above.
       </p>
 
-      {/* Mode tabs */}
-      <div className="flex items-center gap-1 p-1 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] w-fit mb-4">
-        <button
-          onClick={() => setMode("stdio")}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            mode === "stdio"
-              ? "bg-[#b58a73] text-black"
-              : "text-[#8a7a72] hover:text-[#2e2522]"
-          }`}
-        >
-          <Monitor size={12} />
-          local
-        </button>
-        <button
-          onClick={() => setMode("http")}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-            mode === "http"
-              ? "bg-[#b58a73] text-black"
-              : "text-[#8a7a72] hover:text-[#2e2522]"
-          }`}
-        >
-          <Globe size={12} />
-          remote
-        </button>
+      {/* Agent tabs */}
+      <div className="flex items-center gap-1 p-1 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] w-fit mb-4 flex-wrap">
+        {(["claude-code", "cursor", "windsurf", "claude-desktop"] as const).map((a) => (
+          <button
+            key={a}
+            onClick={() => setAgent(a)}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              agent === a
+                ? "bg-[#b58a73] text-black"
+                : "text-[#8a7a72] hover:text-[#2e2522]"
+            }`}
+          >
+            {a}
+          </button>
+        ))}
       </div>
 
       {/* Config block */}
-      <ConfigBlock code={mode === "stdio" ? stdioConfig : httpConfig} lang="json" />
+      <ConfigBlock code={current.config} lang="json" />
 
-      {/* Explanation */}
+      {/* Note */}
       <div className="mt-3 p-3 rounded-lg bg-[#faf5ef] border border-[#dfcdbf] text-xs text-[#8a7a72]">
-        {mode === "stdio" ? (
-          <p>
-            <strong className="text-[#695954]">how it works:</strong>{" "}
-            <code className="text-[#b58a73]">uvx</code> installs a lightweight stdio proxy from pypi that runs locally
-            and forwards all tool calls to the local backend with your api key.
-            requires <code className="text-[#b58a73]">uv</code> (<code className="text-[#695954]">curl -LsSf https://astral.sh/uv/install.sh | sh</code>).
-          </p>
-        ) : (
-          <p>
-            <strong className="text-[#695954]">how it works:</strong> your agent connects directly to the local
-            mcp endpoint over http. no local process needed. your client must support
-            the <code className="text-[#b58a73]">streamable-http</code> transport.
-          </p>
-        )}
+        <p>{current.note}</p>
       </div>
 
-      {/* Config file paths */}
-      <div className="mt-4 space-y-1.5 text-[11px] text-[#a09488]">
-        <p className="text-[10px] text-[#8a7a72] uppercase tracking-wider font-medium mb-2">config file locations</p>
-        <div className="flex items-center gap-2">
-          <span className="w-24 text-[#8a7a72]">cursor</span>
-          <code className="text-[#695954]">~/.cursor/mcp.json</code>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-24 text-[#8a7a72]">claude desktop</span>
-          <code className="text-[#695954]">~/Library/Application Support/Claude/claude_desktop_config.json</code>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-24 text-[#8a7a72]">claude code</span>
-          <code className="text-[#695954]">~/.claude/mcp.json</code>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-24 text-[#8a7a72]">windsurf</span>
-          <code className="text-[#695954]">~/.codeium/windsurf/mcp_config.json</code>
-        </div>
+      {/* Config path */}
+      <div className="mt-3 text-[11px] text-[#a09488]">
+        <span className="text-[#8a7a72]">config path:</span>{" "}
+        <code className="text-[#695954]">{current.path}</code>
       </div>
     </div>
   );

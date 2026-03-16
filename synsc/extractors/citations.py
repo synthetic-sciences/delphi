@@ -60,26 +60,43 @@ class CitationExtractor(BaseExtractor):
         """Extract numbered citations like [1], [2], [3-5]."""
         citations = []
 
-        # Pattern: [number] or [number-number]
-        pattern = r"\[(\d+(?:-\d+)?)\]"
+        # Multiple patterns to handle different PDF extraction quirks
+        patterns = [
+            r"\[(\d+(?:\s*[-–]\s*\d+)?)\]",           # Standard: [1], [3-5], [3–5]
+            r"\[\s*(\d+(?:\s*,\s*\d+)*)\s*\]",         # Comma-separated: [1, 2, 3]
+            r"[\uff3b](\d+(?:-\d+)?)[\uff3d]",         # Unicode fullwidth brackets ［1］
+        ]
 
-        for match in re.finditer(pattern, text):
-            citation_text = match.group(0)
-            citation_num = match.group(1)
+        seen = set()
+        for pattern in patterns:
+            for match in re.finditer(pattern, text):
+                citation_text = match.group(0)
+                citation_num = match.group(1).strip()
 
-            # Get context (50 chars before and after)
-            start = max(0, match.start() - 50)
-            end = min(len(text), match.end() + 50)
-            context = text[start:end].strip()
+                # Skip if likely a table cell, list index, or footnote marker
+                # by checking if it's at the start of a line (reference list entry)
+                pos = match.start()
+                line_start = text.rfind('\n', 0, pos) + 1
+                prefix = text[line_start:pos].strip()
 
-            citations.append(
-                {
-                    "citation_text": citation_text,
-                    "citation_number": citation_num,
-                    "citation_context": context,
-                    "citation_type": "numbered",
-                }
-            )
+                # Deduplicate by position
+                if pos in seen:
+                    continue
+                seen.add(pos)
+
+                # Get context (80 chars before and after)
+                start = max(0, match.start() - 80)
+                end = min(len(text), match.end() + 80)
+                context = text[start:end].strip()
+
+                citations.append(
+                    {
+                        "citation_text": citation_text,
+                        "citation_number": citation_num,
+                        "citation_context": context,
+                        "citation_type": "numbered",
+                    }
+                )
 
         return citations
 

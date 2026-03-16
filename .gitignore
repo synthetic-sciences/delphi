@@ -90,4 +90,5 @@ supabase/.temp/
 *.orig
 sql/
 docs/
+!frontend/src/app/docs/
 CLAUDE.md

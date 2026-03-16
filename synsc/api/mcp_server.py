@@ -731,11 +731,15 @@ Provides deep context to AI agents through:
     def compare_papers(paper_ids: list[str]) -> dict[str, Any]:
         """Compare multiple papers side-by-side.
 
+        Returns structured data for each paper including title, authors,
+        abstract, section headings, citation count, and equation count.
+        The calling LLM should synthesize the comparison from this data.
+
         Args:
             paper_ids: List of 2-5 paper identifiers
 
         Returns:
-            Comparison including common themes and differences
+            Structured comparison data for each paper
         """
         from synsc.services.paper_service import get_paper_service
 
@@ -752,12 +756,21 @@ Provides deep context to AI agents through:
         for pid in paper_ids:
             paper = service.get_paper(pid)
             if paper:
+                chunks = paper.get("chunks", [])
+                sections = list(dict.fromkeys(
+                    c.get("section_title", "") for c in chunks if c.get("section_title")
+                ))
+                citations = service.get_citations(pid)
+                equations = service.get_equations(pid)
                 papers.append({
                     "paper_id": pid,
                     "title": paper.get("title", "Untitled"),
                     "authors": paper.get("authors", "Unknown"),
                     "abstract": paper.get("abstract", ""),
-                    "chunk_count": len(paper.get("chunks", [])),
+                    "sections": sections,
+                    "chunk_count": len(chunks),
+                    "citation_count": len(citations),
+                    "equation_count": len(equations),
                 })
 
         if len(papers) < 2:
@@ -768,6 +781,29 @@ Provides deep context to AI agents through:
             "papers": papers,
             "count": len(papers),
         }
+        return result
+
+    @server.tool()
+    def delete_paper(paper_id: str) -> dict[str, Any]:
+        """Delete an indexed paper and all associated data.
+
+        Removes the paper, its chunks, embeddings, citations, equations,
+        and code snippets.
+
+        Args:
+            paper_id: Paper identifier (UUID)
+
+        Returns:
+            Success status
+        """
+        from synsc.services.paper_service import get_paper_service
+
+        user_id = get_authenticated_user_id()
+        service = get_paper_service(user_id=user_id)
+
+        result = service.delete_paper(paper_id)
+        if user_id:
+            _log_activity(user_id, "delete_paper", resource_type="paper", resource_id=paper_id)
         return result
 
     # ==========================================================================

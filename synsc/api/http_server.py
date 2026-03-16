@@ -370,16 +370,18 @@ def create_app() -> FastAPI:
         structlog.get_config().get("wrapper_class", object),
         structlog.stdlib.BoundLogger,
     ):
+        # Remove any existing handlers (e.g. RichHandler from sentence_transformers)
+        _logging.root.handlers.clear()
         _logging.basicConfig(
             format="%(message)s",
             level=_logging.INFO,
+            force=True,
         )
 
         structlog.configure(
             processors=[
                 structlog.stdlib.filter_by_level,
                 structlog.stdlib.add_log_level,
-                structlog.processors.TimeStamper(fmt="%H:%M:%S"),
                 structlog.processors.StackInfoRenderer(),
                 structlog.processors.format_exc_info,
                 structlog.processors.UnicodeDecoder(),
@@ -400,6 +402,7 @@ def create_app() -> FastAPI:
     _logging.getLogger("sentence_transformers").setLevel(_logging.WARNING)
     _logging.getLogger("mcp.server.streamable_http").setLevel(_logging.WARNING)
     _logging.getLogger("mcp.server.lowlevel.server").setLevel(_logging.WARNING)
+    _logging.getLogger("rich").setLevel(_logging.WARNING)
 
     config = get_config()
 
