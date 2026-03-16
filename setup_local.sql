@@ -250,6 +250,25 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_vector ON chunk_embeddings
 
 
 -- ============================================================================
+-- PART 8b: CHUNK RELATIONSHIPS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS chunk_relationships (
+    relationship_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_chunk_id UUID NOT NULL REFERENCES code_chunks(chunk_id) ON DELETE CASCADE,
+    target_chunk_id UUID NOT NULL REFERENCES code_chunks(chunk_id) ON DELETE CASCADE,
+    relationship_type TEXT NOT NULL,
+    weight FLOAT DEFAULT 1.0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (source_chunk_id, target_chunk_id, relationship_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunk_rel_source ON chunk_relationships(source_chunk_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_rel_target ON chunk_relationships(target_chunk_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_rel_source_type ON chunk_relationships(source_chunk_id, relationship_type);
+
+
+-- ============================================================================
 -- PART 9: SYMBOLS (Functions, Classes, Methods)
 -- ============================================================================
 

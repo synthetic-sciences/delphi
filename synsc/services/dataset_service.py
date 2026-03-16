@@ -586,13 +586,6 @@ class DatasetService:
             return {"success": False, "error": str(e)}
 
 
-# Singleton instance
-_service: DatasetService | None = None
-
-
 def get_dataset_service(user_id: str | None = None) -> DatasetService:
-    """Get dataset service instance."""
-    global _service
-    if _service is None:
-        _service = DatasetService()
-    return _service
+    """Get dataset service instance for the given user."""
+    return DatasetService(user_id=user_id or "anonymous")

@@ -26,6 +26,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Try to import pgvector for PostgreSQL
@@ -123,7 +124,7 @@ class Repository(Base):
     total_lines: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     
-    languages: Mapped[str | None] = mapped_column(Text)  # JSON
+    languages: Mapped[dict | None] = mapped_column(JSONB)
     local_path: Mapped[str | None] = mapped_column(Text)
     
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -131,7 +132,7 @@ class Repository(Base):
         DateTime, default=utc_now, onupdate=utc_now
     )
     
-    repo_metadata: Mapped[str | None] = mapped_column(Text)  # JSON
+    repo_metadata: Mapped[dict | None] = mapped_column(JSONB)
 
     # Relationships
     files: Mapped[list["RepositoryFile"]] = relationship(
@@ -155,7 +156,7 @@ class Repository(Base):
         return json.loads(self.languages)
 
     def set_languages(self, languages: dict[str, float]) -> None:
-        self.languages = json.dumps(languages)
+        self.languages = languages  # jsonb column
 
     def get_metadata(self) -> dict[str, Any]:
         if not self.repo_metadata:
@@ -165,7 +166,7 @@ class Repository(Base):
         return json.loads(self.repo_metadata)
 
     def set_metadata(self, metadata: dict[str, Any]) -> None:
-        self.repo_metadata = json.dumps(metadata)
+        self.repo_metadata = metadata  # jsonb column
     
     def can_user_access(self, user_id: str | None) -> bool:
         """Check if a user can see this repository based on visibility.
@@ -380,9 +381,9 @@ class Symbol(Base):
         String(36), ForeignKey("symbols.symbol_id")
     )
     
-    parameters: Mapped[str | None] = mapped_column(Text)  # JSON
+    parameters: Mapped[list | None] = mapped_column(JSONB)
     return_type: Mapped[str | None] = mapped_column(String(255))
-    decorators: Mapped[str | None] = mapped_column(Text)  # JSON
+    decorators: Mapped[list | None] = mapped_column(JSONB)
     
     language: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -408,7 +409,7 @@ class Symbol(Base):
         return json.loads(self.parameters)
 
     def set_parameters(self, params: list[dict[str, Any]]) -> None:
-        self.parameters = json.dumps(params)
+        self.parameters = params  # jsonb column
 
     def get_decorators(self) -> list[str]:
         if not self.decorators:
@@ -418,7 +419,7 @@ class Symbol(Base):
         return json.loads(self.decorators)
 
     def set_decorators(self, decorators: list[str]) -> None:
-        self.decorators = json.dumps(decorators)
+        self.decorators = decorators  # jsonb column
 
 
 # ==============================================================================
@@ -446,21 +447,21 @@ class Paper(Base):
     )
     arxiv_id: Mapped[str | None] = mapped_column(String(50), unique=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
-    authors: Mapped[str | None] = mapped_column(Text)  # JSON array
+    authors: Mapped[list | None] = mapped_column(JSONB)
     abstract: Mapped[str | None] = mapped_column(Text)
     published_date: Mapped[str | None] = mapped_column(String(50))
     pdf_url: Mapped[str | None] = mapped_column(Text)
-    pdf_path: Mapped[str | None] = mapped_column(Text)
     pdf_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     indexed_by: Mapped[str | None] = mapped_column(String(36), index=True)
-    citation_count: Mapped[int] = mapped_column(Integer, default=0)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    citation_count: Mapped[int] = mapped_column(Integer, default=0)
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now, onupdate=utc_now
     )
-    paper_metadata: Mapped[str | None] = mapped_column(Text)  # JSON
+    report: Mapped[dict | None] = mapped_column(JSONB)
 
     # Relationships
     user_papers: Mapped[list["UserPaper"]] = relationship(
@@ -483,18 +484,25 @@ class Paper(Base):
     def get_authors(self) -> list[str]:
         if not self.authors:
             return []
+        if isinstance(self.authors, list):
+            return self.authors
         return json.loads(self.authors)
 
     def set_authors(self, authors: list[str]) -> None:
-        self.authors = json.dumps(authors)
+        self.authors = authors  # jsonb column accepts lists directly
 
     def get_metadata(self) -> dict[str, Any]:
-        if not self.paper_metadata:
+        if not self.report:
             return {}
-        return json.loads(self.paper_metadata)
+        if isinstance(self.report, dict):
+            return self.report
+        return json.loads(self.report)
 
     def set_metadata(self, metadata: dict[str, Any]) -> None:
-        self.paper_metadata = json.dumps(metadata)
+        if isinstance(metadata, dict):
+            self.report = metadata  # jsonb column accepts dicts directly
+        else:
+            self.report = json.dumps(metadata)
 
 
 class UserPaper(Base):
@@ -507,7 +515,7 @@ class UserPaper(Base):
         Index("idx_user_papers_paper", "paper_id"),
     )
 
-    user_paper_id: Mapped[str] = mapped_column(
+    id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=generate_uuid
     )
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
@@ -515,8 +523,8 @@ class UserPaper(Base):
         String(36), ForeignKey("papers.paper_id"), nullable=False
     )
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
-    access_level: Mapped[str] = mapped_column(String(20), default="owner")
     notes: Mapped[str | None] = mapped_column(Text)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
 
     paper: Mapped["Paper"] = relationship("Paper", back_populates="user_papers")
 
@@ -540,8 +548,9 @@ class PaperChunk(Base):
     section_title: Mapped[str | None] = mapped_column(String(500))
     content: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_type: Mapped[str] = mapped_column(String(50), default="section")
-    token_count: Mapped[int | None] = mapped_column(Integer)
     page_number: Mapped[int | None] = mapped_column(Integer)
+    token_count: Mapped[int | None] = mapped_column(Integer)
+    chunk_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     paper: Mapped["Paper"] = relationship("Paper", back_populates="paper_chunks")
@@ -569,7 +578,7 @@ class Citation(Base):
     citation_context: Mapped[str | None] = mapped_column(Text)
     page_number: Mapped[int | None] = mapped_column(Integer)
     citation_number: Mapped[int | None] = mapped_column(Integer)
-    external_reference: Mapped[str | None] = mapped_column(Text)  # JSON
+    external_reference: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     paper: Mapped["Paper"] = relationship(
@@ -646,7 +655,7 @@ class GitHubToken(Base):
     encrypted_token: Mapped[str] = mapped_column(Text, nullable=False)
     token_label: Mapped[str | None] = mapped_column(String(255))
     github_username: Mapped[str | None] = mapped_column(String(255))
-    scopes: Mapped[str | None] = mapped_column(Text)
+    github_id: Mapped[int | None] = mapped_column(Integer)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(

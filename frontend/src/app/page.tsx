@@ -14,7 +14,8 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [config, setConfig] = useState<ServerConfig | null>(null);
+  // Show both auth methods immediately; config fetch can hide irrelevant ones
+  const [config, setConfig] = useState<ServerConfig>({ github_oauth_enabled: true, system_password_enabled: true });
 
   // If already authenticated, redirect to overview
   useEffect(() => {
@@ -23,12 +24,12 @@ export default function LoginPage() {
     });
   }, [router]);
 
-  // Fetch server config to know which auth methods are available
+  // Fetch actual server config to refine which auth methods are shown
   useEffect(() => {
     fetch("/config")
       .then((r) => r.json())
       .then((data) => setConfig(data))
-      .catch(() => setConfig({ github_oauth_enabled: false, system_password_enabled: true }));
+      .catch(() => {});
   }, []);
 
   function handleGitHubLogin() {
@@ -75,7 +76,7 @@ export default function LoginPage() {
         </p>
 
         {/* GitHub OAuth */}
-        {config?.github_oauth_enabled && (
+        {config.github_oauth_enabled && (
           <button
             type="button"
             onClick={handleGitHubLogin}
@@ -89,7 +90,7 @@ export default function LoginPage() {
         )}
 
         {/* Divider */}
-        {config?.github_oauth_enabled && config?.system_password_enabled && (
+        {config.github_oauth_enabled && config.system_password_enabled && (
           <div className="flex items-center gap-3 mb-4">
             <div className="flex-1 h-px bg-[#1f1f1f]" />
             <span className="text-[10px] text-[#444] uppercase">or</span>
@@ -98,14 +99,14 @@ export default function LoginPage() {
         )}
 
         {/* Password login */}
-        {config?.system_password_enabled && (
+        {config.system_password_enabled && (
           <form onSubmit={handlePasswordLogin}>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="System password"
-              autoFocus={!config?.github_oauth_enabled}
+              autoFocus={!config.github_oauth_enabled}
               className="w-full px-3 py-2 bg-[#0a0a0a] border border-[#1f1f1f] rounded-md text-sm text-white placeholder-[#444] focus:outline-none focus:border-[#333] mb-3"
             />
 

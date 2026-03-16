@@ -143,6 +143,9 @@ class PgVectorManager:
         query_list = query_embedding[0].tolist()
         
         with get_session() as session:
+            # Tune HNSW search quality — ef_search=100 gives good recall
+            session.execute(text("SET LOCAL hnsw.ef_search = 100"))
+
             # Format the vector as a string for direct SQL embedding
             # This is safe since we control the embedding generation
             vector_str = "[" + ",".join(str(x) for x in query_list) + "]"

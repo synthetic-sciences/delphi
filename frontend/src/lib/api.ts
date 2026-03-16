@@ -11,7 +11,7 @@
 
 export const API_URL = "";
 
-const DIRECT_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+export const DIRECT_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 /**
  * Get a valid access token (JWT session token from localStorage).
@@ -48,9 +48,9 @@ export function clearAccessToken(): void {
 export async function getAuthHeaders(): Promise<Record<string, string>> {
   const token = await getAccessToken();
   if (token) {
-    return { Authorization: `Bearer ${token}` };
+    return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   }
-  return {};
+  return { "Content-Type": "application/json" };
 }
 
 async function apiFetch(
@@ -73,10 +73,12 @@ async function apiFetch(
 
   const resp = await fetch(url, { ...options, headers });
 
-  // If we get a 401, redirect to login
+  // If we get a 401, redirect to login (but not if already on login page)
   if (resp.status === 401 && typeof window !== "undefined") {
     clearAccessToken();
-    window.location.href = "/";
+    if (window.location.pathname !== "/") {
+      window.location.href = "/";
+    }
   }
 
   return resp;

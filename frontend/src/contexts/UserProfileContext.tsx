@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { getUserProfile } from "@/lib/api";
+import { getAccessToken, getUserProfile } from "@/lib/api";
 
 interface UserProfile {
   user_id: string;
@@ -33,6 +33,11 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     try {
       setLoading(true);
       setError(null);
+      const token = await getAccessToken();
+      if (!token) {
+        setLoading(false);
+        return;
+      }
       const resp = await getUserProfile();
       if (resp.ok) {
         const data = await resp.json();

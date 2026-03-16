@@ -39,9 +39,17 @@ def get_engine() -> Engine:
             max_overflow=config.database.max_overflow,
             pool_timeout=config.database.pool_timeout,
             pool_recycle=config.database.pool_recycle,
-            pool_pre_ping=True,
+            pool_pre_ping=False,
+            # TCP keepalives prevent connection drops during long indexing transactions.
+            # keepalives_idle=60: send first probe after 60s idle
+            # keepalives_interval=15: probe every 15s after that
+            # keepalives_count=4: give up after 4 missed probes (~2 min)
             connect_args={
                 "options": "-c statement_timeout=120s -c idle_in_transaction_session_timeout=300s",
+                "keepalives": 1,
+                "keepalives_idle": 60,
+                "keepalives_interval": 15,
+                "keepalives_count": 4,
             },
         )
 
