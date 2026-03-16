@@ -9,8 +9,18 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        background: "var(--background)",
-        foreground: "var(--foreground)",
+        background: "var(--bg-primary)",
+        foreground: "var(--text-primary)",
+        paper: "var(--paper)",
+        forest: "var(--forest)",
+        coral: "var(--coral)",
+        grid: "var(--grid)",
+        line: "var(--line)",
+      },
+      fontFamily: {
+        display: ["Bricolage Grotesque", "sans-serif"],
+        body: ["Plus Jakarta Sans", "sans-serif"],
+        mono: ["IBM Plex Mono", "monospace"],
       },
     },
   },

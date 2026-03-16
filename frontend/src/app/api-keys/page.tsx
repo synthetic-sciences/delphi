@@ -33,17 +33,17 @@ interface HFTokenInfo {
 function ConfigBlock({ code, lang = "json" }: { code: string; lang?: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="relative group rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#1a1a1a]">
-        <span className="text-[10px] text-[#333] uppercase tracking-wider">{lang}</span>
+    <div className="relative group rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#dfcdbf]">
+        <span className="text-[10px] text-[#a09488] uppercase tracking-wider">{lang}</span>
         <button
           onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-          className="p-1 rounded hover:bg-[#1a1a1a] text-[#333] hover:text-[#888] transition-colors"
+          className="p-1 rounded hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#695954] transition-colors"
         >
           {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
         </button>
       </div>
-      <pre className="p-3 overflow-x-auto text-xs font-mono text-[#999] leading-relaxed whitespace-pre">{code}</pre>
+      <pre className="p-3 overflow-x-auto text-xs font-mono text-[#695954] leading-relaxed whitespace-pre">{code}</pre>
     </div>
   );
 }
@@ -76,22 +76,22 @@ function UsageConfigSection() {
 }`;
 
   return (
-    <div className="mt-6 p-5 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-      <h3 className="text-xs text-[#555] font-medium uppercase tracking-wider mb-4">mcp configuration</h3>
+    <div className="mt-6 p-5 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+      <h3 className="text-xs text-[#8a7a72] font-medium uppercase tracking-wider mb-4">mcp configuration</h3>
 
-      <p className="text-xs text-[#444] mb-4">
+      <p className="text-xs text-[#a09488] mb-4">
         add this to your agent&apos;s mcp config file to connect synsc context.
-        replace <code className="text-[#fa7315]">your_api_key_here</code> with an active key from above.
+        replace <code className="text-[#b58a73]">your_api_key_here</code> with an active key from above.
       </p>
 
       {/* Mode tabs */}
-      <div className="flex items-center gap-1 p-1 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] w-fit mb-4">
+      <div className="flex items-center gap-1 p-1 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] w-fit mb-4">
         <button
           onClick={() => setMode("stdio")}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
             mode === "stdio"
-              ? "bg-[#fa7315] text-black"
-              : "text-[#555] hover:text-white"
+              ? "bg-[#b58a73] text-black"
+              : "text-[#8a7a72] hover:text-[#2e2522]"
           }`}
         >
           <Monitor size={12} />
@@ -101,8 +101,8 @@ function UsageConfigSection() {
           onClick={() => setMode("http")}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
             mode === "http"
-              ? "bg-[#fa7315] text-black"
-              : "text-[#555] hover:text-white"
+              ? "bg-[#b58a73] text-black"
+              : "text-[#8a7a72] hover:text-[#2e2522]"
           }`}
         >
           <Globe size={12} />
@@ -114,41 +114,41 @@ function UsageConfigSection() {
       <ConfigBlock code={mode === "stdio" ? stdioConfig : httpConfig} lang="json" />
 
       {/* Explanation */}
-      <div className="mt-3 p-3 rounded-lg bg-[#0f0f0f] border border-[#1a1a1a] text-xs text-[#555]">
+      <div className="mt-3 p-3 rounded-lg bg-[#faf5ef] border border-[#dfcdbf] text-xs text-[#8a7a72]">
         {mode === "stdio" ? (
           <p>
-            <strong className="text-[#888]">how it works:</strong>{" "}
-            <code className="text-[#fa7315]">uvx</code> installs a lightweight stdio proxy from pypi that runs locally
+            <strong className="text-[#695954]">how it works:</strong>{" "}
+            <code className="text-[#b58a73]">uvx</code> installs a lightweight stdio proxy from pypi that runs locally
             and forwards all tool calls to the local backend with your api key.
-            requires <code className="text-[#fa7315]">uv</code> (<code className="text-[#888]">curl -LsSf https://astral.sh/uv/install.sh | sh</code>).
+            requires <code className="text-[#b58a73]">uv</code> (<code className="text-[#695954]">curl -LsSf https://astral.sh/uv/install.sh | sh</code>).
           </p>
         ) : (
           <p>
-            <strong className="text-[#888]">how it works:</strong> your agent connects directly to the local
+            <strong className="text-[#695954]">how it works:</strong> your agent connects directly to the local
             mcp endpoint over http. no local process needed. your client must support
-            the <code className="text-[#fa7315]">streamable-http</code> transport.
+            the <code className="text-[#b58a73]">streamable-http</code> transport.
           </p>
         )}
       </div>
 
       {/* Config file paths */}
-      <div className="mt-4 space-y-1.5 text-[11px] text-[#444]">
-        <p className="text-[10px] text-[#555] uppercase tracking-wider font-medium mb-2">config file locations</p>
+      <div className="mt-4 space-y-1.5 text-[11px] text-[#a09488]">
+        <p className="text-[10px] text-[#8a7a72] uppercase tracking-wider font-medium mb-2">config file locations</p>
         <div className="flex items-center gap-2">
-          <span className="w-24 text-[#666]">cursor</span>
-          <code className="text-[#888]">~/.cursor/mcp.json</code>
+          <span className="w-24 text-[#8a7a72]">cursor</span>
+          <code className="text-[#695954]">~/.cursor/mcp.json</code>
         </div>
         <div className="flex items-center gap-2">
-          <span className="w-24 text-[#666]">claude desktop</span>
-          <code className="text-[#888]">~/Library/Application Support/Claude/claude_desktop_config.json</code>
+          <span className="w-24 text-[#8a7a72]">claude desktop</span>
+          <code className="text-[#695954]">~/Library/Application Support/Claude/claude_desktop_config.json</code>
         </div>
         <div className="flex items-center gap-2">
-          <span className="w-24 text-[#666]">claude code</span>
-          <code className="text-[#888]">~/.claude/mcp.json</code>
+          <span className="w-24 text-[#8a7a72]">claude code</span>
+          <code className="text-[#695954]">~/.claude/mcp.json</code>
         </div>
         <div className="flex items-center gap-2">
-          <span className="w-24 text-[#666]">windsurf</span>
-          <code className="text-[#888]">~/.codeium/windsurf/mcp_config.json</code>
+          <span className="w-24 text-[#8a7a72]">windsurf</span>
+          <code className="text-[#695954]">~/.codeium/windsurf/mcp_config.json</code>
         </div>
       </div>
     </div>
@@ -478,19 +478,19 @@ export default function ApiKeysPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-medium lowercase mb-1">api keys & tokens</h1>
-          <p className="text-sm text-[#555] lowercase">manage programmatic access and github integration</p>
+          <p className="text-sm text-[#8a7a72] lowercase">manage programmatic access and github integration</p>
         </div>
         <div className="flex items-center gap-3">
           <Link 
             href="/docs" 
-            className="flex items-center gap-2 px-3 py-2 text-xs text-[#555] hover:text-white rounded-lg border border-[#1a1a1a] hover:border-[#333] transition-colors lowercase"
+            className="flex items-center gap-2 px-3 py-2 text-xs text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
           >
             <ExternalLink size={12} />
             docs
           </Link>
           <button 
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
           >
             <Plus size={14} />
             create key
@@ -499,44 +499,44 @@ export default function ApiKeysPage() {
       </div>
 
       {/* Keys List */}
-      <div className="rounded-xl bg-[#0f0f0f] border border-[#1a1a1a] overflow-hidden">
+      <div className="rounded-xl bg-[#faf5ef] border border-[#dfcdbf] overflow-hidden">
         {loading ? (
           <div className="p-12 text-center">
-            <RefreshCw size={24} className="text-[#333] animate-spin mx-auto mb-3" />
-            <p className="text-sm text-[#444] lowercase">loading keys...</p>
+            <RefreshCw size={24} className="text-[#a09488] animate-spin mx-auto mb-3" />
+            <p className="text-sm text-[#a09488] lowercase">loading keys...</p>
           </div>
         ) : keys.length === 0 ? (
           <div className="p-12 text-center">
             <Key size={32} className="text-[#222] mx-auto mb-3" />
-            <h3 className="text-sm text-[#555] lowercase mb-1">no api keys yet</h3>
-            <p className="text-xs text-[#333] lowercase mb-4">create an api key to authenticate your mcp requests.</p>
+            <h3 className="text-sm text-[#8a7a72] lowercase mb-1">no api keys yet</h3>
+            <p className="text-xs text-[#a09488] lowercase mb-4">create an api key to authenticate your mcp requests.</p>
             <button 
               onClick={() => setShowCreateModal(true)}
-              className="px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
+              className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
             >
               create your first key
             </button>
           </div>
         ) : (
-          <div className="divide-y divide-[#1a1a1a]">
+          <div className="divide-y divide-[#dfcdbf]">
             {/* Active Keys */}
             {activeKeys.map((key) => (
               <div 
                 key={key.id} 
-                className="flex items-center gap-4 px-4 py-4 hover:bg-[#111] transition-colors"
+                className="flex items-center gap-4 px-4 py-4 hover:bg-[#efe7dd] transition-colors"
               >
-                <div className="w-10 h-10 rounded-lg bg-[#fa7315]/10 flex items-center justify-center">
-                  <Key size={18} className="text-[#fa7315]" />
+                <div className="w-10 h-10 rounded-lg bg-[#b58a73]/10 flex items-center justify-center">
+                  <Key size={18} className="text-[#b58a73]" />
                 </div>
                 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-medium text-white">{key.name}</span>
+                    <span className="text-sm font-medium text-[#2e2522]">{key.name}</span>
                     <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-green-500/20 text-green-400">
                       active
                     </span>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-[#444]">
+                  <div className="flex items-center gap-3 text-xs text-[#a09488]">
                     <code className="font-mono">{key.key_preview}••••••••••••••••</code>
                     <span>•</span>
                     <span>created {formatTimeAgo(key.created_at)}</span>
@@ -549,7 +549,7 @@ export default function ApiKeysPage() {
                   <button 
                     onClick={() => revokeKey(key.id)}
                     disabled={actionLoading === key.id}
-                    className="p-2 rounded-lg hover:bg-[#1a1a1a] text-[#444] hover:text-yellow-500 transition-colors disabled:opacity-50"
+                    className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-yellow-500 transition-colors disabled:opacity-50"
                     title="Revoke key"
                   >
                     <Ban size={14} />
@@ -557,7 +557,7 @@ export default function ApiKeysPage() {
                   <button 
                     onClick={() => deleteKey(key.id)}
                     disabled={actionLoading === key.id}
-                    className="p-2 rounded-lg hover:bg-[#1a1a1a] text-[#444] hover:text-red-500 transition-colors disabled:opacity-50"
+                    className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Delete key"
                   >
                     <Trash2 size={14} />
@@ -573,17 +573,17 @@ export default function ApiKeysPage() {
                 className="flex items-center gap-4 px-4 py-4 opacity-50"
               >
                 <div className="w-10 h-10 rounded-lg bg-[#333]/20 flex items-center justify-center">
-                  <Key size={18} className="text-[#444]" />
+                  <Key size={18} className="text-[#a09488]" />
                 </div>
                 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
-                    <span className="text-sm font-medium text-[#666]">{key.name}</span>
+                    <span className="text-sm font-medium text-[#8a7a72]">{key.name}</span>
                     <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-red-500/20 text-red-400">
                       revoked
                     </span>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-[#333]">
+                  <div className="flex items-center gap-3 text-xs text-[#a09488]">
                     <code className="font-mono">{key.key_preview}••••••••••••••••</code>
                     <span>•</span>
                     <span>created {formatTimeAgo(key.created_at)}</span>
@@ -593,7 +593,7 @@ export default function ApiKeysPage() {
                 <button 
                   onClick={() => deleteKey(key.id)}
                   disabled={actionLoading === key.id}
-                  className="p-2 rounded-lg hover:bg-[#1a1a1a] text-[#333] hover:text-red-500 transition-colors disabled:opacity-50"
+                  className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                   title="Delete key permanently"
                 >
                   <Trash2 size={14} />
@@ -624,27 +624,27 @@ export default function ApiKeysPage() {
         </div>
       )}
 
-      <div id="github-token" className="mt-6 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a] overflow-hidden">
-        <div className="px-4 py-3 border-b border-[#1a1a1a]">
-          <h2 className="text-xs text-[#555] font-medium uppercase tracking-wider">connect accounts</h2>
+      <div id="github-token" className="mt-6 rounded-xl bg-[#faf5ef] border border-[#dfcdbf] overflow-hidden">
+        <div className="px-4 py-3 border-b border-[#dfcdbf]">
+          <h2 className="text-xs text-[#8a7a72] font-medium uppercase tracking-wider">connect accounts</h2>
         </div>
 
-        <div className="divide-y divide-[#1a1a1a]">
+        <div className="divide-y divide-[#dfcdbf]">
           {/* GitHub row */}
           <div className="flex items-center gap-4 px-4 py-4">
             <div className="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center">
-              <Github size={20} className="text-white" />
+              <Github size={20} className="text-[#2e2522]" />
             </div>
 
             <div className="flex-1 min-w-0">
-              <span className="text-sm font-medium text-white">github</span>
+              <span className="text-sm font-medium text-[#2e2522]">github</span>
               {hasToken && tokenInfo?.github_username && (
-                <p className="text-xs text-[#444] mt-0.5">@{tokenInfo.github_username}</p>
+                <p className="text-xs text-[#a09488] mt-0.5">@{tokenInfo.github_username}</p>
               )}
             </div>
 
             {tokenLoading ? (
-              <RefreshCw size={14} className="text-[#333] animate-spin" />
+              <RefreshCw size={14} className="text-[#a09488] animate-spin" />
             ) : hasToken ? (
               <div className="flex items-center gap-2">
                 <span className="flex items-center gap-1.5 text-xs text-green-400">
@@ -653,7 +653,7 @@ export default function ApiKeysPage() {
                 </span>
                 <button
                   onClick={deleteToken}
-                  className="p-1.5 rounded-lg hover:bg-[#1a1a1a] text-[#333] hover:text-red-500 transition-colors"
+                  className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors"
                   title="Disconnect"
                 >
                   <X size={14} />
@@ -662,7 +662,7 @@ export default function ApiKeysPage() {
             ) : (
               <button
                 onClick={() => setShowTokenModal(true)}
-                className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-[#1a1a1a] text-[#888] hover:text-white hover:border-[#333] transition-colors lowercase"
+                className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-[#dfcdbf] text-[#695954] hover:text-[#2e2522] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 connect
               </button>
@@ -676,14 +676,14 @@ export default function ApiKeysPage() {
             </div>
 
             <div className="flex-1 min-w-0">
-              <span className="text-sm font-medium text-white">hugging face</span>
+              <span className="text-sm font-medium text-[#2e2522]">hugging face</span>
               {hasHfToken && hfTokenInfo?.hf_username && (
-                <p className="text-xs text-[#444] mt-0.5">{hfTokenInfo.hf_username}</p>
+                <p className="text-xs text-[#a09488] mt-0.5">{hfTokenInfo.hf_username}</p>
               )}
             </div>
 
             {hfTokenLoading ? (
-              <RefreshCw size={14} className="text-[#333] animate-spin" />
+              <RefreshCw size={14} className="text-[#a09488] animate-spin" />
             ) : hasHfToken ? (
               <div className="flex items-center gap-2">
                 <span className="flex items-center gap-1.5 text-xs text-green-400">
@@ -692,7 +692,7 @@ export default function ApiKeysPage() {
                 </span>
                 <button
                   onClick={deleteHfToken}
-                  className="p-1.5 rounded-lg hover:bg-[#1a1a1a] text-[#333] hover:text-red-500 transition-colors"
+                  className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors"
                   title="Disconnect"
                 >
                   <X size={14} />
@@ -701,7 +701,7 @@ export default function ApiKeysPage() {
             ) : (
               <button
                 onClick={() => setShowHfTokenModal(true)}
-                className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-[#1a1a1a] text-[#888] hover:text-white hover:border-[#333] transition-colors lowercase"
+                className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-[#dfcdbf] text-[#695954] hover:text-[#2e2522] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 connect
               </button>
@@ -720,41 +720,41 @@ export default function ApiKeysPage() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setShowCreateModal(false)}
           />
-          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a] shadow-2xl">
+          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">create api key</h2>
               <button 
                 onClick={() => setShowCreateModal(false)}
-                className="p-1 rounded hover:bg-[#1a1a1a] text-[#555] hover:text-white transition-colors"
+                className="p-1 rounded hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
               >
                 <X size={16} />
               </button>
             </div>
             
             <div className="mb-6">
-              <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">key name</label>
+              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">key name</label>
               <input
                 type="text"
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
                 placeholder="e.g., development, mcp setup"
-                className="w-full h-10 px-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#333] focus:outline-none focus:border-[#333] transition-colors"
+                className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
                 autoFocus
               />
-              <p className="text-[10px] text-[#333] mt-2">a name to help you identify this key</p>
+              <p className="text-[10px] text-[#a09488] mt-2">a name to help you identify this key</p>
             </div>
             
             <div className="flex justify-end gap-3">
               <button 
                 onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 text-sm text-[#555] hover:text-white rounded-lg border border-[#1a1a1a] hover:border-[#333] transition-colors lowercase"
+                className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 cancel
               </button>
               <button 
                 onClick={createKey}
                 disabled={!newKeyName.trim() || actionLoading === 'create'}
-                className="px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {actionLoading === 'create' ? 'creating...' : 'create key'}
               </button>
@@ -770,19 +770,19 @@ export default function ApiKeysPage() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setShowRevealModal(false)}
           />
-          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a] shadow-2xl">
+          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">api key created</h2>
               <button 
                 onClick={() => setShowRevealModal(false)}
-                className="p-1 rounded hover:bg-[#1a1a1a] text-[#555] hover:text-white transition-colors"
+                className="p-1 rounded hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
               >
                 <X size={16} />
               </button>
             </div>
             
-            <div className="p-4 rounded-xl bg-[#0a0a0a] border border-[#1a1a1a] mb-4">
-              <code className="block text-sm font-mono text-[#fa7315] break-all select-all">
+            <div className="p-4 rounded-xl bg-[#f7f0e8] border border-[#dfcdbf] mb-4">
+              <code className="block text-sm font-mono text-[#b58a73] break-all select-all">
                 {revealedKey}
               </code>
             </div>
@@ -797,14 +797,14 @@ export default function ApiKeysPage() {
             <div className="flex justify-end gap-3">
               <button 
                 onClick={() => copyToClipboard(revealedKey)}
-                className="flex items-center gap-2 px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
+                className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? 'copied!' : 'copy key'}
               </button>
               <button 
                 onClick={() => setShowRevealModal(false)}
-                className="px-4 py-2 text-sm text-[#555] hover:text-white rounded-lg border border-[#1a1a1a] hover:border-[#333] transition-colors lowercase"
+                className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 done
               </button>
@@ -820,21 +820,21 @@ export default function ApiKeysPage() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setShowTokenModal(false)}
           />
-          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a] shadow-2xl">
+          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">
                 {hasToken ? "update github token" : "connect github"}
               </h2>
               <button
                 onClick={() => setShowTokenModal(false)}
-                className="p-1 rounded hover:bg-[#1a1a1a] text-[#555] hover:text-white transition-colors"
+                className="p-1 rounded hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
               >
                 <X size={16} />
               </button>
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">
+              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                 personal access token
               </label>
               <input
@@ -842,56 +842,56 @@ export default function ApiKeysPage() {
                 value={tokenInput}
                 onChange={(e) => setTokenInput(e.target.value)}
                 placeholder="github_pat_••••••••••••••••••••"
-                className="w-full h-10 px-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#333] focus:outline-none focus:border-[#333] transition-colors font-mono"
+                className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors font-mono"
                 autoFocus
                 onKeyDown={(e) => e.key === "Enter" && saveToken()}
               />
-              <p className="text-[10px] text-[#333] mt-2">
-                fine-grained token with <span className="text-[#555]">contents:read</span> permission
+              <p className="text-[10px] text-[#a09488] mt-2">
+                fine-grained token with <span className="text-[#8a7a72]">contents:read</span> permission
               </p>
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">
-                label <span className="text-[#333]">(optional)</span>
+              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+                label <span className="text-[#a09488]">(optional)</span>
               </label>
               <input
                 type="text"
                 value={labelInput}
                 onChange={(e) => setLabelInput(e.target.value)}
                 placeholder="e.g., personal, work"
-                className="w-full h-10 px-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#333] focus:outline-none focus:border-[#333] transition-colors"
+                className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
               />
             </div>
 
             {/* Collapsible PAT creation guide */}
-            <details className="mb-4 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] group">
-              <summary className="flex items-center gap-2 px-3 py-2.5 text-xs text-[#555] lowercase cursor-pointer hover:text-white transition-colors select-none">
+            <details className="mb-4 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] group">
+              <summary className="flex items-center gap-2 px-3 py-2.5 text-xs text-[#8a7a72] lowercase cursor-pointer hover:text-[#2e2522] transition-colors select-none">
                 <ExternalLink size={10} />
                 how to create a fine-grained token
               </summary>
-              <div className="px-3 pb-3 space-y-2 text-xs text-[#444] lowercase">
+              <div className="px-3 pb-3 space-y-2 text-xs text-[#a09488] lowercase">
                 <p>
                   1. go to{" "}
                   <a
                     href="https://github.com/settings/tokens?type=beta"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[#fa7315] hover:text-[#ff8c3a] underline"
+                    className="text-[#b58a73] hover:text-[#ff8c3a] underline"
                   >
                     github token settings
                   </a>
                 </p>
-                <p>2. click <span className="text-white">&quot;generate new token&quot;</span> &rarr; <span className="text-white">&quot;fine-grained&quot;</span></p>
-                <p>3. repository access &rarr; <span className="text-white">&quot;only select repositories&quot;</span></p>
-                <p>4. permissions &rarr; contents &rarr; <span className="text-[#fa7315]">read-only</span></p>
+                <p>2. click <span className="text-[#2e2522]">&quot;generate new token&quot;</span> &rarr; <span className="text-[#2e2522]">&quot;fine-grained&quot;</span></p>
+                <p>3. repository access &rarr; <span className="text-[#2e2522]">&quot;only select repositories&quot;</span></p>
+                <p>4. permissions &rarr; contents &rarr; <span className="text-[#b58a73]">read-only</span></p>
                 <p>5. generate &amp; paste above</p>
               </div>
             </details>
 
-            <div className="flex items-start gap-3 p-3 rounded-lg bg-white/[0.03] border border-[#1a1a1a] mb-6">
-              <Lock size={14} className="text-[#444] flex-shrink-0 mt-0.5" />
-              <p className="text-[11px] text-[#444] lowercase">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-white/[0.03] border border-[#dfcdbf] mb-6">
+              <Lock size={14} className="text-[#a09488] flex-shrink-0 mt-0.5" />
+              <p className="text-[11px] text-[#a09488] lowercase">
                 encrypted (aes) before storage. decrypted only in-memory at clone time. never logged or exposed.
               </p>
             </div>
@@ -905,14 +905,14 @@ export default function ApiKeysPage() {
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => { setShowTokenModal(false); setTokenError(null); }}
-                className="px-4 py-2 text-sm text-[#555] hover:text-white rounded-lg border border-[#1a1a1a] hover:border-[#333] transition-colors lowercase"
+                className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 cancel
               </button>
               <button
                 onClick={saveToken}
                 disabled={!tokenInput.trim() || tokenSaving}
-                className="px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {tokenSaving ? "validating..." : "connect"}
               </button>
@@ -927,21 +927,21 @@ export default function ApiKeysPage() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setShowHfTokenModal(false)}
           />
-          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a] shadow-2xl">
+          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">
                 {hasHfToken ? "update hugging face token" : "connect hugging face"}
               </h2>
               <button
                 onClick={() => setShowHfTokenModal(false)}
-                className="p-1 rounded hover:bg-[#1a1a1a] text-[#555] hover:text-white transition-colors"
+                className="p-1 rounded hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
               >
                 <X size={16} />
               </button>
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">
+              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                 access token
               </label>
               <input
@@ -949,55 +949,55 @@ export default function ApiKeysPage() {
                 value={hfTokenInput}
                 onChange={(e) => setHfTokenInput(e.target.value)}
                 placeholder="hf_••••••••••••••••••••"
-                className="w-full h-10 px-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#333] focus:outline-none focus:border-[#333] transition-colors font-mono"
+                className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors font-mono"
                 autoFocus
                 onKeyDown={(e) => e.key === "Enter" && saveHfToken()}
               />
-              <p className="text-[10px] text-[#333] mt-2">
-                token with <span className="text-[#555]">read</span> access to datasets
+              <p className="text-[10px] text-[#a09488] mt-2">
+                token with <span className="text-[#8a7a72]">read</span> access to datasets
               </p>
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">
-                label <span className="text-[#333]">(optional)</span>
+              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+                label <span className="text-[#a09488]">(optional)</span>
               </label>
               <input
                 type="text"
                 value={hfLabelInput}
                 onChange={(e) => setHfLabelInput(e.target.value)}
                 placeholder="e.g., personal, work"
-                className="w-full h-10 px-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#333] focus:outline-none focus:border-[#333] transition-colors"
+                className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
               />
             </div>
 
             {/* Token creation guide */}
-            <details className="mb-4 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] group">
-              <summary className="flex items-center gap-2 px-3 py-2.5 text-xs text-[#555] lowercase cursor-pointer hover:text-white transition-colors select-none">
+            <details className="mb-4 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] group">
+              <summary className="flex items-center gap-2 px-3 py-2.5 text-xs text-[#8a7a72] lowercase cursor-pointer hover:text-[#2e2522] transition-colors select-none">
                 <ExternalLink size={10} />
                 how to create an access token
               </summary>
-              <div className="px-3 pb-3 space-y-2 text-xs text-[#444] lowercase">
+              <div className="px-3 pb-3 space-y-2 text-xs text-[#a09488] lowercase">
                 <p>
                   1. go to{" "}
                   <a
                     href="https://huggingface.co/settings/tokens"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[#fa7315] hover:text-[#ff8c3a] underline"
+                    className="text-[#b58a73] hover:text-[#ff8c3a] underline"
                   >
                     huggingface token settings
                   </a>
                 </p>
-                <p>2. click <span className="text-white">&quot;create new token&quot;</span></p>
-                <p>3. select <span className="text-[#fa7315]">read</span> access</p>
+                <p>2. click <span className="text-[#2e2522]">&quot;create new token&quot;</span></p>
+                <p>3. select <span className="text-[#b58a73]">read</span> access</p>
                 <p>4. generate &amp; paste above</p>
               </div>
             </details>
 
-            <div className="flex items-start gap-3 p-3 rounded-lg bg-white/[0.03] border border-[#1a1a1a] mb-6">
-              <Lock size={14} className="text-[#444] flex-shrink-0 mt-0.5" />
-              <p className="text-[11px] text-[#444] lowercase">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-white/[0.03] border border-[#dfcdbf] mb-6">
+              <Lock size={14} className="text-[#a09488] flex-shrink-0 mt-0.5" />
+              <p className="text-[11px] text-[#a09488] lowercase">
                 encrypted (aes) before storage. decrypted only in-memory during indexing. never logged or exposed.
               </p>
             </div>
@@ -1011,14 +1011,14 @@ export default function ApiKeysPage() {
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => { setShowHfTokenModal(false); setHfTokenError(null); }}
-                className="px-4 py-2 text-sm text-[#555] hover:text-white rounded-lg border border-[#1a1a1a] hover:border-[#333] transition-colors lowercase"
+                className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 cancel
               </button>
               <button
                 onClick={saveHfToken}
                 disabled={!hfTokenInput.trim() || hfTokenSaving}
-                className="px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {hfTokenSaving ? "validating..." : "connect"}
               </button>

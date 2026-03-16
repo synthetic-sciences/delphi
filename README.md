@@ -1,4 +1,4 @@
-# Delphi (synsc-context)
+# Synsc-Delphi
 
 > **Open-source MCP Server for AI Agents** — Index code repositories, research papers, and HuggingFace datasets. Runs fully local.
 

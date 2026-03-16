@@ -179,11 +179,11 @@ export default function PapersPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-medium lowercase mb-1">papers</h1>
-          <p className="text-sm text-[#555] lowercase">research papers indexed via api & mcp</p>
+          <p className="text-sm text-[#8a7a72] lowercase">research papers indexed via api & mcp</p>
         </div>
         <button
           onClick={() => { resetModal(); setShowAddModal(true); }}
-          className="flex items-center gap-2 px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
         >
           <Plus size={14} />
           add paper
@@ -191,31 +191,31 @@ export default function PapersPage() {
       </div>
 
       {/* Card Container */}
-      <div className="rounded-xl bg-[#0f0f0f] border border-[#1a1a1a] overflow-hidden">
+      <div className="rounded-xl bg-[#faf5ef] border border-[#dfcdbf] overflow-hidden">
         {/* Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-[#1a1a1a]">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-[#dfcdbf]">
           {/* Search */}
           <div className="relative flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#444]" />
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a09488]" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="search papers..."
-              className="w-full h-9 pl-9 pr-4 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#444] focus:outline-none focus:border-[#333] lowercase transition-colors"
+              className="w-full h-9 pl-9 pr-4 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] lowercase transition-colors"
             />
           </div>
 
           {/* Filter buttons */}
-          <div className="flex items-center gap-1 p-1 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a]">
+          <div className="flex items-center gap-1 p-1 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf]">
             {(['all', 'arxiv', 'pdf'] as const).map((f) => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
                 className={`px-3 py-1.5 rounded text-xs lowercase transition-colors ${
                   filter === f
-                    ? 'bg-[#1a1a1a] text-white'
-                    : 'text-[#555] hover:text-white'
+                    ? 'bg-[#dfcdbf] text-[#2e2522]'
+                    : 'text-[#8a7a72] hover:text-[#2e2522]'
                 }`}
               >
                 {f === 'all' ? 'all' : f}
@@ -227,53 +227,53 @@ export default function PapersPage() {
         {/* Papers List */}
         {loading ? (
           <div className="p-12 text-center">
-            <RefreshCw size={24} className="text-[#333] animate-spin mx-auto mb-3" />
-            <p className="text-sm text-[#444] lowercase">loading papers...</p>
+            <RefreshCw size={24} className="text-[#a09488] animate-spin mx-auto mb-3" />
+            <p className="text-sm text-[#a09488] lowercase">loading papers...</p>
           </div>
         ) : filteredPapers.length === 0 ? (
           <div className="p-12 text-center">
             <FileText size={32} className="text-[#222] mx-auto mb-3" />
-            <h3 className="text-sm text-[#555] lowercase mb-1">no papers yet</h3>
-            <p className="text-xs text-[#333] lowercase mb-4">
+            <h3 className="text-sm text-[#8a7a72] lowercase mb-1">no papers yet</h3>
+            <p className="text-xs text-[#a09488] lowercase mb-4">
               add research papers from arxiv or upload pdfs to start using context.
             </p>
             <button
               onClick={() => { resetModal(); setShowAddModal(true); }}
-              className="px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
+              className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
             >
               add your first paper
             </button>
           </div>
         ) : (
-          <div className="divide-y divide-[#1a1a1a]">
+          <div className="divide-y divide-[#dfcdbf]">
             {filteredPapers.map((paper) => (
               <div
                 key={paper.paper_id}
-                className="flex items-center gap-4 px-4 py-4 hover:bg-[#111] transition-colors group"
+                className="flex items-center gap-4 px-4 py-4 hover:bg-[#efe7dd] transition-colors group"
               >
                 {/* Icon */}
                 {(() => {
                   const isArxiv = !!paper.arxiv_id;
                   return (
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                      isArxiv ? 'bg-[#fa7315]/10' : 'bg-[#1a1a1a]'
+                      isArxiv ? 'bg-[#b58a73]/10' : 'bg-[#dfcdbf]'
                     }`}>
-                      <FileText size={18} className={isArxiv ? 'text-[#fa7315]' : 'text-[#555]'} />
+                      <FileText size={18} className={isArxiv ? 'text-[#b58a73]' : 'text-[#8a7a72]'} />
                     </div>
                   );
                 })()}
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-white truncate mb-1">
+                  <div className="text-sm font-medium text-[#2e2522] truncate mb-1">
                     {paper.title || paper.arxiv_id || 'Untitled Paper'}
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-[#444]">
+                  <div className="flex items-center gap-3 text-xs text-[#a09488]">
                     {(() => {
                       const isArxiv = !!paper.arxiv_id;
                       return (
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase ${
-                          isArxiv ? 'bg-[#fa7315]/20 text-[#fa7315]' : 'bg-[#1a1a1a] text-[#666]'
+                          isArxiv ? 'bg-[#b58a73]/20 text-[#b58a73]' : 'bg-[#dfcdbf] text-[#8a7a72]'
                         }`}>
                           {isArxiv ? 'arxiv' : 'pdf'}
                         </span>
@@ -290,7 +290,7 @@ export default function PapersPage() {
                 </div>
 
                 {/* Date */}
-                <span className="text-xs text-[#333] flex-shrink-0">
+                <span className="text-xs text-[#a09488] flex-shrink-0">
                   {paper.created_at ? formatDate(paper.created_at) : '-'}
                 </span>
 
@@ -301,7 +301,7 @@ export default function PapersPage() {
                       href={`https://arxiv.org/abs/${paper.arxiv_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="p-2 rounded-lg hover:bg-[#1a1a1a] text-[#444] hover:text-white transition-colors"
+                      className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#2e2522] transition-colors"
                       title="View on arXiv"
                     >
                       <ExternalLink size={14} />
@@ -310,7 +310,7 @@ export default function PapersPage() {
                   <button
                     onClick={() => removePaper(paper.paper_id)}
                     disabled={actionLoading === paper.paper_id}
-                    className="p-2 rounded-lg hover:bg-[#1a1a1a] text-[#444] hover:text-red-500 transition-colors disabled:opacity-50"
+                    className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Remove paper"
                   >
                     <Trash2 size={14} />
@@ -326,23 +326,23 @@ export default function PapersPage() {
       {isMinimized && isIndexing && (
         <button
           onClick={() => { setIsMinimized(false); setShowAddModal(true); }}
-          className="fixed bottom-6 right-6 z-50 flex items-center gap-3 pl-4 pr-3 py-3 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a] shadow-2xl shadow-black/40 hover:border-[#2a2a2a] transition-all group cursor-pointer max-w-xs"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-3 pl-4 pr-3 py-3 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl shadow-black/10 hover:border-[#c5b5a5] transition-all group cursor-pointer max-w-xs"
         >
           {/* Animated spinner */}
-          <RefreshCw size={16} className="text-[#fa7315] animate-spin flex-shrink-0" />
+          <RefreshCw size={16} className="text-[#b58a73] animate-spin flex-shrink-0" />
 
           {/* Info */}
           <div className="flex-1 min-w-0 text-left">
-            <p className="text-xs font-medium text-white truncate lowercase">
+            <p className="text-xs font-medium text-[#2e2522] truncate lowercase">
               indexing paper...
             </p>
-            <p className="text-[10px] text-[#444] truncate lowercase">
+            <p className="text-[10px] text-[#a09488] truncate lowercase">
               {indexingLabel}
             </p>
           </div>
 
           {/* Expand icon */}
-          <Maximize2 size={14} className="text-[#333] group-hover:text-[#fa7315] transition-colors flex-shrink-0" />
+          <Maximize2 size={14} className="text-[#a09488] group-hover:text-[#b58a73] transition-colors flex-shrink-0" />
         </button>
       )}
 
@@ -361,7 +361,7 @@ export default function PapersPage() {
               }
             }}
           />
-          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#0f0f0f] border border-[#1a1a1a] shadow-2xl">
+          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">add paper</h2>
               <div className="flex items-center gap-1">
@@ -369,7 +369,7 @@ export default function PapersPage() {
                 {isIndexing && (
                   <button
                     onClick={() => { setIsMinimized(true); setShowAddModal(false); }}
-                    className="p-1.5 rounded-lg hover:bg-[#1a1a1a] text-[#555] hover:text-[#fa7315] transition-colors"
+                    className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#b58a73] transition-colors"
                     title="Minimize — indexing continues in the background"
                   >
                     <Minimize2 size={15} />
@@ -379,7 +379,7 @@ export default function PapersPage() {
                 {!isIndexing && (
                   <button
                     onClick={() => { setShowAddModal(false); resetModal(); }}
-                    className="p-1.5 rounded-lg hover:bg-[#1a1a1a] text-[#555] hover:text-white transition-colors"
+                    className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
                   >
                     <X size={15} />
                   </button>
@@ -396,8 +396,8 @@ export default function PapersPage() {
                     onClick={() => setSourceType('arxiv')}
                     className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium transition-colors ${
                       sourceType === 'arxiv'
-                        ? 'bg-[#fa7315]/10 border-[#fa7315]/30 text-[#fa7315]'
-                        : 'bg-[#0a0a0a] border-[#1a1a1a] text-[#555] hover:text-white hover:border-[#333]'
+                        ? 'bg-[#b58a73]/10 border-[#b58a73]/30 text-[#b58a73]'
+                        : 'bg-[#f7f0e8] border-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] hover:border-[#c5b5a5]'
                     }`}
                   >
                     <LinkIcon size={16} />
@@ -407,8 +407,8 @@ export default function PapersPage() {
                     onClick={() => setSourceType('pdf')}
                     className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium transition-colors ${
                       sourceType === 'pdf'
-                        ? 'bg-[#fa7315]/10 border-[#fa7315]/30 text-[#fa7315]'
-                        : 'bg-[#0a0a0a] border-[#1a1a1a] text-[#555] hover:text-white hover:border-[#333]'
+                        ? 'bg-[#b58a73]/10 border-[#b58a73]/30 text-[#b58a73]'
+                        : 'bg-[#f7f0e8] border-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] hover:border-[#c5b5a5]'
                     }`}
                   >
                     <Upload size={16} />
@@ -418,16 +418,16 @@ export default function PapersPage() {
 
                 {sourceType === 'arxiv' ? (
                   <div className="mb-6">
-                    <label className="block text-xs text-[#555] uppercase tracking-wider mb-2">arxiv url or id</label>
+                    <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">arxiv url or id</label>
                     <input
                       type="text"
                       value={arxivUrl}
                       onChange={(e) => setArxivUrl(e.target.value)}
                       placeholder="e.g., 2301.07041 or https://arxiv.org/abs/2301.07041"
-                      className="w-full h-10 px-3 rounded-lg bg-[#0a0a0a] border border-[#1a1a1a] text-sm text-white placeholder-[#333] focus:outline-none focus:border-[#333] transition-colors"
+                      className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
                       autoFocus
                     />
-                    <p className="text-[10px] text-[#333] mt-2">paste an arxiv url or paper id</p>
+                    <p className="text-[10px] text-[#a09488] mt-2">paste an arxiv url or paper id</p>
                   </div>
                 ) : (
                   <div className="mb-6">
@@ -451,25 +451,25 @@ export default function PapersPage() {
                       }}
                       className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
                         selectedFile
-                          ? 'border-[#fa7315]/50 bg-[#fa7315]/5'
-                          : 'border-[#1a1a1a] hover:border-[#333]'
+                          ? 'border-[#b58a73]/50 bg-[#b58a73]/5'
+                          : 'border-[#dfcdbf] hover:border-[#c5b5a5]'
                       }`}
                     >
                       {selectedFile ? (
                         <>
-                          <FileText size={24} className="text-[#fa7315] mx-auto mb-3" />
-                          <p className="text-sm text-white mb-1 truncate max-w-full px-2" title={selectedFile.name}>{selectedFile.name}</p>
-                          <p className="text-xs text-[#555]">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                          <FileText size={24} className="text-[#b58a73] mx-auto mb-3" />
+                          <p className="text-sm text-[#2e2522] mb-1 truncate max-w-full px-2" title={selectedFile.name}>{selectedFile.name}</p>
+                          <p className="text-xs text-[#8a7a72]">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
                         </>
                       ) : (
                         <>
-                          <Upload size={24} className="text-[#333] mx-auto mb-3" />
-                          <p className="text-sm text-[#555] mb-1">drag & drop pdf here</p>
-                          <p className="text-xs text-[#333]">or click to browse</p>
+                          <Upload size={24} className="text-[#a09488] mx-auto mb-3" />
+                          <p className="text-sm text-[#8a7a72] mb-1">drag & drop pdf here</p>
+                          <p className="text-xs text-[#a09488]">or click to browse</p>
                         </>
                       )}
                     </div>
-                    <p className="text-[10px] text-[#333] mt-2">max file size: 50mb</p>
+                    <p className="text-[10px] text-[#a09488] mt-2">max file size: 50mb</p>
                   </div>
                 )}
               </>
@@ -479,25 +479,25 @@ export default function PapersPage() {
             {isIndexing && (
               <div className="mb-6">
                 <div className="text-center mb-4">
-                  <RefreshCw size={24} className="text-[#fa7315] animate-spin mx-auto mb-3" />
-                  <p className="text-sm font-medium text-white lowercase mb-1">
+                  <RefreshCw size={24} className="text-[#b58a73] animate-spin mx-auto mb-3" />
+                  <p className="text-sm font-medium text-[#2e2522] lowercase mb-1">
                     indexing paper...
                   </p>
-                  <p className="text-xs text-[#555] lowercase">
+                  <p className="text-xs text-[#8a7a72] lowercase">
                     {sourceType === 'arxiv' ? `fetching & processing ${indexingLabel}` : `processing ${indexingLabel}`}
                   </p>
                 </div>
 
                 {/* Indeterminate progress bar */}
-                <div className="h-2 bg-[#1a1a1a] rounded-full overflow-hidden mb-2">
-                  <div className="h-full bg-[#fa7315] rounded-full animate-pulse" style={{ width: '60%' }} />
+                <div className="h-2 bg-[#dfcdbf] rounded-full overflow-hidden mb-2">
+                  <div className="h-full bg-[#b58a73] rounded-full animate-pulse" style={{ width: '60%' }} />
                 </div>
-                <p className="text-[10px] text-[#333] text-center lowercase">
+                <p className="text-[10px] text-[#a09488] text-center lowercase">
                   this may take 1-2 minutes for embedding generation
                 </p>
 
                 {/* Minimize hint */}
-                <p className="mt-4 text-[10px] text-[#333] text-center lowercase">
+                <p className="mt-4 text-[10px] text-[#a09488] text-center lowercase">
                   tip: click minimize or the backdrop to continue browsing while indexing
                 </p>
               </div>
@@ -522,14 +522,14 @@ export default function PapersPage() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={() => { setShowAddModal(false); resetModal(); }}
-                  className="px-4 py-2 text-sm text-[#555] hover:text-white rounded-lg border border-[#1a1a1a] hover:border-[#333] transition-colors lowercase"
+                  className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
                 >
                   cancel
                 </button>
                 <button
                   onClick={indexPaper}
                   disabled={(sourceType === 'arxiv' ? !arxivUrl.trim() : !selectedFile)}
-                  className="px-4 py-2 bg-[#fa7315] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   index paper
                 </button>

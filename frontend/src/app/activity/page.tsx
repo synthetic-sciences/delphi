@@ -12,7 +12,7 @@ import { apiGet } from "@/lib/api";
 // Action configuration with icons and colors
 const actionConfig: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
   // Code Context
-  'index_repository': { icon: <FileDown size={16} />, label: 'Index Repo', color: '#f97316' },
+  'index_repository': { icon: <FileDown size={16} />, label: 'Index Repo', color: '#b58a73' },
   'delete_repository': { icon: <Trash2 size={16} />, label: 'Delete Repo', color: '#ef4444' },
   'search_code': { icon: <Search size={16} />, label: 'Search Code', color: '#60a5fa' },
   'search_symbols': { icon: <Code size={16} />, label: 'Search Symbols', color: '#84cc16' },
@@ -20,8 +20,8 @@ const actionConfig: Record<string, { icon: React.ReactNode; label: string; color
   'get_file': { icon: <FileText size={16} />, label: 'Get File', color: '#22c55e' },
   
   // Paper Context
-  'index': { icon: <FileDown size={16} />, label: 'Index Paper', color: '#f97316' },
-  'index_paper': { icon: <FileDown size={16} />, label: 'Index Paper', color: '#f97316' },
+  'index': { icon: <FileDown size={16} />, label: 'Index Paper', color: '#b58a73' },
+  'index_paper': { icon: <FileDown size={16} />, label: 'Index Paper', color: '#b58a73' },
   'delete_paper': { icon: <Trash2 size={16} />, label: 'Delete Paper', color: '#ef4444' },
   'search': { icon: <Search size={16} />, label: 'Search', color: '#60a5fa' },
   'search_papers': { icon: <Search size={16} />, label: 'Search Papers', color: '#60a5fa' },
@@ -179,27 +179,27 @@ export default function ActivityPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-medium lowercase mb-1">activity</h1>
-          <p className="text-sm text-[#555] lowercase">track your api usage and tool calls</p>
+          <p className="text-sm text-[#8a7a72] lowercase">track your api usage and tool calls</p>
         </div>
       </div>
 
       {/* Stats Row */}
       <div className="grid grid-cols-4 gap-3 mb-6">
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <p className="text-[11px] text-[#666] uppercase tracking-wider mb-1">total queries</p>
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+          <p className="text-[11px] text-[#8a7a72] uppercase tracking-wider mb-1">total queries</p>
           <p className="text-2xl font-semibold tabular-nums">{stats.total}</p>
         </div>
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <p className="text-[11px] text-[#666] uppercase tracking-wider mb-1">success rate</p>
-          <p className="text-2xl font-semibold tabular-nums">{stats.successRate}<span className="text-sm text-[#555]">%</span></p>
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+          <p className="text-[11px] text-[#8a7a72] uppercase tracking-wider mb-1">success rate</p>
+          <p className="text-2xl font-semibold tabular-nums">{stats.successRate}<span className="text-sm text-[#8a7a72]">%</span></p>
         </div>
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <p className="text-[11px] text-[#666] uppercase tracking-wider mb-1">avg response</p>
-          <p className="text-2xl font-semibold tabular-nums">{stats.avgResponseTime.toFixed(1)}<span className="text-sm text-[#555]">s</span></p>
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+          <p className="text-[11px] text-[#8a7a72] uppercase tracking-wider mb-1">avg response</p>
+          <p className="text-2xl font-semibold tabular-nums">{stats.avgResponseTime.toFixed(1)}<span className="text-sm text-[#8a7a72]">s</span></p>
         </div>
-        <div className="p-4 rounded-xl bg-[#0f0f0f] border border-[#1a1a1a]">
-          <p className="text-[11px] text-[#666] uppercase tracking-wider mb-1">period</p>
-          <p className="text-2xl font-semibold tabular-nums">{timeFilter.replace('h', '').replace('d', '')}<span className="text-sm text-[#555]">{timeFilter.includes('h') ? 'h' : 'd'}</span></p>
+        <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
+          <p className="text-[11px] text-[#8a7a72] uppercase tracking-wider mb-1">period</p>
+          <p className="text-2xl font-semibold tabular-nums">{timeFilter.replace('h', '').replace('d', '')}<span className="text-sm text-[#8a7a72]">{timeFilter.includes('h') ? 'h' : 'd'}</span></p>
         </div>
       </div>
 
@@ -207,23 +207,23 @@ export default function ActivityPage() {
       <div className="flex items-center gap-3 mb-4">
         {/* Search */}
         <div className="relative flex-1">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#444]" />
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a09488]" />
           <input 
             type="text" 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="search activity..." 
-            className="w-full h-10 pl-9 pr-4 rounded-lg bg-[#0f0f0f] border border-[#1a1a1a] text-sm text-white placeholder-[#444] focus:outline-none focus:border-[#333] lowercase transition-colors" 
+            className="w-full h-10 pl-9 pr-4 rounded-lg bg-[#faf5ef] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] lowercase transition-colors" 
           />
         </div>
 
         {/* Type Filter */}
         <div className="relative">
-          <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#444] pointer-events-none" />
+          <Filter size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a09488] pointer-events-none" />
           <select 
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
-            className="h-10 pl-9 pr-8 rounded-lg bg-[#0f0f0f] border border-[#1a1a1a] text-sm text-white focus:outline-none focus:border-[#333] lowercase appearance-none cursor-pointer transition-colors"
+            className="h-10 pl-9 pr-8 rounded-lg bg-[#faf5ef] border border-[#dfcdbf] text-sm text-[#2e2522] focus:outline-none focus:border-[#c5b5a5] lowercase appearance-none cursor-pointer transition-colors"
           >
             {typeFilters.map((item, i) => (
               'value' in item ? (
@@ -240,15 +240,15 @@ export default function ActivityPage() {
         </div>
 
         {/* Time Filter */}
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-[#0f0f0f] border border-[#1a1a1a]">
+        <div className="flex items-center gap-1 p-1 rounded-lg bg-[#faf5ef] border border-[#dfcdbf]">
           {timeFilters.map((t) => (
             <button
               key={t}
               onClick={() => setTimeFilter(t)}
               className={`px-3 py-1.5 rounded text-xs lowercase transition-colors ${
                 timeFilter === t 
-                  ? 'bg-[#fa7315] text-black font-medium' 
-                  : 'text-[#555] hover:text-white'
+                  ? 'bg-[#b58a73] text-black font-medium' 
+                  : 'text-[#8a7a72] hover:text-[#2e2522]'
               }`}
             >
               {t}
@@ -258,20 +258,20 @@ export default function ActivityPage() {
       </div>
 
       {/* Activity List */}
-      <div className="rounded-xl bg-[#0f0f0f] border border-[#1a1a1a] overflow-hidden">
+      <div className="rounded-xl bg-[#faf5ef] border border-[#dfcdbf] overflow-hidden">
         {loading ? (
           <div className="p-12 text-center">
-            <RefreshCw size={24} className="text-[#333] animate-spin mx-auto mb-3" />
-            <p className="text-sm text-[#444] lowercase">loading activity...</p>
+            <RefreshCw size={24} className="text-[#a09488] animate-spin mx-auto mb-3" />
+            <p className="text-sm text-[#a09488] lowercase">loading activity...</p>
           </div>
         ) : filteredActivities.length === 0 ? (
           <div className="p-12 text-center">
             <ActivityIcon size={32} className="text-[#222] mx-auto mb-3" />
-            <h3 className="text-sm text-[#555] lowercase mb-1">no activity yet</h3>
-            <p className="text-xs text-[#333] lowercase">your api usage will appear here once you start making requests.</p>
+            <h3 className="text-sm text-[#8a7a72] lowercase mb-1">no activity yet</h3>
+            <p className="text-xs text-[#a09488] lowercase">your api usage will appear here once you start making requests.</p>
           </div>
         ) : (
-          <div className="divide-y divide-[#1a1a1a]">
+          <div className="divide-y divide-[#dfcdbf]">
             {filteredActivities.map((activity) => {
               const config = actionConfig[activity.action] || { 
                 icon: <Zap size={16} />, 
@@ -284,7 +284,7 @@ export default function ActivityPage() {
               return (
                 <div 
                   key={activity.id} 
-                  className="flex items-center gap-4 px-4 py-3 hover:bg-[#111] transition-colors cursor-pointer group"
+                  className="flex items-center gap-4 px-4 py-3 hover:bg-[#efe7dd] transition-colors cursor-pointer group"
                 >
                   {/* Icon */}
                   <div 
@@ -297,30 +297,30 @@ export default function ActivityPage() {
                   {/* Content */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-sm font-medium text-white">{config.label}</span>
+                      <span className="text-sm font-medium text-[#2e2522]">{config.label}</span>
                       {isCached && (
                         <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-green-500/20 text-green-400">
                           cached
                         </span>
                       )}
                       {activity.results_count !== undefined && (
-                        <span className="text-[10px] text-[#444]">
+                        <span className="text-[10px] text-[#a09488]">
                           {activity.results_count} results
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-[#555] truncate lowercase">{subtitle}</p>
+                    <p className="text-xs text-[#8a7a72] truncate lowercase">{subtitle}</p>
                   </div>
                   
                   {/* Duration */}
                   {(activity.duration_ms || activity.details?.response_time_ms) && (
-                    <span className="text-[10px] text-[#333] tabular-nums flex-shrink-0">
+                    <span className="text-[10px] text-[#a09488] tabular-nums flex-shrink-0">
                       {((activity.duration_ms || activity.details?.response_time_ms || 0) / 1000).toFixed(2)}s
                     </span>
                   )}
                   
                   {/* Time */}
-                  <span className="text-xs text-[#333] flex-shrink-0 w-12 text-right">
+                  <span className="text-xs text-[#a09488] flex-shrink-0 w-12 text-right">
                     {formatTimeAgo(activity.created_at)}
                   </span>
                 </div>

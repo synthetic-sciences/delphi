@@ -1,0 +1,7 @@
+This file tracks which commit of synsc-context (upstream) this branch is synced to.
+Update this after each sync to make diffing easier.
+
+upstream: synsc-context
+last_synced_commit: 747643f
+last_synced_message: perf: add HNSW index, query embedding cache, and search timing
+last_synced_date: 2026-03-16

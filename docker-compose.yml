@@ -20,19 +20,16 @@ services:
     build:
       context: .
       target: api
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://synsc:synsc@postgres:5432/synsc
-      SERVER_SECRET: ${SERVER_SECRET:?Set SERVER_SECRET in .env}
-      SYSTEM_PASSWORD: ${SYSTEM_PASSWORD:-}
-      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
-      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
-      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
-      FRONTEND_URL: http://localhost:3000
       SYNSC_API_HOST: "0.0.0.0"
       SYNSC_API_PORT: "8742"
+      FRONTEND_URL: http://localhost:3000
     ports:
       - "8742:8742"
 
@@ -40,6 +37,8 @@ services:
     build:
       context: .
       target: worker
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
