@@ -781,15 +781,15 @@ export default function ApiKeysPage() {
               </button>
             </div>
             
-            <div className="p-4 rounded-xl bg-[#f7f0e8] border border-[#dfcdbf] mb-4">
-              <code className="block text-sm font-mono text-[#b58a73] break-all select-all">
+            <div className="p-4 rounded-xl bg-[#efe7dd] border border-[#dfcdbf] mb-4">
+              <code className="block text-sm font-mono text-[#2e2522] break-all select-all">
                 {revealedKey}
               </code>
             </div>
-            
+
             <div className="flex items-start gap-3 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 mb-6">
-              <AlertTriangle size={16} className="text-yellow-500 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-yellow-200/80">
+              <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-yellow-800">
                 make sure to copy your api key now. you won&apos;t be able to see it again!
               </p>
             </div>
