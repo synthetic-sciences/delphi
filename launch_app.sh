@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # =============================================================================
-# Delphi - Local Development Launcher
+# Delphi — Local Development Launcher
 # =============================================================================
-# Starts PostgreSQL (Docker), backend API, frontend, and background worker
+# One command to start everything: PostgreSQL, backend, frontend, worker.
 #
 # Usage:
 #   ./launch_app.sh              # Start everything
-#   ./launch_app.sh --no-worker  # Don't start background worker
-#   ./launch_app.sh --no-frontend # Don't start frontend
+#   ./launch_app.sh --no-worker  # Skip background worker
+#   ./launch_app.sh --no-frontend # Skip frontend
 #   ./launch_app.sh --docker     # Use docker-compose for everything
 #   ./launch_app.sh --help       # Show all options
 # =============================================================================
@@ -23,6 +23,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 RED='\033[0;31m'
+ORANGE='\033[0;33m'
+BOLD='\033[1m'
+DIM='\033[2m'
 NC='\033[0m'
 
 # Defaults
@@ -62,6 +65,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Banner
+echo ""
+echo -e "${ORANGE}   ███████╗██╗   ██╗███╗   ██╗███████╗ ██████╗${NC}"
+echo -e "${ORANGE}   ██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝██╔════╝${NC}"
+echo -e "${ORANGE}   ███████╗ ╚████╔╝ ██╔██╗ ██║███████╗██║     ${NC}"
+echo -e "${ORANGE}   ╚════██║  ╚██╔╝  ██║╚██╗██║╚════██║██║     ${NC}"
+echo -e "${ORANGE}   ███████║   ██║   ██║ ╚████║███████║╚██████╗${NC}"
+echo -e "${ORANGE}   ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚══════╝ ╚═════╝${NC}"
+echo -e "${DIM}   synsc delphi — open-source mcp server for ai agents${NC}"
+echo ""
+
 # Cleanup function
 PIDS=()
 cleanup() {
@@ -83,10 +97,15 @@ fi
 
 # Load .env if exists
 if [ -f .env ]; then
-    echo -e "${CYAN}Loading .env file...${NC}"
+    echo -e "${DIM}Loading .env...${NC}"
     set -a
     source .env
     set +a
+else
+    echo -e "${YELLOW}No .env file found. Copy env.example to .env and configure it:${NC}"
+    echo -e "${DIM}  cp env.example .env${NC}"
+    echo ""
+    echo -e "${DIM}Loading defaults...${NC}"
 fi
 
 # Set defaults
@@ -94,12 +113,27 @@ export DATABASE_URL="${DATABASE_URL:-postgresql://synsc:synsc@localhost:5432/syn
 export SYNSC_API_PORT="${SYNSC_API_PORT:-8742}"
 export SYNSC_REQUIRE_AUTH="${SYNSC_REQUIRE_AUTH:-false}"
 
-# Check if PostgreSQL is running
-echo -e "${CYAN}Checking PostgreSQL connection...${NC}"
+# ── Dependencies ─────────────────────────────────────────────────────────────
+
+# Check Python deps
+if [ ! -d ".venv" ] || ! uv run python -c "import synsc" 2>/dev/null; then
+    echo -e "${CYAN}Installing Python dependencies...${NC}"
+    uv sync
+fi
+
+# Check frontend deps
+if [ "$START_FRONTEND" = true ] && [ -d "frontend" ] && [ ! -d "frontend/node_modules" ]; then
+    echo -e "${CYAN}Installing frontend dependencies...${NC}"
+    cd frontend && npm install && cd "$SCRIPT_DIR"
+fi
+
+# ── PostgreSQL ───────────────────────────────────────────────────────────────
+
+echo -e "${DIM}Checking PostgreSQL...${NC}"
 if ! pg_isready -h localhost -p 5432 -q 2>/dev/null; then
     echo -e "${YELLOW}PostgreSQL not running locally. Starting via Docker...${NC}"
     docker compose up -d postgres
-    echo -e "${CYAN}Waiting for PostgreSQL to be ready...${NC}"
+    echo -e "${DIM}Waiting for PostgreSQL...${NC}"
     for i in {1..30}; do
         if pg_isready -h localhost -p 5432 -q 2>/dev/null; then
             break
@@ -107,47 +141,42 @@ if ! pg_isready -h localhost -p 5432 -q 2>/dev/null; then
         sleep 1
     done
 fi
+echo -e "${GREEN}PostgreSQL ready.${NC}"
 
-echo -e "${GREEN}PostgreSQL is ready.${NC}"
+# ── Services ─────────────────────────────────────────────────────────────────
 
-# Start backend API
-echo -e "${CYAN}Starting backend API on port ${SYNSC_API_PORT}...${NC}"
+echo -e "${CYAN}Starting API server on port ${SYNSC_API_PORT}...${NC}"
 uv run synsc-context-http &
 PIDS+=($!)
 
-# Start worker
 if [ "$START_WORKER" = true ]; then
     echo -e "${CYAN}Starting background worker...${NC}"
     uv run synsc-context-worker &
     PIDS+=($!)
 fi
 
-# Start frontend
-if [ "$START_FRONTEND" = true ]; then
-    if [ -d "frontend" ]; then
-        FRONTEND_PORT="${FRONTEND_PORT:-3000}"
-        API_PORT="${SYNSC_API_PORT:-8742}"
-        echo -e "${CYAN}Starting frontend on port ${FRONTEND_PORT}...${NC}"
-        cd frontend
-        NEXT_PUBLIC_API_URL="http://localhost:${API_PORT}" PORT="$FRONTEND_PORT" npm run dev &
-        PIDS+=($!)
-        cd "$SCRIPT_DIR"
-    else
-        echo -e "${YELLOW}No frontend directory found, skipping.${NC}"
-    fi
+if [ "$START_FRONTEND" = true ] && [ -d "frontend" ]; then
+    FRONTEND_PORT="${FRONTEND_PORT:-3000}"
+    API_PORT="${SYNSC_API_PORT:-8742}"
+    echo -e "${CYAN}Starting frontend on port ${FRONTEND_PORT}...${NC}"
+    cd frontend
+    NEXT_PUBLIC_API_URL="http://localhost:${API_PORT}" PORT="$FRONTEND_PORT" npm run dev &
+    PIDS+=($!)
+    cd "$SCRIPT_DIR"
 fi
 
-echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  Delphi is running!${NC}"
-echo -e "${GREEN}========================================${NC}"
-echo -e "  API:      ${CYAN}http://localhost:${SYNSC_API_PORT}${NC}"
-if [ "$START_FRONTEND" = true ]; then
-echo -e "  Frontend: ${CYAN}http://localhost:${FRONTEND_PORT:-3000}${NC}"
-fi
-echo -e "  Health:   ${CYAN}http://localhost:${SYNSC_API_PORT}/health${NC}"
-echo ""
-echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
+# ── Ready ────────────────────────────────────────────────────────────────────
 
-# Wait for all background processes
+echo ""
+echo -e "${GREEN}  ──────────────────────────────────────${NC}"
+echo -e "${GREEN}  delphi is running${NC}"
+echo -e "${GREEN}  ──────────────────────────────────────${NC}"
+echo -e "  ${DIM}api${NC}       ${CYAN}http://localhost:${SYNSC_API_PORT}${NC}"
+if [ "$START_FRONTEND" = true ]; then
+echo -e "  ${DIM}dashboard${NC} ${CYAN}http://localhost:${FRONTEND_PORT:-3000}${NC}"
+fi
+echo -e "  ${DIM}health${NC}    ${CYAN}http://localhost:${SYNSC_API_PORT}/health${NC}"
+echo ""
+echo -e "${DIM}  press ctrl+c to stop all services${NC}"
+
 wait

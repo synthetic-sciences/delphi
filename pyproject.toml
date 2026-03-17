@@ -3,7 +3,7 @@ name = "synsc-delphi"
 version = "2.0.0"
 description = "Open-source MCP server for indexing GitHub repositories, research papers, and HuggingFace datasets — runs fully local."
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "InkVell" }
