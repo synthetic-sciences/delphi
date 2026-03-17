@@ -657,7 +657,7 @@ export default function RepositoriesPage() {
       {showIndexModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#2e2522]/55"
             onClick={() => {
               if (activeJob?.isIndexing) {
                 minimizeJob(activeJob.id);
@@ -754,7 +754,7 @@ export default function RepositoriesPage() {
                                 </span>
                                 <span className="text-sm text-[#2e2522] truncate flex-1">{repo.full_name}</span>
                                 {repo.private && (
-                                  <span className="px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase tracking-wider bg-yellow-500/15 text-yellow-500 flex-shrink-0">
+                                  <span className="px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase tracking-wider bg-[#efe7dd] text-[#8a7a72] flex-shrink-0">
                                     private
                                   </span>
                                 )}
@@ -883,10 +883,10 @@ export default function RepositoriesPage() {
                 </div>
 
                 {/* Progress bar */}
-                <div className="h-2 bg-[#dfcdbf] rounded-full overflow-hidden mb-2">
+                <div className="h-1.5 bg-[#dfcdbf] rounded-full overflow-hidden mb-2">
                   <div
-                    className="h-full bg-[#b58a73] rounded-full transition-all duration-300"
-                    style={{ width: `${Math.max(0, Math.min(activeJob.progress.progress, 100))}%` }}
+                    className="h-full bg-[#b58a73] rounded-full transition-all duration-500"
+                    style={{ width: `${Math.max(2, Math.min(activeJob.progress.progress, 100))}%` }}
                   />
                 </div>
                 <p className="text-[10px] text-[#a09488] text-center tabular-nums">
@@ -914,7 +914,7 @@ export default function RepositoriesPage() {
 
             {/* Success message */}
             {activeJob?.success && (
-              <div className="mb-6 p-4 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-400 lowercase">
+              <div className="mb-6 p-4 rounded-lg bg-[#faebd5] border border-[#e08840]/30 border-l-2 border-l-[#d06e28] text-sm text-[#9a3f10] lowercase">
                 {activeJob.success}
               </div>
             )}
