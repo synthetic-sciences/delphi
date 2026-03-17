@@ -185,7 +185,7 @@ export default function OverviewPage() {
               )}
             </div>
             <div className="ml-auto">
-              <span className="px-3 py-1 rounded text-xs uppercase font-medium bg-green-500/10 text-green-400 border border-green-500/20">
+              <span className="px-3 py-1 rounded text-xs uppercase font-medium bg-[#faebd5] text-[#b85618] border border-[#e08840]/30">
                 self-hosted
               </span>
             </div>
@@ -203,22 +203,22 @@ export default function OverviewPage() {
           <Link href="/repositories" className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors group">
             <p className="text-[11px] text-[#b58a73] uppercase tracking-wider mb-2 group-hover:text-[#ff8c3a] transition-colors">repos indexed</p>
             <p className="text-2xl font-semibold tabular-nums">{stats.repos}</p>
-            <p className="text-[10px] text-[#22d3ee]/50 mt-1.5 lowercase">code repositories</p>
+            <p className="text-[10px] text-[#a09488] mt-1.5 lowercase">code repositories</p>
           </Link>
           <Link href="/papers" className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors group">
             <p className="text-[11px] text-[#b58a73] uppercase tracking-wider mb-2 group-hover:text-[#ff8c3a] transition-colors">papers indexed</p>
             <p className="text-2xl font-semibold tabular-nums">{stats.papers}</p>
-            <p className="text-[10px] text-[#22d3ee]/50 mt-1.5 lowercase">research papers</p>
+            <p className="text-[10px] text-[#a09488] mt-1.5 lowercase">research papers</p>
           </Link>
           <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
             <p className="text-[11px] text-[#b58a73] uppercase tracking-wider mb-2">searches</p>
             <p className="text-2xl font-semibold tabular-nums">{stats.searches}</p>
-            <p className="text-[10px] text-[#22d3ee]/50 mt-1.5 lowercase">code &amp; paper searches</p>
+            <p className="text-[10px] text-[#a09488] mt-1.5 lowercase">code &amp; paper searches</p>
           </div>
           <div className="p-4 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
             <p className="text-[11px] text-[#b58a73] uppercase tracking-wider mb-2">tool calls</p>
             <p className="text-2xl font-semibold tabular-nums">{stats.toolCalls}</p>
-            <p className="text-[10px] text-[#22d3ee]/50 mt-1.5 lowercase">total mcp requests</p>
+            <p className="text-[10px] text-[#a09488] mt-1.5 lowercase">total mcp requests</p>
           </div>
         </div>
       </div>
@@ -232,7 +232,7 @@ export default function OverviewPage() {
             <div className="flex items-center gap-2">
               <span className="text-2xl font-semibold tabular-nums">{stats.apiUsage}</span>
               {stats.apiChange > 0 && (
-                <span className="text-xs text-green-500 font-medium">+{stats.apiChange}%</span>
+                <span className="text-xs text-[#d06e28] font-medium">+{stats.apiChange}%</span>
               )}
             </div>
           </div>
@@ -242,22 +242,22 @@ export default function OverviewPage() {
                 <AreaChart data={stats.chartData}>
                   <defs>
                     <linearGradient id="usageGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.3} />
-                      <stop offset="100%" stopColor="#22d3ee" stopOpacity={0} />
+                      <stop offset="0%" stopColor="#e08840" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#e08840" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis 
-                    dataKey="d" 
-                    tick={{ fontSize: 10, fill: '#333' }} 
-                    axisLine={false} 
+                  <XAxis
+                    dataKey="d"
+                    tick={{ fontSize: 10, fill: '#a09488' }}
+                    axisLine={false}
                     tickLine={false}
                     dy={5}
                   />
-                  <Area 
-                    type="monotone" 
-                    dataKey="v" 
-                    stroke="#22d3ee" 
-                    fill="url(#usageGradient)" 
+                  <Area
+                    type="monotone"
+                    dataKey="v"
+                    stroke="#d06e28"
+                    fill="url(#usageGradient)"
                     strokeWidth={2}
                   />
                 </AreaChart>
@@ -270,22 +270,22 @@ export default function OverviewPage() {
                 ]}>
                   <defs>
                     <linearGradient id="usageGradientEmpty" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#333" stopOpacity={0.1} />
-                      <stop offset="100%" stopColor="#333" stopOpacity={0} />
+                      <stop offset="0%" stopColor="#dfcdbf" stopOpacity={0.4} />
+                      <stop offset="100%" stopColor="#dfcdbf" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis 
-                    dataKey="d" 
-                    tick={{ fontSize: 10, fill: '#333' }} 
-                    axisLine={false} 
+                  <XAxis
+                    dataKey="d"
+                    tick={{ fontSize: 10, fill: '#a09488' }}
+                    axisLine={false}
                     tickLine={false}
                     dy={5}
                   />
-                  <Area 
-                    type="monotone" 
-                    dataKey="v" 
-                    stroke="#222" 
-                    fill="url(#usageGradientEmpty)" 
+                  <Area
+                    type="monotone"
+                    dataKey="v"
+                    stroke="#c5b5a5"
+                    fill="url(#usageGradientEmpty)"
                     strokeWidth={1.5}
                     strokeDasharray="4 4"
                   />

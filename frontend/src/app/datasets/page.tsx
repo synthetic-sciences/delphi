@@ -297,7 +297,7 @@ export default function DatasetsPage() {
                     {dataset.hf_id}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-[#a09488]">
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium uppercase bg-yellow-500/20 text-yellow-500">
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-medium uppercase bg-[#faebd5] text-[#b85618] border border-[#e08840]/25">
                       HF
                     </span>
                     {dataset.license && (
@@ -372,7 +372,7 @@ export default function DatasetsPage() {
       {showAddModal && !isMinimized && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#2e2522]/55"
             onClick={() => {
               if (isIndexing) {
                 setIsMinimized(true);
@@ -438,8 +438,8 @@ export default function DatasetsPage() {
                     fetching metadata & generating embeddings for {hfInput}
                   </p>
                 </div>
-                <div className="h-2 bg-[#dfcdbf] rounded-full overflow-hidden mb-2">
-                  <div className="h-full bg-[#b58a73] rounded-full animate-pulse" style={{ width: "60%" }} />
+                <div className="h-1.5 bg-[#dfcdbf] rounded-full overflow-hidden mb-2">
+                  <div className="h-full bg-[#b58a73] rounded-full progress-indeterminate" />
                 </div>
                 <p className="text-[10px] text-[#a09488] text-center lowercase">
                   this may take 30-60 seconds for embedding generation
@@ -452,7 +452,7 @@ export default function DatasetsPage() {
 
             {/* Success */}
             {indexSuccess && (
-              <div className="mb-6 p-4 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-400 lowercase">
+              <div className="mb-6 p-4 rounded-lg bg-[#faebd5] border border-[#e08840]/30 border-l-2 border-l-[#d06e28] text-sm text-[#9a3f10] lowercase">
                 {indexSuccess}
               </div>
             )}
