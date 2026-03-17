@@ -84,6 +84,9 @@ docker-data/
 # ─── Supabase local ──────────────────────────────────────────
 supabase/.temp/
 
+# ─── Large binary assets ──────────────────────────────────────
+frontend/brand/
+
 # ─── Misc ─────────────────────────────────────────────────────
 *.bak
 *.tmp
