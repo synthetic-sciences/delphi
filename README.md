@@ -156,6 +156,23 @@ curl "http://localhost:8742/api/search/code?query=authentication+middleware" \
 
 ---
 
+## Benchmarks
+
+Evaluated across 8 phases with ~3,300 queries against [Context7](https://context7.com) and [Nia](https://trynia.ai). 100 queries per engine per phase, scored with automated IR metrics and a position-debiased LLM judge (Claude Sonnet 4.6).
+
+| Benchmark | Metric | Delphi |
+|-----------|--------|:---:|
+| Retrieval | MRR | **0.962** |
+| CodeSearchNet | MRR | **0.865** |
+| CoSQA | MRR | **0.703** |
+| Adversarial | Discrimination | **0.560** |
+| Hallucination | Rate (lower = better) | **39%** |
+| Enhanced Judge | Score (0-3) | **1.705** |
+
+Full results, methodology, and statistical analysis: [**SynSci-Context-Bench**](https://github.com/synthetic-sciences/SynSci-Context-Bench)
+
+---
+
 ## Architecture
 
 ```
