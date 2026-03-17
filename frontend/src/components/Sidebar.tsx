@@ -40,11 +40,15 @@ export default function Sidebar() {
             <Link
               key={item.label}
               href={item.href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm lowercase transition-colors ${
-                active ? "text-[#2e2522] bg-[#efe7dd]" : "text-[#8a7a72] hover:text-[#2e2522] hover:bg-[#faf5ef]"
+              className={`group flex items-center gap-3 px-3 py-2 rounded-lg text-sm lowercase transition-all duration-200 ${
+                active
+                  ? "text-[#9a3f10] bg-[#faebd5] shadow-[inset_0_1px_0_rgba(255,255,255,0.7)]"
+                  : "text-[#8a7a72] hover:text-[#2e2522] hover:bg-[#faf5ef]"
               }`}
             >
-              <item.icon size={16} />
+              <span className={`transition-transform duration-200 ${active ? "scale-110 text-[#d06e28]" : "group-hover:scale-110"}`}>
+                <item.icon size={16} />
+              </span>
               {item.label}
             </Link>
           );

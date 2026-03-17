@@ -23,6 +23,16 @@
   --text-secondary: #695954;
   --text-tertiary: #8a7a72;
   --accent-orange: #b58a73;
+
+  /* Orange depth scale */
+  --o-50:  #fdf6ee;
+  --o-100: #faebd5;
+  --o-200: #f5c89a;
+  --o-300: #eda868;
+  --o-400: #e08840;
+  --o-500: #d06e28;
+  --o-600: #b85618;
+  --o-700: #9a3f10;
 }
 
 * {
@@ -69,4 +79,87 @@ code, pre, kbd, .font-mono {
 ::selection {
   background: rgba(181, 138, 115, 0.3);
   color: #2e2522;
+}
+
+/* Smooth pointer on interactive elements */
+button, a, [role="button"] {
+  cursor: pointer;
+}
+
+/* Premium focus ring */
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid rgba(181, 138, 115, 0.5);
+  outline-offset: 2px;
+}
+
+/* Subtle button press feel */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+  transition: transform 0.1s ease;
+}
+
+/* GPU-accelerate all animated elements */
+.animate-fade-in-up,
+.animate-scale-in,
+.animate-slide-down {
+  will-change: transform, opacity;
+}
+
+/* Remove default outline for non-keyboard focus */
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Keyframes — GPU-accelerated via transform+opacity only */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale3d(0.96, 0.96, 1); }
+  to   { opacity: 1; transform: scale3d(1, 1, 1); }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translate3d(0, -5px, 0) scaleY(0.97); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scaleY(1); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* Animate modal backdrops and panels — will-change tells browser to composite on GPU */
+.fixed.inset-0 > .absolute.inset-0 {
+  animation: fadeIn 0.18s ease both;
+  will-change: opacity;
+}
+
+.fixed.inset-0 > .relative {
+  animation: scaleIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+/* Indeterminate progress bar */
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(450%); }
+}
+
+.progress-indeterminate {
+  width: 25% !important;
+  animation: indeterminate 1.6s cubic-bezier(0.65, 0.815, 0.735, 0.395) infinite;
+}
+
+/* Card hover lift */
+.card-lift {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+}
+
+.card-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(46, 37, 34, 0.08);
 }

@@ -9,36 +9,36 @@ import {
 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 
-// Action configuration with icons and colors
+// Action configuration — orange depth palette
 const actionConfig: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
   // Code Context
-  'index_repository': { icon: <FileDown size={16} />, label: 'Index Repo', color: '#b58a73' },
-  'delete_repository': { icon: <Trash2 size={16} />, label: 'Delete Repo', color: '#ef4444' },
-  'search_code': { icon: <Search size={16} />, label: 'Search Code', color: '#60a5fa' },
-  'search_symbols': { icon: <Code size={16} />, label: 'Search Symbols', color: '#84cc16' },
-  'list_repositories': { icon: <List size={16} />, label: 'List Repos', color: '#6366f1' },
-  'get_file': { icon: <FileText size={16} />, label: 'Get File', color: '#22c55e' },
-  
+  'index_repository': { icon: <FileDown size={16} />,  label: 'Index Repo',     color: '#d06e28' },
+  'delete_repository': { icon: <Trash2 size={16} />,   label: 'Delete Repo',    color: '#7a2e0c' },
+  'search_code':       { icon: <Search size={16} />,   label: 'Search Code',    color: '#e08840' },
+  'search_symbols':    { icon: <Code size={16} />,     label: 'Search Symbols', color: '#b85618' },
+  'list_repositories': { icon: <List size={16} />,     label: 'List Repos',     color: '#9a3f10' },
+  'get_file':          { icon: <FileText size={16} />, label: 'Get File',       color: '#eda868' },
+
   // Paper Context
-  'index': { icon: <FileDown size={16} />, label: 'Index Paper', color: '#b58a73' },
-  'index_paper': { icon: <FileDown size={16} />, label: 'Index Paper', color: '#b58a73' },
-  'delete_paper': { icon: <Trash2 size={16} />, label: 'Delete Paper', color: '#ef4444' },
-  'search': { icon: <Search size={16} />, label: 'Search', color: '#60a5fa' },
-  'search_papers': { icon: <Search size={16} />, label: 'Search Papers', color: '#60a5fa' },
-  'list_papers': { icon: <List size={16} />, label: 'List Papers', color: '#6366f1' },
-  'get_paper': { icon: <BookOpen size={16} />, label: 'Get Paper', color: '#22c55e' },
-  'report': { icon: <FileText size={16} />, label: 'Report', color: '#a855f7' },
-  'rebuild_index': { icon: <RefreshCw size={16} />, label: 'Rebuild Index', color: '#ec4899' },
-  'find_related': { icon: <Network size={16} />, label: 'Find Related', color: '#06b6d4' },
-  
+  'index':       { icon: <FileDown size={16} />,  label: 'Index Paper',   color: '#d06e28' },
+  'index_paper': { icon: <FileDown size={16} />,  label: 'Index Paper',   color: '#d06e28' },
+  'delete_paper':{ icon: <Trash2 size={16} />,    label: 'Delete Paper',  color: '#7a2e0c' },
+  'search':      { icon: <Search size={16} />,    label: 'Search',        color: '#e08840' },
+  'search_papers':{ icon: <Search size={16} />,   label: 'Search Papers', color: '#e08840' },
+  'list_papers': { icon: <List size={16} />,      label: 'List Papers',   color: '#9a3f10' },
+  'get_paper':   { icon: <BookOpen size={16} />,  label: 'Get Paper',     color: '#eda868' },
+  'report':      { icon: <FileText size={16} />,  label: 'Report',        color: '#b85618' },
+  'rebuild_index':{ icon: <RefreshCw size={16} />,label: 'Rebuild Index', color: '#e08840' },
+  'find_related':{ icon: <Network size={16} />,   label: 'Find Related',  color: '#c96030' },
+
   // Extraction
-  'citations': { icon: <Quote size={16} />, label: 'Citations', color: '#eab308' },
-  'equations': { icon: <Calculator size={16} />, label: 'Equations', color: '#14b8a6' },
-  'code_snippets': { icon: <Code size={16} />, label: 'Code Snippets', color: '#84cc16' },
-  
+  'citations':    { icon: <Quote size={16} />,      label: 'Citations',    color: '#b85618' },
+  'equations':    { icon: <Calculator size={16} />, label: 'Equations',    color: '#9a3f10' },
+  'code_snippets':{ icon: <Code size={16} />,       label: 'Code Snippets',color: '#d06e28' },
+
   // Analysis
-  'compare': { icon: <GitCompare size={16} />, label: 'Compare', color: '#f43f5e' },
-  'citation_graph': { icon: <Network size={16} />, label: 'Citation Graph', color: '#8b5cf6' },
+  'compare':        { icon: <GitCompare size={16} />, label: 'Compare',        color: '#7a2e0c' },
+  'citation_graph': { icon: <Network size={16} />,    label: 'Citation Graph', color: '#c96030' },
 };
 
 interface ActivityItem {
@@ -266,7 +266,7 @@ export default function ActivityPage() {
           </div>
         ) : filteredActivities.length === 0 ? (
           <div className="p-12 text-center">
-            <ActivityIcon size={32} className="text-[#222] mx-auto mb-3" />
+            <ActivityIcon size={32} className="text-[#c5b5a5] mx-auto mb-3" />
             <h3 className="text-sm text-[#8a7a72] lowercase mb-1">no activity yet</h3>
             <p className="text-xs text-[#a09488] lowercase">your api usage will appear here once you start making requests.</p>
           </div>
@@ -299,7 +299,7 @@ export default function ActivityPage() {
                     <div className="flex items-center gap-2 mb-0.5">
                       <span className="text-sm font-medium text-[#2e2522]">{config.label}</span>
                       {isCached && (
-                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-green-500/20 text-green-400">
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-[#faebd5] text-[#b85618]">
                           cached
                         </span>
                       )}

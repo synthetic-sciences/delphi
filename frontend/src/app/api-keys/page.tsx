@@ -40,7 +40,7 @@ function ConfigBlock({ code, lang = "json" }: { code: string; lang?: string }) {
           onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
           className="p-1 rounded hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#695954] transition-colors"
         >
-          {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+          {copied ? <Check size={12} className="text-[#b85618]" /> : <Copy size={12} />}
         </button>
       </div>
       <pre className="p-3 overflow-x-auto text-xs font-mono text-[#695954] leading-relaxed whitespace-pre">{code}</pre>
@@ -538,7 +538,7 @@ export default function ApiKeysPage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm font-medium text-[#2e2522]">{key.name}</span>
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-green-500/20 text-green-400">
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider bg-[#faebd5] text-[#b85618] border border-[#e08840]/25">
                       active
                     </span>
                   </div>
@@ -555,7 +555,7 @@ export default function ApiKeysPage() {
                   <button 
                     onClick={() => revokeKey(key.id)}
                     disabled={actionLoading === key.id}
-                    className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-yellow-500 transition-colors disabled:opacity-50"
+                    className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#a06060] transition-colors disabled:opacity-50"
                     title="Revoke key"
                   >
                     <Ban size={14} />
@@ -578,7 +578,7 @@ export default function ApiKeysPage() {
                 key={key.id} 
                 className="flex items-center gap-4 px-4 py-4 opacity-50"
               >
-                <div className="w-10 h-10 rounded-lg bg-[#333]/20 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-lg bg-[#dfcdbf]/50 flex items-center justify-center">
                   <Key size={18} className="text-[#a09488]" />
                 </div>
                 
@@ -614,7 +614,7 @@ export default function ApiKeysPage() {
 
       {/* Token messages */}
       {(tokenSuccess || hfTokenSuccess) && (
-        <div className="mt-6 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-400 lowercase flex items-center gap-2">
+        <div className="mt-6 p-3 rounded-lg bg-[#faebd5] border border-[#e08840]/30 text-sm text-[#b85618] lowercase flex items-center gap-2">
           <Check size={14} />
           {tokenSuccess || hfTokenSuccess}
         </div>
@@ -653,7 +653,7 @@ export default function ApiKeysPage() {
               <RefreshCw size={14} className="text-[#a09488] animate-spin" />
             ) : hasToken ? (
               <div className="flex items-center gap-2">
-                <span className="flex items-center gap-1.5 text-xs text-green-400">
+                <span className="flex items-center gap-1.5 text-xs text-[#b85618]">
                   <Check size={14} />
                   connected
                 </span>
@@ -677,7 +677,7 @@ export default function ApiKeysPage() {
 
           {/* HuggingFace row */}
           <div className="flex items-center gap-4 px-4 py-4">
-            <div className="w-10 h-10 rounded-lg bg-yellow-500/10 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-lg bg-[#faebd5] flex items-center justify-center">
               <span className="text-lg">&#129303;</span>
             </div>
 
@@ -692,7 +692,7 @@ export default function ApiKeysPage() {
               <RefreshCw size={14} className="text-[#a09488] animate-spin" />
             ) : hasHfToken ? (
               <div className="flex items-center gap-2">
-                <span className="flex items-center gap-1.5 text-xs text-green-400">
+                <span className="flex items-center gap-1.5 text-xs text-[#b85618]">
                   <Check size={14} />
                   connected
                 </span>
@@ -723,7 +723,7 @@ export default function ApiKeysPage() {
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div 
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#2e2522]/55"
             onClick={() => setShowCreateModal(false)}
           />
           <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
@@ -773,7 +773,7 @@ export default function ApiKeysPage() {
       {showRevealModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div 
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#2e2522]/55"
             onClick={() => setShowRevealModal(false)}
           />
           <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
@@ -793,9 +793,9 @@ export default function ApiKeysPage() {
               </code>
             </div>
 
-            <div className="flex items-start gap-3 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 mb-6">
-              <AlertTriangle size={16} className="text-yellow-600 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-yellow-800">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-[#faebd5] border border-[#e08840]/35 mb-6">
+              <AlertTriangle size={16} className="text-[#b85618] flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-[#9a3f10]">
                 make sure to copy your api key now. you won&apos;t be able to see it again!
               </p>
             </div>
@@ -823,7 +823,7 @@ export default function ApiKeysPage() {
       {showTokenModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#2e2522]/55"
             onClick={() => setShowTokenModal(false)}
           />
           <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
@@ -930,7 +930,7 @@ export default function ApiKeysPage() {
       {showHfTokenModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#2e2522]/55"
             onClick={() => setShowHfTokenModal(false)}
           />
           <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">

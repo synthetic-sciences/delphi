@@ -22,7 +22,7 @@ function CodeBlock({ code, lang = "bash" }: { code: string; lang?: string }) {
           onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
           className="p-1 rounded hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#695954] transition-colors"
         >
-          {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+          {copied ? <Check size={12} className="text-[#d06e28]" /> : <Copy size={12} />}
         </button>
       </div>
       <pre className="p-3 overflow-x-auto text-xs font-mono text-[#695954] leading-relaxed whitespace-pre">{code}</pre>
@@ -49,10 +49,10 @@ function Endpoint({
   const [open, setOpen] = useState(false);
   const methodStyles =
     method === "GET"
-      ? "text-green-400 border-green-400/30"
+      ? "text-[#9a3f10] border-[#9a3f10]/40"
       : method === "POST"
-      ? "text-blue-400 border-blue-400/30"
-      : "text-red-400 border-red-400/30";
+      ? "text-[#d06e28] border-[#d06e28]/50 bg-[#faebd5]/60"
+      : "text-[#7a2e0c] border-[#7a2e0c]/50";
 
   return (
     <div className="rounded-lg border border-[#dfcdbf] overflow-hidden">

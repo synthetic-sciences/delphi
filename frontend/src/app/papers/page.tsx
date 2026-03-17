@@ -350,7 +350,7 @@ export default function PapersPage() {
       {showAddModal && !isMinimized && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#2e2522]/55"
             onClick={() => {
               if (isIndexing) {
                 setIsMinimized(true);
@@ -489,8 +489,8 @@ export default function PapersPage() {
                 </div>
 
                 {/* Indeterminate progress bar */}
-                <div className="h-2 bg-[#dfcdbf] rounded-full overflow-hidden mb-2">
-                  <div className="h-full bg-[#b58a73] rounded-full animate-pulse" style={{ width: '60%' }} />
+                <div className="h-1.5 bg-[#dfcdbf] rounded-full overflow-hidden mb-2">
+                  <div className="h-full bg-[#b58a73] rounded-full progress-indeterminate" />
                 </div>
                 <p className="text-[10px] text-[#a09488] text-center lowercase">
                   this may take 1-2 minutes for embedding generation
@@ -505,7 +505,7 @@ export default function PapersPage() {
 
             {/* Success message */}
             {indexSuccess && (
-              <div className="mb-6 p-4 rounded-lg bg-green-500/10 border border-green-500/20 text-sm text-green-400 lowercase">
+              <div className="mb-6 p-4 rounded-lg bg-[#faebd5] border border-[#e08840]/30 border-l-2 border-l-[#d06e28] text-sm text-[#9a3f10] lowercase">
                 {indexSuccess}
               </div>
             )}
