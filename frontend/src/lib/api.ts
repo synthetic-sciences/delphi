@@ -3,10 +3,10 @@
  *
  * Auth flow:
  *   1. User clicks "Login with GitHub" → redirected to GitHub OAuth.
- *   2. After OAuth, backend issues a JWT session token.
- *   3. Frontend stores the JWT in localStorage and sends it as Bearer token.
- *   4. Alternatively, admin can log in with SYSTEM_PASSWORD → also gets JWT.
- *   5. User creates API keys for AI agents via the dashboard.
+ *   2. After OAuth, backend sets an httpOnly session cookie.
+ *   3. All API requests include the cookie automatically via credentials: "include".
+ *   4. Alternatively, admin can log in with SYSTEM_PASSWORD → also sets cookie.
+ *   5. AI agents/MCP tools use API keys via Authorization header (no cookie).
  */
 
 export const API_URL = "";
@@ -14,42 +14,51 @@ export const API_URL = "";
 export const DIRECT_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 /**
- * Get a valid access token (JWT session token from localStorage).
+ * Check if user has a valid session.
+ *
+ * Uses /auth/check which never returns 401 — avoids noisy logs.
+ */
+export async function isAuthenticated(): Promise<boolean> {
+  try {
+    const resp = await fetch("/auth/check", { credentials: "include" });
+    if (!resp.ok) return false;
+    const data = await resp.json();
+    return data.authenticated === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Legacy getAccessToken — returns null since tokens are now in httpOnly cookies.
+ * Kept for backward compatibility with components that check for a token.
  */
 export async function getAccessToken(): Promise<string | null> {
-  if (typeof window !== "undefined") {
-    const stored = localStorage.getItem("synsc_session_token");
-    if (stored) return stored;
-  }
   return null;
 }
 
 /**
- * Store a session token (JWT from OAuth or password login).
+ * Legacy setAccessToken — no-op since cookies are set by the backend.
  */
-export function setAccessToken(token: string): void {
-  if (typeof window !== "undefined") {
-    localStorage.setItem("synsc_session_token", token);
+export function setAccessToken(_token: string): void {
+  // No-op: session is managed via httpOnly cookie set by the backend.
+}
+
+/**
+ * Clear session by calling the logout endpoint (which clears the cookie).
+ */
+export async function clearAccessToken(): Promise<void> {
+  try {
+    await fetch("/auth/logout", { method: "POST", credentials: "include" });
+  } catch {
+    // Best effort
   }
 }
 
 /**
- * Clear stored credentials (logout).
- */
-export function clearAccessToken(): void {
-  if (typeof window !== "undefined") {
-    localStorage.removeItem("synsc_session_token");
-  }
-}
-
-/**
- * Get auth headers for direct fetch calls.
+ * Get auth headers for direct fetch calls (API keys only, not cookies).
  */
 export async function getAuthHeaders(): Promise<Record<string, string>> {
-  const token = await getAccessToken();
-  if (token) {
-    return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  }
   return { "Content-Type": "application/json" };
 }
 
@@ -58,7 +67,6 @@ async function apiFetch(
   options: RequestInit = {},
   useDirect = false
 ): Promise<Response> {
-  const token = await getAccessToken();
   const base = useDirect ? DIRECT_API_URL : API_URL;
   const url = `${base}${path}`;
 
@@ -67,15 +75,14 @@ async function apiFetch(
     ...(options.headers as Record<string, string>),
   };
 
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  const resp = await fetch(url, { ...options, headers });
+  const resp = await fetch(url, {
+    ...options,
+    headers,
+    credentials: "include",  // Send httpOnly session cookie
+  });
 
   // If we get a 401, redirect to login (but not if already on login page)
   if (resp.status === 401 && typeof window !== "undefined") {
-    clearAccessToken();
     if (window.location.pathname !== "/") {
       window.location.href = "/";
     }

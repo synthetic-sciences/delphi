@@ -17,6 +17,8 @@ const nextConfig = {
         { source: '/auth/github', destination: `${apiUrl}/auth/github` },
         { source: '/auth/github/callback', destination: `${apiUrl}/auth/github/callback` },
         { source: '/auth/login', destination: `${apiUrl}/auth/login` },
+        { source: '/auth/check', destination: `${apiUrl}/auth/check` },
+        { source: '/auth/logout', destination: `${apiUrl}/auth/logout` },
         { source: '/auth/me', destination: `${apiUrl}/auth/me` },
         { source: '/v1/:path*', destination: `${apiUrl}/v1/:path*` },
       ],

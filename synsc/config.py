@@ -35,9 +35,14 @@ class DatabaseConfig(BaseModel):
     """Configuration for database (PostgreSQL only)."""
 
     database_url: str = Field(
-        default="postgresql://synsc:synsc@localhost:5432/synsc",
-        description="PostgreSQL connection string",
+        default="",
+        description="PostgreSQL connection string (set via DATABASE_URL env var)",
     )
+    host: str = Field(default="localhost", description="Database host")
+    port: int = Field(default=5432, description="Database port")
+    user: str = Field(default="synsc", description="Database user")
+    password: str = Field(default="", description="Database password")
+    name: str = Field(default="synsc", description="Database name")
     echo: bool = Field(default=False, description="Echo SQL statements")
     pool_size: int = Field(default=5, description="Connection pool size")
     max_overflow: int = Field(default=10, description="Max overflow connections")
@@ -257,7 +262,19 @@ class SynscConfig(BaseModel):
         """Create configuration from environment variables."""
         config = cls()
 
-        # Database URL
+        # Database — individual parts or full URL
+        if db_host := os.getenv("POSTGRES_HOST"):
+            config.database.host = db_host
+        if db_port := os.getenv("POSTGRES_PORT"):
+            config.database.port = int(db_port)
+        if db_user := os.getenv("POSTGRES_USER"):
+            config.database.user = db_user
+        if db_password := os.getenv("POSTGRES_PASSWORD"):
+            config.database.password = db_password
+        if db_name := os.getenv("POSTGRES_DB"):
+            config.database.name = db_name
+
+        # DATABASE_URL takes precedence if set (overrides individual parts)
         if db_url := os.getenv("DATABASE_URL"):
             config.database.database_url = db_url
 
@@ -319,16 +336,25 @@ class SynscConfig(BaseModel):
         return config
 
     def get_database_url(self) -> str:
-        """Get the PostgreSQL database URL."""
-        return self.database.database_url
+        """Get the PostgreSQL database URL.
+
+        Uses DATABASE_URL if set, otherwise builds from individual
+        POSTGRES_* env vars.
+        """
+        if self.database.database_url:
+            return self.database.database_url
+
+        db = self.database
+        if not db.password:
+            raise ValueError(
+                "Database password required. Set POSTGRES_PASSWORD or DATABASE_URL."
+            )
+        return f"postgresql://{db.user}:{db.password}@{db.host}:{db.port}/{db.name}"
 
     def initialize(self) -> None:
         """Initialize configuration and validate settings."""
-        if not self.database.database_url:
-            raise ValueError(
-                "DATABASE_URL is required. "
-                "Set it in your environment or use docker-compose."
-            )
+        # Validate that we can build a database URL
+        self.get_database_url()
         self.storage.ensure_directories()
 
 

@@ -91,6 +91,32 @@ from synsc.auth.sessions import create_session_token, verify_session_token
 
 logger = structlog.get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Session cookie settings
+# ---------------------------------------------------------------------------
+SESSION_COOKIE_NAME = "synsc_session"
+SESSION_COOKIE_MAX_AGE = 72 * 3600  # 3 days, matches JWT expiry
+
+
+def _set_session_cookie(response, token: str) -> None:
+    """Set an httpOnly session cookie on a response."""
+    secure = os.getenv("SYNSC_COOKIE_SECURE", "").lower() in ("true", "1", "yes") or \
+             os.getenv("SYNSC_ENABLE_HSTS", "false").lower() in ("true", "1", "yes")
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=SESSION_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _clear_session_cookie(response) -> None:
+    """Delete the session cookie."""
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+
 
 def _encrypt_if_configured(token: str) -> str:
     """Encrypt a token if TOKEN_ENCRYPTION_KEY is set, else return plaintext."""
@@ -299,27 +325,31 @@ def _get_or_create_admin_user() -> str:
 
 
 async def verify_api_key(
+    request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AuthContext:
-    """Verify credentials from request headers.
+    """Verify credentials from request headers or session cookie.
 
     Checks (in order):
-      0. If auth is disabled (SYNSC_REQUIRE_AUTH=false), return dev context
-      1. JWT session token (from OAuth login or password login)
-      2. DB-stored API key (for AI agents / MCP tools)
-      3. SYSTEM_PASSWORD (admin fallback)
-    Via: Authorization: Bearer <token> or X-API-Key: <token>
+      1. Authorization header (Bearer token) or X-API-Key header
+      2. httpOnly session cookie (set by OAuth/login)
+      3. If auth disabled and no credentials, return dev context
     """
     config = get_config()
-    if not config.api.require_auth:
-        return AuthContext(api_key="dev", user_id="local-dev")
+    auth_required = config.api.require_auth
 
     token = x_api_key
     if not token and authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
 
+    # Fall back to session cookie if no header token
     if not token:
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+
+    if not token:
+        if not auth_required:
+            return AuthContext(api_key="dev", user_id="00000000-0000-0000-0000-000000000000")
         raise HTTPException(status_code=401, detail="Missing credentials.")
 
     # 1. Check JWT session token
@@ -571,15 +601,24 @@ def create_app() -> FastAPI:
     @app.get("/auth/github", tags=["Auth"])
     @limiter.limit(AUTH_LIMIT)
     async def auth_github(request: Request) -> RedirectResponse:
-        """Start GitHub OAuth flow — redirects to GitHub."""
+        """Start GitHub OAuth flow — redirects to GitHub.
+
+        The callback URL goes through the frontend proxy so that
+        the httpOnly session cookie is set on the frontend's origin.
+        """
         from synsc.auth.oauth import build_authorize_url, generate_state
 
         state = generate_state()
         _cleanup_oauth_states()
         _oauth_states[state] = time.time()
 
-        # Build callback URL from the incoming request
-        callback_url = str(request.url_for("auth_github_callback"))
+        # Build callback URL — use FRONTEND_URL so GitHub redirects through the
+        # frontend proxy, ensuring the session cookie is set on the same origin.
+        frontend_url = os.getenv("FRONTEND_URL", "")
+        if frontend_url:
+            callback_url = f"{frontend_url}/auth/github/callback"
+        else:
+            callback_url = str(request.url_for("auth_github_callback"))
         authorize_url = build_authorize_url(redirect_uri=callback_url, state=state)
         return RedirectResponse(url=authorize_url)
 
@@ -590,10 +629,9 @@ def create_app() -> FastAPI:
         code: str = Query(...),
         state: str = Query(...),
     ) -> RedirectResponse:
-        """GitHub OAuth callback — exchanges code for user, issues JWT session.
+        """GitHub OAuth callback — exchanges code for user, sets session cookie.
 
-        Redirects to the frontend with the session token as a query parameter.
-        The frontend stores it and uses it for subsequent API requests.
+        Sets an httpOnly session cookie and redirects to the frontend.
         """
         from synsc.auth.oauth import exchange_code
 
@@ -602,7 +640,11 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid or expired OAuth state.")
         _oauth_states.pop(state, None)
 
-        callback_url = str(request.url_for("auth_github_callback"))
+        frontend_url = os.getenv("FRONTEND_URL", "")
+        if frontend_url:
+            callback_url = f"{frontend_url}/auth/github/callback"
+        else:
+            callback_url = str(request.url_for("auth_github_callback"))
 
         try:
             gh_user = await exchange_code(code=code, redirect_uri=callback_url)
@@ -661,12 +703,13 @@ def create_app() -> FastAPI:
                 logger.info("New user created via GitHub OAuth", user_id=user_id, github=gh_user.username)
             session.commit()
 
-        # Issue JWT session token
+        # Issue JWT session token and set httpOnly cookie
         token = create_session_token(user_id=str(user_id), email=gh_user.email)
 
-        # Redirect to frontend with token
         frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-        return RedirectResponse(url=f"{frontend_url}/auth/callback?token={token}")
+        response = RedirectResponse(url=f"{frontend_url}/auth/callback")
+        _set_session_cookie(response, token)
+        return response
 
     class LoginRequest(BaseModel):
         password: str = Field(description="System password (SYSTEM_PASSWORD env var)")
@@ -688,11 +731,29 @@ def create_app() -> FastAPI:
         admin_id = _get_or_create_admin_user()
         token = create_session_token(user_id=str(admin_id), email="admin@localhost")
 
-        return {
+        response = JSONResponse(content={
             "success": True,
-            "token": token,
-            "message": "Authenticated. Use this token in Authorization: Bearer <token> headers.",
-        }
+            "message": "Authenticated.",
+        })
+        _set_session_cookie(response, token)
+        return response
+
+    @app.get("/auth/check", tags=["Auth"])
+    async def auth_check(request: Request) -> dict:
+        """Check if the current session is valid. Never returns 401."""
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        if token:
+            user_id = verify_session_token(token)
+            if user_id:
+                return {"authenticated": True, "user_id": user_id}
+        return {"authenticated": False}
+
+    @app.post("/auth/logout", tags=["Auth"])
+    async def logout() -> JSONResponse:
+        """Clear the session cookie."""
+        response = JSONResponse(content={"success": True, "message": "Logged out."})
+        _clear_session_cookie(response)
+        return response
 
     @app.get("/auth/me", tags=["Auth"])
     async def auth_me(auth: AuthContext = Depends(verify_api_key)) -> dict:
@@ -2399,10 +2460,19 @@ class _MCPMiddleware:
             return
 
         if scope["type"] == "http" and scope["path"] == "/mcp":
-            # Extract Bearer token from headers
+            # Extract Bearer token from headers or session cookie
             headers = dict(scope.get("headers", []))
             auth_header = headers.get(b"authorization", b"").decode()
             token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+
+            # Fall back to session cookie
+            if not token:
+                cookie_header = headers.get(b"cookie", b"").decode()
+                for part in cookie_header.split(";"):
+                    part = part.strip()
+                    if part.startswith(f"{SESSION_COOKIE_NAME}="):
+                        token = part[len(SESSION_COOKIE_NAME) + 1:]
+                        break
 
             if not token:
                 resp = JSONResponse({"error": "Missing credentials"}, status_code=401)
