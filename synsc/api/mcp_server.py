@@ -178,16 +178,21 @@ Provides deep context to AI agents through:
     # ==========================================================================
 
     @server.tool()
-    async def index_repository(url: str, branch: str = "main", deep_index: bool = False) -> dict[str, Any]:
+    async def index_repository(url: str, branch: str = "main", deep_index: bool = False, force_reindex: bool = False) -> dict[str, Any]:
         """Index a GitHub repository for semantic code search.
+
+        If the repository was previously indexed and has new commits, performs a
+        diff-aware re-index — only changed files are re-processed, preserving the
+        repo_id and all user collection links.
 
         Args:
             url: GitHub repository URL (e.g., "facebook/react" or full URL)
             branch: Branch to index (default: main)
             deep_index: Full AST chunking per function/class (slower, higher quality)
+            force_reindex: Skip diff detection and fully re-index from scratch
 
         Returns:
-            Dictionary with repo_id, files_indexed, chunks_created, etc.
+            Dictionary with repo_id, files_indexed, chunks_created, diff_stats, etc.
         """
         import asyncio
         from synsc.services.indexing_service import IndexingService
@@ -196,7 +201,8 @@ Provides deep context to AI agents through:
         user_id = get_authenticated_user_id()
 
         result = await asyncio.to_thread(
-            service.index_repository, url, branch, user_id=user_id, deep_index=deep_index,
+            service.index_repository, url, branch, user_id=user_id,
+            deep_index=deep_index, force_reindex=force_reindex,
         )
         uid = get_authenticated_user_id()
         if uid:

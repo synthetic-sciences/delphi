@@ -8,6 +8,8 @@ This saves massive storage when multiple users index popular repos like react/ne
 """
 
 import contextlib
+import queue as _queue
+import threading as _threading
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -281,6 +283,7 @@ class IndexingService:
         is_public: bool | None = None,
         progress_callback: Callable | None = None,
         deep_index: bool = False,
+        force_reindex: bool = False,
     ) -> dict:
         """Index a GitHub repository with smart deduplication.
         
@@ -348,7 +351,7 @@ class IndexingService:
                             temp_path, _, _, current_sha = self.git_client.clone(url, branch)
                             needs_update = current_sha != existing.commit_sha
 
-                            if not needs_update:
+                            if not needs_update and not force_reindex:
                                 # Up-to-date: Just add to collection (INSTANT!)
                                 self._add_repo_to_user_collection(
                                     session, existing.repo_id, effective_user_id
@@ -397,16 +400,60 @@ class IndexingService:
                                     15,
                                 )
 
-                                # Delete old data and fall through to re-index
-                                from sqlalchemy import text
+                                if not force_reindex:
+                                    # Diff-aware re-index: only process changed files
+                                    diff_files = self.git_client.list_files(temp_path, include_content=True)
+                                    diff_result = self._diff_reindex(
+                                        session, existing, temp_path, diff_files,
+                                        current_sha, progress_callback, deep_index,
+                                    )
+                                    if diff_result is not None:
+                                        # Diff reindex succeeded
+                                        self._add_repo_to_user_collection(
+                                            session, existing.repo_id, effective_user_id
+                                        )
+                                        session.commit()
+
+                                        # Rebuild chunk relationships for affected files
+                                        try:
+                                            report_progress("relationships", "Rebuilding chunk relationships...", 96)
+                                            from synsc.database.connection import get_engine
+                                            get_engine().dispose()
+                                            with get_session() as rel_session:
+                                                rel_count = _build_chunk_relationships(rel_session, existing.repo_id)
+                                                rel_session.commit()
+                                        except Exception:
+                                            logger.warning("Failed to rebuild relationships (non-critical)", exc_info=True)
+
+                                        elapsed_time = (time.time() - start_time) * 1000
+                                        return {
+                                            "success": True,
+                                            "status": "updated",
+                                            "repo_id": str(existing.repo_id),
+                                            "owner": owner,
+                                            "name": name,
+                                            "branch": branch,
+                                            "commit_sha": current_sha,
+                                            "files_indexed": diff_result["files_count"],
+                                            "chunks_created": diff_result["chunks_count"],
+                                            "symbols_extracted": diff_result.get("symbols_count", 0),
+                                            "is_public": True,
+                                            "is_shared": True,
+                                            "diff_stats": diff_result.get("diff_stats"),
+                                            "indexing_time_ms": elapsed_time,
+                                            "message": "Repository updated via diff-aware re-index",
+                                        }
+                                    # diff_result is None → threshold exceeded, fall through to full re-index
+                                    logger.info("Diff threshold exceeded, performing full re-index")
+
+                                # Full re-index: delete child data but KEEP the repo row
+                                # so the repo_id is preserved and user_repositories links stay valid
                                 session.execute(text("DELETE FROM chunk_embeddings WHERE repo_id = :rid"), {"rid": existing.repo_id})
                                 session.execute(text("DELETE FROM symbols WHERE repo_id = :rid"), {"rid": existing.repo_id})
                                 session.execute(text("DELETE FROM code_chunks WHERE repo_id = :rid"), {"rid": existing.repo_id})
                                 session.execute(text("DELETE FROM repository_files WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                                # Keep user_repositories entries so all users who added it still have it
-                                session.execute(text("DELETE FROM repositories WHERE repo_id = :rid"), {"rid": existing.repo_id})
                                 session.commit()
-                                # Fall through to re-index below
+                                # Fall through to re-index below (_index_files will reuse the repo row)
                         except Exception as e:
                             logger.warning(
                                 "Failed to check if repo is up-to-date, treating as up-to-date",
@@ -435,27 +482,35 @@ class IndexingService:
                                 "message": "Repository already indexed - added to your collection!",
                             }
                     elif existing.indexed_by == effective_user_id:
-                        # PRIVATE + same user: Already in collection
-                        # Make sure it's in their collection
-                        self._add_repo_to_user_collection(
-                            session, existing.repo_id, effective_user_id
-                        )
-                        session.commit()
+                        if not force_reindex:
+                            # PRIVATE + same user: Already in collection
+                            # Make sure it's in their collection
+                            self._add_repo_to_user_collection(
+                                session, existing.repo_id, effective_user_id
+                            )
+                            session.commit()
 
-                        return {
-                            "success": True,
-                            "status": "already_exists",
-                            "repo_id": str(existing.repo_id),
-                            "owner": owner,
-                            "name": name,
-                            "branch": branch,
-                            "commit_sha": existing.commit_sha,
-                            "files_indexed": existing.files_count,
-                            "chunks_created": existing.chunks_count,
-                            "is_public": False,
-                            "is_shared": False,
-                            "message": "Repository already indexed by you",
-                        }
+                            return {
+                                "success": True,
+                                "status": "already_exists",
+                                "repo_id": str(existing.repo_id),
+                                "owner": owner,
+                                "name": name,
+                                "branch": branch,
+                                "commit_sha": existing.commit_sha,
+                                "files_indexed": existing.files_count,
+                                "chunks_created": existing.chunks_count,
+                                "is_public": False,
+                                "is_shared": False,
+                                "message": "Repository already indexed by you",
+                            }
+                        else:
+                            # Force re-index: delete child data but KEEP the repo row
+                            session.execute(text("DELETE FROM chunk_embeddings WHERE repo_id = :rid"), {"rid": existing.repo_id})
+                            session.execute(text("DELETE FROM symbols WHERE repo_id = :rid"), {"rid": existing.repo_id})
+                            session.execute(text("DELETE FROM code_chunks WHERE repo_id = :rid"), {"rid": existing.repo_id})
+                            session.execute(text("DELETE FROM repository_files WHERE repo_id = :rid"), {"rid": existing.repo_id})
+                            session.commit()
                     else:
                         # PRIVATE + different user: Don't reuse the existing
                         # entry — fall through to full indexing so this user
@@ -567,7 +622,17 @@ class IndexingService:
                 logger.warning("Failed to build chunk relationships (non-critical)", exc_info=True)
 
             elapsed_time = (time.time() - start_time) * 1000
-            
+
+            logger.info(
+                "Indexing complete",
+                repo=f"{owner}/{name}",
+                branch=branch,
+                files=result["files_count"],
+                chunks=result["chunks_count"],
+                symbols=result.get("symbols_count", 0),
+                time_ms=round(elapsed_time),
+            )
+
             return {
                 "success": True,
                 "status": "indexed",
@@ -593,6 +658,464 @@ class IndexingService:
                 "error": str(e),
                 "message": f"Failed to index repository: {e}",
             }
+
+    # ── Diff-aware re-indexing ─────────────────────────────────────────────
+
+    def _compute_file_diff(
+        self,
+        session: Session,
+        repo_id: str,
+        new_files: list[dict],
+    ) -> tuple[list[dict], list[dict], list[RepositoryFile]]:
+        """Compare cloned files against DB to determine added/modified/deleted.
+
+        Returns:
+            (added_files, modified_files, deleted_db_files)
+        """
+        # Build lookup of existing files by path → RepositoryFile
+        existing_files = (
+            session.query(RepositoryFile)
+            .filter(RepositoryFile.repo_id == repo_id)
+            .all()
+        )
+        db_lookup: dict[str, RepositoryFile] = {f.file_path: f for f in existing_files}
+
+        added: list[dict] = []
+        modified: list[dict] = []
+        seen_paths: set[str] = set()
+
+        for file_info in new_files:
+            path = file_info["path"]
+            content = file_info.get("content", "")
+            seen_paths.add(path)
+
+            if not content:
+                continue
+
+            content_hash = self.chunker.compute_hash(content)
+            db_file = db_lookup.get(path)
+
+            if db_file is None:
+                added.append(file_info)
+            elif db_file.content_hash != content_hash:
+                modified.append(file_info)
+            # else: unchanged — skip
+
+        # Files in DB but not in new clone → deleted
+        deleted = [f for path, f in db_lookup.items() if path not in seen_paths]
+
+        return added, modified, deleted
+
+    def _delete_file_data(self, session: Session, file_id: str) -> None:
+        """Delete all data for a single file.
+
+        With ON DELETE CASCADE on chunk_embeddings and chunk_relationships,
+        deleting code_chunks auto-cleans embeddings and relationships.
+        """
+        session.execute(
+            text("DELETE FROM code_chunks WHERE file_id = :fid"), {"fid": file_id}
+        )
+        session.execute(
+            text("DELETE FROM symbols WHERE file_id = :fid"), {"fid": file_id}
+        )
+        session.execute(
+            text("DELETE FROM repository_files WHERE file_id = :fid"), {"fid": file_id}
+        )
+
+    def _diff_reindex(
+        self,
+        session: Session,
+        existing: Repository,
+        repo_path: Path,
+        new_files: list[dict],
+        new_commit_sha: str,
+        progress_callback: Callable | None = None,
+        deep_index: bool = False,
+    ) -> dict | None:
+        """Perform diff-aware re-indexing on an existing repository.
+
+        Returns result dict on success, or None if >80% files changed
+        (caller should fall back to full re-index).
+        """
+        def report_progress(stage: str, message: str, progress: float = 0, **kwargs):
+            if progress_callback:
+                with contextlib.suppress(Exception):
+                    progress_callback(stage, message, progress, **kwargs)
+
+        repo_id = existing.repo_id
+
+        # 1. Compute diff
+        report_progress("computing_diff", "Comparing files with previous index...", 15)
+        added, modified, deleted = self._compute_file_diff(session, repo_id, new_files)
+        total_changed = len(added) + len(modified) + len(deleted)
+        total_files = len(new_files)
+
+        logger.info(
+            "Diff computed",
+            repo_id=repo_id,
+            added=len(added),
+            modified=len(modified),
+            deleted=len(deleted),
+            unchanged=total_files - len(added) - len(modified),
+        )
+
+        # 2. Threshold check — if >80% changed, fall back to full re-index
+        if total_files > 0 and total_changed / total_files > 0.8:
+            logger.info(
+                "Diff threshold exceeded, falling back to full re-index",
+                changed_pct=round(total_changed / total_files * 100),
+            )
+            return None
+
+        # Disable timeouts for reindex
+        session.execute(text("SET LOCAL statement_timeout = '0'"))
+        session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '0'"))
+
+        # 3. Purge deleted + modified files
+        files_to_purge = [f for f in deleted] + [
+            session.query(RepositoryFile)
+            .filter(RepositoryFile.repo_id == repo_id, RepositoryFile.file_path == fi["path"])
+            .first()
+            for fi in modified
+        ]
+        if files_to_purge:
+            report_progress(
+                "removing_deleted",
+                f"Removing {len(files_to_purge)} changed/deleted files...",
+                20,
+            )
+            for db_file in files_to_purge:
+                if db_file:
+                    self._delete_file_data(session, db_file.file_id)
+            session.flush()
+
+        # 4. Index only new/changed files
+        files_to_process = added + modified
+        if not files_to_process:
+            # Only deletions — just update metadata
+            existing.commit_sha = new_commit_sha
+            existing.last_diff_stats = {
+                "added": 0, "modified": 0,
+                "deleted": len(deleted),
+                "unchanged": total_files,
+            }
+            existing.embedding_model = self.embedding_generator.model_name
+
+            # Recalculate stats from remaining files
+            remaining_files = (
+                session.query(RepositoryFile)
+                .filter(RepositoryFile.repo_id == repo_id)
+                .count()
+            )
+            remaining_chunks = (
+                session.query(CodeChunk)
+                .filter(CodeChunk.repo_id == repo_id)
+                .count()
+            )
+            remaining_symbols = (
+                session.query(Symbol)
+                .filter(Symbol.repo_id == repo_id)
+                .count()
+            )
+            existing.files_count = remaining_files
+            existing.chunks_count = remaining_chunks
+            existing.symbols_count = remaining_symbols
+
+            return {
+                "repo_id": str(repo_id),
+                "files_count": remaining_files,
+                "chunks_count": remaining_chunks,
+                "symbols_count": remaining_symbols,
+                "diff_stats": existing.last_diff_stats,
+            }
+
+        report_progress(
+            "reprocessing",
+            f"Re-processing {len(files_to_process)} modified/added files...",
+            30,
+        )
+
+        # Reuse the per-file processing logic from _index_files
+        parser_registry = get_parser_registry()
+        total_new_symbols = 0
+        chunks_to_embed: list[tuple[CodeChunk, str]] = []
+
+        for file_idx, file_info in enumerate(files_to_process):
+            file_path = file_info["path"]
+            content = file_info.get("content", "")
+            if not content:
+                continue
+
+            language = detect_language(file_path)
+
+            db_file = RepositoryFile(
+                repo_id=repo_id,
+                file_path=file_path,
+                file_name=Path(file_path).name,
+                language=language,
+                line_count=content.count("\n") + 1,
+                token_count=self.chunker.count_tokens(content),
+                size_bytes=file_info["size_bytes"],
+                content_hash=self.chunker.compute_hash(content),
+            )
+            session.add(db_file)
+
+            if (file_idx + 1) % 50 == 0 or file_idx == len(files_to_process) - 1:
+                pct = 30 + ((file_idx + 1) / len(files_to_process)) * 30
+                report_progress(
+                    "reprocessing",
+                    f"Processing {file_idx + 1}/{len(files_to_process)} files...",
+                    pct,
+                )
+
+        # Flush to get file_ids
+        session.flush()
+
+        # Now process chunks for all new/modified files
+        for file_info in files_to_process:
+            file_path = file_info["path"]
+            content = file_info.get("content", "")
+            if not content:
+                continue
+
+            language = detect_language(file_path)
+            db_file = (
+                session.query(RepositoryFile)
+                .filter(
+                    RepositoryFile.repo_id == repo_id,
+                    RepositoryFile.file_path == file_path,
+                )
+                .first()
+            )
+            if not db_file:
+                continue
+
+            # Doc files
+            is_doc_file = language in ("markdown", "restructuredtext") or (
+                file_path.lower().endswith((".md", ".mdx", ".rst"))
+            )
+
+            if is_doc_file:
+                chunks = self.chunker.chunk_file(content, language)
+                for idx, chunk in enumerate(chunks):
+                    db_chunk = CodeChunk(
+                        repo_id=repo_id,
+                        file_id=db_file.file_id,
+                        chunk_index=idx,
+                        content=chunk.content,
+                        start_line=chunk.start_line,
+                        end_line=chunk.end_line,
+                        chunk_type="documentation",
+                        language=language,
+                        token_count=chunk.token_count,
+                    )
+                    session.add(db_chunk)
+                    enriched = enrich_doc_chunk_for_embedding(chunk.content, file_path)
+                    chunks_to_embed.append((db_chunk, enriched))
+                continue
+
+            # Code files — symbol extraction + chunking
+            turbo_mode = False if deep_index else self.config.git.turbo_mode
+            parser = parser_registry.get_parser(language) if language else None
+            use_ast_chunking = False
+            symbol_boundaries: list[tuple[int, int]] = []
+            extracted_symbols: list = []
+
+            if parser:
+                try:
+                    extracted_symbols = parser.extract_symbols(content)
+                    for ext_sym in extracted_symbols:
+                        symbol_boundaries.append((ext_sym.start_line, ext_sym.end_line))
+
+                    for ext_sym in extracted_symbols:
+                        db_symbol = Symbol(
+                            repo_id=repo_id,
+                            file_id=db_file.file_id,
+                            name=ext_sym.name,
+                            qualified_name=ext_sym.qualified_name,
+                            symbol_type=ext_sym.symbol_type,
+                            signature=ext_sym.signature,
+                            docstring=ext_sym.docstring,
+                            start_line=ext_sym.start_line,
+                            end_line=ext_sym.end_line,
+                            is_exported=ext_sym.is_exported,
+                            is_async=ext_sym.is_async,
+                            language=language,
+                        )
+                        if ext_sym.parameters:
+                            db_symbol.set_parameters(ext_sym.parameters)
+                        if ext_sym.return_type:
+                            db_symbol.return_type = ext_sym.return_type
+                        if ext_sym.decorators:
+                            db_symbol.set_decorators(ext_sym.decorators)
+                        session.add(db_symbol)
+                        total_new_symbols += 1
+
+                    if not turbo_mode:
+                        try:
+                            regions = parser.create_code_regions(content)
+                            if regions:
+                                chunk_counter = 0
+                                for region in regions:
+                                    token_count = self.chunker.count_tokens(region.content)
+                                    if token_count > self.chunker.max_tokens * 1.5:
+                                        sub_chunks = self.chunker.chunk_file(region.content, language)
+                                        for sub_chunk in sub_chunks:
+                                            db_chunk = CodeChunk(
+                                                repo_id=repo_id,
+                                                file_id=db_file.file_id,
+                                                chunk_index=chunk_counter,
+                                                content=sub_chunk.content,
+                                                start_line=region.start_line + sub_chunk.start_line - 1,
+                                                end_line=region.start_line + sub_chunk.end_line - 1,
+                                                chunk_type=region.region_type,
+                                                language=language,
+                                                token_count=sub_chunk.token_count,
+                                            )
+                                            if region.symbols:
+                                                db_chunk.set_symbol_names(region.symbols)
+                                            enriched = enrich_chunk_for_embedding(
+                                                sub_chunk.content, file_path,
+                                                region.start_line + sub_chunk.start_line - 1,
+                                                region.start_line + sub_chunk.end_line - 1,
+                                                extracted_symbols, content, language,
+                                            )
+                                            session.add(db_chunk)
+                                            chunks_to_embed.append((db_chunk, enriched))
+                                            chunk_counter += 1
+                                    else:
+                                        db_chunk = CodeChunk(
+                                            repo_id=repo_id,
+                                            file_id=db_file.file_id,
+                                            chunk_index=chunk_counter,
+                                            content=region.content,
+                                            start_line=region.start_line,
+                                            end_line=region.end_line,
+                                            chunk_type=region.region_type,
+                                            language=language,
+                                            token_count=token_count,
+                                        )
+                                        if region.symbols:
+                                            db_chunk.set_symbol_names(region.symbols)
+                                        enriched = enrich_chunk_for_embedding(
+                                            region.content, file_path,
+                                            region.start_line, region.end_line,
+                                            extracted_symbols, content, language,
+                                        )
+                                        session.add(db_chunk)
+                                        chunks_to_embed.append((db_chunk, enriched))
+                                        chunk_counter += 1
+                                use_ast_chunking = True
+                        except Exception:
+                            use_ast_chunking = False
+                except Exception:
+                    pass
+
+            if not use_ast_chunking:
+                chunks = self.chunker.chunk_file(
+                    content, language,
+                    symbol_boundaries=symbol_boundaries or None,
+                )
+                for idx, chunk in enumerate(chunks):
+                    db_chunk = CodeChunk(
+                        repo_id=repo_id,
+                        file_id=db_file.file_id,
+                        chunk_index=idx,
+                        content=chunk.content,
+                        start_line=chunk.start_line,
+                        end_line=chunk.end_line,
+                        chunk_type=chunk.chunk_type,
+                        language=language,
+                        token_count=chunk.token_count,
+                    )
+                    session.add(db_chunk)
+                    enriched = enrich_chunk_for_embedding(
+                        chunk.content, file_path,
+                        chunk.start_line, chunk.end_line,
+                        extracted_symbols, content, language,
+                    )
+                    chunks_to_embed.append((db_chunk, enriched))
+
+        # Flush all new chunks + symbols
+        session.flush()
+
+        # 5. Generate embeddings for new chunks only
+        if chunks_to_embed:
+            report_progress(
+                "generating_embeddings",
+                f"Generating embeddings for {len(chunks_to_embed)} new chunks...",
+                70,
+            )
+            contents = [c[1] for c in chunks_to_embed]
+            batch_size = self.embedding_generator.batch_size
+            total_batches = (len(contents) + batch_size - 1) // batch_size
+            all_embeddings = []
+
+            for batch_idx in range(0, len(contents), batch_size):
+                batch = contents[batch_idx : batch_idx + batch_size]
+                batch_embeddings = self.embedding_generator.generate(batch)
+                all_embeddings.append(batch_embeddings)
+
+                batch_num = batch_idx // batch_size + 1
+                pct = 70 + (batch_num / total_batches) * 20
+                report_progress(
+                    "generating_embeddings",
+                    f"Embedding batch {batch_num}/{total_batches}...",
+                    pct,
+                )
+
+            embeddings = np.vstack(all_embeddings)
+            chunk_ids = [db_chunk.chunk_id for db_chunk, _ in chunks_to_embed]
+            self.vector_store.add(
+                embeddings=embeddings,
+                chunk_ids=chunk_ids,
+                repo_id=repo_id,
+                session=session,
+            )
+
+        # 6. Update repo metadata (same repo_id!)
+        diff_stats = {
+            "added": len(added),
+            "modified": len(modified),
+            "deleted": len(deleted),
+            "unchanged": total_files - len(added) - len(modified),
+        }
+        existing.commit_sha = new_commit_sha
+        existing.last_diff_stats = diff_stats
+        existing.embedding_model = self.embedding_generator.model_name
+
+        # Recalculate stats
+        existing.files_count = (
+            session.query(RepositoryFile)
+            .filter(RepositoryFile.repo_id == repo_id)
+            .count()
+        )
+        existing.chunks_count = (
+            session.query(CodeChunk)
+            .filter(CodeChunk.repo_id == repo_id)
+            .count()
+        )
+        existing.symbols_count = (
+            session.query(Symbol)
+            .filter(Symbol.repo_id == repo_id)
+            .count()
+        )
+
+        logger.info(
+            "Diff-aware re-index complete",
+            repo_id=repo_id,
+            diff_stats=diff_stats,
+            new_chunks=len(chunks_to_embed),
+            new_symbols=total_new_symbols,
+        )
+
+        return {
+            "repo_id": str(repo_id),
+            "files_count": existing.files_count,
+            "chunks_count": existing.chunks_count,
+            "symbols_count": existing.symbols_count,
+            "diff_stats": diff_stats,
+        }
 
     def _index_files(
         self,
@@ -640,23 +1163,40 @@ class IndexingService:
         # Indexing is authenticated and rate-limited, so runaway queries aren't a concern.
         # The Gunicorn worker timeout (300s) provides an outer safety net.
         session.execute(text("SET LOCAL statement_timeout = '0'"))
-        logger.info("Statement timeout disabled for indexing")
+        session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '0'"))
+        logger.info("Statement and idle-in-transaction timeouts disabled for indexing")
 
-        # Create repository record with deduplication-aware fields
-        repo = Repository(
-            url=url,
-            owner=owner,
-            name=name,
-            branch=branch,
-            commit_sha=commit_sha,
-            local_path=str(repo_path),
-            indexed_by=user_id,
-            is_public=is_public,
-        )
-        session.add(repo)
-        logger.info("Flushing repository record to get repo_id")
-        session.flush()  # Get repo_id
-        logger.info("Repository record created", repo_id=repo.repo_id)
+        # Reuse existing repository record if one exists (force reindex case),
+        # otherwise create a new one.
+        repo = session.query(Repository).filter(
+            Repository.url == url,
+            Repository.branch == branch,
+        ).first()
+
+        if repo:
+            # Update existing record
+            repo.commit_sha = commit_sha
+            repo.local_path = str(repo_path)
+            if deep_index:
+                repo.deep_indexed = True
+            session.flush()
+            logger.info("Reusing existing repository record", repo_id=repo.repo_id)
+        else:
+            repo = Repository(
+                url=url,
+                owner=owner,
+                name=name,
+                branch=branch,
+                commit_sha=commit_sha,
+                local_path=str(repo_path),
+                indexed_by=user_id,
+                is_public=is_public,
+                deep_indexed=deep_index,
+            )
+            session.add(repo)
+            logger.info("Flushing repository record to get repo_id")
+            session.flush()  # Get repo_id
+            logger.info("Repository record created", repo_id=repo.repo_id)
         
         # Get parser registry for symbol extraction
         parser_registry = get_parser_registry()
@@ -683,6 +1223,68 @@ class IndexingService:
 
         # Track files in current batch for chunk processing after batch flush
         current_batch_files: list[tuple[RepositoryFile, dict, str]] = []  # (db_file, file_info, content)
+
+        # ── Embedding pipeline: overlap file processing with embedding generation ──
+        # Producer (main thread): chunks files, flushes to DB, enqueues texts
+        # Consumer (embed thread): model.encode() releases GIL → true parallelism
+        # The main thread also drains completed embeddings → pgvector between batches,
+        # keeping the DB session active (prevents idle_in_transaction_session_timeout).
+        embed_q: _queue.Queue = _queue.Queue()  # unbounded — items are just text strings (~128KB each)
+        embed_results: _queue.Queue = _queue.Queue()
+        embed_error: list[Exception] = []
+        embed_batch_counter = 0
+        embed_batches_written = 0
+        last_enqueued_idx = 0  # tracks which chunks_to_embed entries have been enqueued
+
+        def _embedding_worker():
+            """Background thread: pull text batches from queue, generate embeddings."""
+            try:
+                while True:
+                    item = embed_q.get()
+                    if item is None:
+                        break  # poison pill
+                    batch_num, chunk_ids, texts = item
+                    embeddings = self.embedding_generator.generate(texts)
+                    embed_results.put((batch_num, chunk_ids, embeddings))
+                    report_progress(
+                        "generating_embeddings",
+                        f"Embedding batch {batch_num}...",
+                        min(90, 72 + batch_num * 0.3),
+                        embedding_batch=batch_num,
+                    )
+            except Exception as e:
+                embed_error.append(e)
+
+        def _drain_embed_results():
+            """Drain completed embeddings from result queue → pgvector.
+
+            Called from the main thread between file batches to keep the
+            DB session active and write embeddings progressively.
+            """
+            nonlocal embed_batches_written
+            while not embed_results.empty():
+                try:
+                    batch_num, chunk_ids, embeddings = embed_results.get_nowait()
+                except _queue.Empty:
+                    break
+                self.vector_store.add(
+                    embeddings=embeddings,
+                    chunk_ids=chunk_ids,
+                    repo_id=repo.repo_id,
+                    session=session,
+                )
+                embed_batches_written += 1
+                logger.debug(
+                    "Wrote embedding batch to pgvector",
+                    batch_num=batch_num,
+                    chunks=len(chunk_ids),
+                    total_written=embed_batches_written,
+                )
+
+        embed_thread = _threading.Thread(
+            target=_embedding_worker, daemon=True, name="embed-pipeline"
+        )
+        embed_thread.start()
 
         log_interval = max(1, total_files // 20)  # Log ~20 times during processing
         for file_idx, file_info in enumerate(files):
@@ -744,6 +1346,10 @@ class IndexingService:
             # This reduces database round-trips while ensuring file_id is set before chunks
             should_flush = (file_idx + 1) % FLUSH_BATCH_SIZE == 0 or file_idx == total_files - 1
             if should_flush:
+                # Drain any completed embeddings before flushing — gives the
+                # embed thread the full file-processing window to finish batches
+                _drain_embed_results()
+
                 batch_num = (file_idx + 1) // FLUSH_BATCH_SIZE or 1
                 total_batches = (total_files + FLUSH_BATCH_SIZE - 1) // FLUSH_BATCH_SIZE
                 logger.info(
@@ -960,86 +1566,57 @@ class IndexingService:
                     flush_ms=round((time.time() - chunk_flush_start) * 1000),
                 )
 
+                # ── Enqueue newly-flushed chunks for background embedding ──
+                # chunk_ids are now available after flush
+                new_chunks = chunks_to_embed[last_enqueued_idx:]
+                if new_chunks:
+                    # Read current batch_size each time — it may shrink after CUDA OOM recovery
+                    cur_embed_batch = self.embedding_generator.batch_size
+                    for i in range(0, len(new_chunks), cur_embed_batch):
+                        batch_slice = new_chunks[i : i + cur_embed_batch]
+                        embed_batch_counter += 1
+                        chunk_ids = [c[0].chunk_id for c in batch_slice]
+                        texts = [c[1] for c in batch_slice]
+                        embed_q.put((embed_batch_counter, chunk_ids, texts))
+                    last_enqueued_idx = len(chunks_to_embed)
+                    logger.info(
+                        "Enqueued chunks for embedding",
+                        new_chunks=len(new_chunks),
+                        embed_batches_queued=embed_batch_counter,
+                    )
+
+                # ── Progressive drain: write completed embeddings to pgvector ──
+                # This keeps the DB session active, preventing connection timeouts
+                _drain_embed_results()
+
                 # Clear batch after processing
                 current_batch_files = []
         
         report_progress(
-            "files_done", 
+            "files_done",
             f"Processed {total_files} files → {len(chunks_to_embed)} chunks",
             70,
             files_processed=total_files,
             chunks_created=len(chunks_to_embed),
         )
-        
-        # Generate embeddings in batch
+
+        # ── Pipeline drain: wait for embedding thread, write remaining to pgvector ──
+        embed_q.put(None)  # poison pill
+        embed_thread.join()
+
+        if embed_error:
+            raise embed_error[0]
+
+        # Write any remaining embeddings that completed after the last drain
+        _drain_embed_results()
+
         if chunks_to_embed:
-            total_embed_tokens = sum(
-                db_chunk.token_count or 0
-                for db_chunk, _ in chunks_to_embed
-            )
-            report_progress(
-                "embeddings_start",
-                f"Generating embeddings for {len(chunks_to_embed)} chunks...",
-                72,
-                total_chunks=len(chunks_to_embed),
-            )
-            
-            logger.info(
-                "Generating embeddings",
-                count=len(chunks_to_embed),
-                model=self.embedding_generator.model_name,
-                batch_size=self.embedding_generator.batch_size,
-            )
-            
-            contents = [c[1] for c in chunks_to_embed]
-            batch_size = min(self.embedding_generator.batch_size, 100)
-            total_batches = (len(contents) + batch_size - 1) // batch_size
-            all_embeddings = []
-            
-            for batch_idx in range(0, len(contents), batch_size):
-                batch = contents[batch_idx : batch_idx + batch_size]
-                batch_num = batch_idx // batch_size + 1
-                
-                # Generate embeddings for this batch with retry for rate limits
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        batch_embeddings = self.embedding_generator.generate(batch)
-                        all_embeddings.append(batch_embeddings)
-                        break
-                    except Exception as e:
-                        if attempt < max_retries - 1 and (
-                            "429" in str(e) or "quota" in str(e).lower() or "rate" in str(e).lower()
-                        ):
-                            wait = 2 ** (attempt + 1)
-                            logger.warning("Embedding rate-limited, backing off", wait=wait)
-                            time.sleep(wait)
-                        else:
-                            raise
-                
-                # Report per-batch progress: 72-90% is embedding range
-                embed_pct = (batch_num / total_batches) * 100
-                overall_progress = 72 + (embed_pct * 0.18)
-                report_progress(
-                    "generating_embeddings",
-                    f"Embedding batch {batch_num}/{total_batches}...",
-                    overall_progress,
-                    embedding_batch=batch_num,
-                    embedding_total=total_batches,
-                    chunks_created=len(chunks_to_embed),
-                )
-            embeddings = np.vstack(all_embeddings)
-
-
             report_progress("embeddings_done", "Embeddings generated!", 90)
-            
-            # Add to vector store (pgvector - shared for public repos)
-            chunk_ids = [db_chunk.chunk_id for db_chunk, _ in chunks_to_embed]
-            self.vector_store.add(
-                embeddings=embeddings,
-                chunk_ids=chunk_ids,
-                repo_id=repo.repo_id,
-                session=session,
+            logger.info(
+                "All embeddings written to pgvector",
+                total_chunks=len(chunks_to_embed),
+                embed_batches_produced=embed_batch_counter,
+                embed_batches_written=embed_batches_written,
             )
         
         # NOTE: Chunk relationships are built AFTER commit in index_repository()
@@ -1062,6 +1639,9 @@ class IndexingService:
         repo.total_lines = total_lines
         repo.total_tokens = total_tokens
         repo.set_languages(languages)
+        repo.embedding_model = self.embedding_generator.model_name
+        if deep_index:
+            repo.deep_indexed = True
 
         # NOTE: Do NOT commit here - let the outer transaction handle the commit
         # This ensures atomicity: if the server crashes before user_repositories
@@ -1314,6 +1894,7 @@ class IndexingService:
                         "is_owner": r.indexed_by == effective_user_id,
                         "added_at": ur.added_at.isoformat() if ur.added_at else None,
                         "is_favorite": ur.is_favorite,
+                        "deep_indexed": getattr(r, "deep_indexed", False),
                     }
                     for r, ur in results
                 ],

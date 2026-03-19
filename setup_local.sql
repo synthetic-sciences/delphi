@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS repositories (
     local_path TEXT,
     repo_metadata JSONB,
 
+    -- Whether repo was indexed with deep AST chunking
+    deep_indexed BOOLEAN DEFAULT FALSE,
+
     -- Timestamps
     indexed_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -920,6 +923,33 @@ BEGIN
     WHERE job_id = p_job_id;
 END;
 $$ LANGUAGE plpgsql;
+
+
+-- ============================================================================
+-- PART 20: DIFF-AWARE RE-INDEXING (Migration)
+-- ============================================================================
+
+-- Fix missing cascades on chunk_embeddings.chunk_id
+ALTER TABLE chunk_embeddings
+  DROP CONSTRAINT IF EXISTS chunk_embeddings_chunk_id_fkey,
+  ADD CONSTRAINT chunk_embeddings_chunk_id_fkey
+    FOREIGN KEY (chunk_id) REFERENCES code_chunks(chunk_id) ON DELETE CASCADE;
+
+-- Fix missing ON DELETE SET NULL on symbols.parent_symbol_id
+ALTER TABLE symbols
+  DROP CONSTRAINT IF EXISTS symbols_parent_symbol_id_fkey,
+  ADD CONSTRAINT symbols_parent_symbol_id_fkey
+    FOREIGN KEY (parent_symbol_id) REFERENCES symbols(symbol_id) ON DELETE SET NULL;
+
+-- New columns on repositories for diff-aware re-indexing
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS last_diff_stats JSONB;
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(100);
+
+-- Per-user opt-in to automatic background re-indexing
+ALTER TABLE user_repositories ADD COLUMN IF NOT EXISTS auto_update BOOLEAN DEFAULT FALSE;
+
+-- Track whether a repo was indexed with deep AST chunking
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS deep_indexed BOOLEAN DEFAULT FALSE;
 
 
 -- ============================================================================

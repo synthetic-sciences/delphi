@@ -134,6 +134,13 @@ class Repository(Base):
     
     repo_metadata: Mapped[dict | None] = mapped_column(JSONB)
 
+    # Diff-aware re-indexing metadata
+    last_diff_stats: Mapped[dict | None] = mapped_column(JSONB)
+    embedding_model: Mapped[str | None] = mapped_column(String(100))
+
+    # Whether the repo was indexed with deep AST chunking
+    deep_indexed: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Relationships
     files: Mapped[list["RepositoryFile"]] = relationship(
         "RepositoryFile", back_populates="repository", cascade="all, delete-orphan"
@@ -215,6 +222,7 @@ class UserRepository(Base):
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     last_searched_at: Mapped[datetime | None] = mapped_column(DateTime)
     search_count: Mapped[int] = mapped_column(Integer, default=0)
+    auto_update: Mapped[bool] = mapped_column(Boolean, default=False)
 
     repository: Mapped["Repository"] = relationship(
         "Repository", back_populates="user_links"
@@ -378,7 +386,7 @@ class Symbol(Base):
     is_async: Mapped[bool] = mapped_column(Boolean, default=False)
     
     parent_symbol_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("symbols.symbol_id")
+        String(36), ForeignKey("symbols.symbol_id", ondelete="SET NULL")
     )
     
     parameters: Mapped[list | None] = mapped_column(JSONB)
@@ -681,7 +689,7 @@ class ChunkEmbedding(Base):
         String(36), primary_key=True, default=generate_uuid
     )
     chunk_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("code_chunks.chunk_id"), nullable=False, unique=True
+        String(36), ForeignKey("code_chunks.chunk_id", ondelete="CASCADE"), nullable=False, unique=True
     )
     repo_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("repositories.repo_id"), nullable=False

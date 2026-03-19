@@ -15,7 +15,7 @@ class EmbeddingConfig(BaseModel):
     """Configuration for embeddings (all local via sentence-transformers)."""
 
     model_name: str = Field(
-        default="all-mpnet-base-v2",
+        default="jinaai/jina-embeddings-v2-base-code",
         description="Sentence-transformers model for all embeddings",
     )
     device: str = Field(
@@ -23,7 +23,7 @@ class EmbeddingConfig(BaseModel):
         description="Device for inference ('cpu', 'cuda', 'mps'). Auto-detects GPU.",
     )
     batch_size: int = Field(
-        default=32, description="Batch size for embedding generation",
+        default=64, description="Batch size for embedding generation",
     )
     dimension: int = Field(
         default=768,
@@ -180,6 +180,17 @@ class SearchConfig(BaseModel):
     min_similarity_score: float = Field(
         default=0.3, description="Minimum similarity score for results"
     )
+    enable_reranker: bool = Field(
+        default=False, description="Enable cross-encoder reranking for improved search quality"
+    )
+    reranker_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        description="Cross-encoder model for reranking",
+    )
+    reranker_blend_alpha: float = Field(
+        default=0.4,
+        description="Weight for cross-encoder score (0=vector only, 1=cross-encoder only)",
+    )
 
 
 class APIConfig(BaseModel):
@@ -247,6 +258,10 @@ class SynscConfig(BaseModel):
             config.embeddings.model_name = model
         if device := os.getenv("EMBEDDING_DEVICE"):
             config.embeddings.device = device
+        if batch_size := os.getenv("EMBEDDING_BATCH_SIZE"):
+            config.embeddings.batch_size = int(batch_size)
+        if dimension := os.getenv("EMBEDDING_DIMENSION"):
+            config.embeddings.dimension = int(dimension)
 
         if log_level := os.getenv("SYNSC_LOG_LEVEL"):
             config.log_level = log_level  # type: ignore
@@ -272,6 +287,14 @@ class SynscConfig(BaseModel):
         # HuggingFace configuration
         if hf_token := os.getenv("HF_TOKEN"):
             config.dataset.hf_token = hf_token
+
+        # Reranker
+        if enable_reranker := os.getenv("SYNSC_ENABLE_RERANKER"):
+            config.search.enable_reranker = enable_reranker.lower() in ("true", "1", "yes")
+        if reranker_model := os.getenv("RERANKER_MODEL"):
+            config.search.reranker_model = reranker_model
+        if blend_alpha := os.getenv("RERANKER_BLEND_ALPHA"):
+            config.search.reranker_blend_alpha = float(blend_alpha)
 
         # Feature flags
         if enable_code := os.getenv("ENABLE_CODE_INDEXING"):

@@ -127,6 +127,16 @@ class IndexRepositoryRequest(BaseModel):
         default=False,
         description="Deep indexing: full AST chunking per function/class (slower, higher quality)",
     )
+    force_reindex: bool = Field(
+        default=False,
+        description="Skip diff detection and fully re-index from scratch",
+    )
+
+
+class ReindexRepositoryRequest(BaseModel):
+    """Request to re-index an existing repository."""
+    force: bool = Field(default=False, description="Force full re-index instead of diff-aware")
+    deep_index: bool = Field(default=False, description="Full AST chunking")
 
 
 class SearchCodeRequest(BaseModel):
@@ -324,6 +334,20 @@ async def verify_api_key(
         return AuthContext(api_key="system_password", user_id=admin_id)
 
     raise HTTPException(status_code=401, detail="Invalid credentials.")
+
+
+async def verify_admin(auth: AuthContext = Depends(verify_api_key)) -> AuthContext:
+    """Verify the user has is_admin=true in the database."""
+    with get_session() as session:
+        row = session.execute(
+            text("SELECT is_admin FROM users WHERE id = :uid"),
+            {"uid": auth.user_id},
+        ).mappings().first()
+
+    if row and row["is_admin"]:
+        return auth
+
+    raise HTTPException(status_code=403, detail="Admin access required.")
 
 
 # =============================================================================
@@ -683,6 +707,7 @@ def create_app() -> FastAPI:
                 service.index_repository,
                 request.url, request.branch, user_id=auth.user_id,
                 deep_index=request.deep_index,
+                force_reindex=request.force_reindex,
             )
             _cache_invalidate_user(auth.user_id)
             _log_activity(auth.user_id, "index_repository", "repository", metadata={"url": request.url, "branch": request.branch})
@@ -735,6 +760,7 @@ def create_app() -> FastAPI:
                                 user_id=auth.user_id,
                                 progress_callback=progress_callback,
                                 deep_index=request.deep_index,
+                                force_reindex=request.force_reindex,
                             )
                         )
                         return result
@@ -756,6 +782,14 @@ def create_app() -> FastAPI:
                 except asyncio.TimeoutError:
                     # Send heartbeat
                     yield f"data: {json.dumps({'stage': 'heartbeat', 'message': 'Processing...', 'progress': -1})}\n\n"
+
+            # Drain any remaining progress events before sending complete
+            while not progress_queue.empty():
+                try:
+                    event = progress_queue.get_nowait()
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.QueueEmpty:
+                    break
 
             # Get final result
             try:
@@ -840,6 +874,173 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error("Failed to delete repository", error=str(e))
             return SafeJSONResponse(content={"success": False, "error": "Failed to delete repository."}, status_code=500)
+
+    @app.post("/v1/repositories/{repo_id}/reindex", tags=["Code"])
+    async def reindex_repository(
+        repo_id: str,
+        request: ReindexRepositoryRequest = ReindexRepositoryRequest(),
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """Re-index an existing repository with diff-aware updates.
+
+        Only re-processes files that changed since the last index.
+        Set force=true to fully re-index from scratch.
+        """
+        try:
+            _uuid.UUID(repo_id)
+        except ValueError:
+            return SafeJSONResponse(
+                content={"success": False, "error": "Invalid repository ID format"},
+                status_code=400,
+            )
+        try:
+            from synsc.database.connection import get_session
+            from synsc.database.models import Repository
+            from synsc.services.indexing_service import IndexingService
+
+            # Look up the repo to get its URL and branch
+            with get_session() as session:
+                repo = session.query(Repository).filter(
+                    Repository.repo_id == repo_id
+                ).first()
+                if not repo:
+                    return SafeJSONResponse(
+                        content={"success": False, "error": "Repository not found"},
+                        status_code=404,
+                    )
+                url = repo.url
+                branch = repo.branch
+
+            service = IndexingService()
+            result = await asyncio.to_thread(
+                service.index_repository,
+                url, branch, user_id=auth.user_id,
+                deep_index=request.deep_index,
+                force_reindex=request.force,
+            )
+            _cache_invalidate_user(auth.user_id)
+            _log_activity(auth.user_id, "reindex_repository", "repository", resource_id=repo_id)
+            return SafeJSONResponse(content=result)
+        except Exception as e:
+            logger.error("Failed to re-index repository", error=str(e))
+            return SafeJSONResponse(
+                content={"success": False, "error": "Failed to re-index repository."},
+                status_code=500,
+            )
+
+    # ==========================================================================
+    # ADMIN: Repository Management
+    # ==========================================================================
+
+    @app.get("/v1/admin/repositories", tags=["Admin"])
+    def admin_list_repositories(
+        auth: AuthContext = Depends(verify_admin),
+    ) -> JSONResponse:
+        """List all PUBLIC repositories in the system (admin view). Private repos are excluded."""
+        try:
+            from synsc.database.connection import get_session
+            from synsc.database.models import Repository
+
+            with get_session() as session:
+                repos = session.query(Repository).filter(
+                    Repository.is_public == True  # noqa: E712
+                ).order_by(
+                    Repository.indexed_at.desc()
+                ).all()
+                return SafeJSONResponse(content={
+                    "success": True,
+                    "repositories": [
+                        {
+                            "repo_id": str(r.repo_id),
+                            "owner": r.owner,
+                            "name": r.name,
+                            "url": r.url,
+                            "branch": r.branch,
+                            "commit_sha": r.commit_sha,
+                            "is_public": r.is_public,
+                            "indexed_by": r.indexed_by,
+                            "files_count": r.files_count,
+                            "chunks_count": r.chunks_count,
+                            "symbols_count": r.symbols_count,
+                            "total_lines": r.total_lines,
+                            "total_tokens": r.total_tokens,
+                            "languages": r.get_languages(),
+                            "deep_indexed": r.deep_indexed if hasattr(r, "deep_indexed") else False,
+                            "indexed_at": r.indexed_at.isoformat() if r.indexed_at else None,
+                            "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+                        }
+                        for r in repos
+                    ],
+                    "total": len(repos),
+                })
+        except Exception as e:
+            logger.error("Failed to list admin repositories", error=str(e))
+            return SafeJSONResponse(
+                content={"success": False, "error": "Failed to list repositories."},
+                status_code=500,
+            )
+
+    @app.delete("/v1/admin/repositories/{repo_id}", tags=["Admin"])
+    def admin_delete_repository(
+        repo_id: str,
+        auth: AuthContext = Depends(verify_admin),
+    ) -> JSONResponse:
+        """Hard-delete a repository and all its data (admin action, ignores public/private)."""
+        try:
+            _uuid.UUID(repo_id)
+        except ValueError:
+            return SafeJSONResponse(
+                content={"success": False, "error": "Invalid repository ID format"},
+                status_code=400,
+            )
+        try:
+            from synsc.database.connection import get_session
+            from synsc.database.models import Repository
+            from synsc.services.indexing_service import IndexingService
+
+            with get_session() as session:
+                repo = session.query(Repository).filter(
+                    Repository.repo_id == repo_id
+                ).first()
+                if not repo:
+                    return SafeJSONResponse(
+                        content={"success": False, "error": "Repository not found"},
+                        status_code=404,
+                    )
+                owner = repo.owner
+                name = repo.name
+                branch = repo.branch
+                files_count = repo.files_count
+                chunks_count = repo.chunks_count
+
+                from sqlalchemy import text as sa_text
+                session.execute(sa_text("DELETE FROM chunk_embeddings WHERE repo_id = :rid"), {"rid": repo_id})
+                session.execute(sa_text("DELETE FROM symbols WHERE repo_id = :rid"), {"rid": repo_id})
+                session.execute(sa_text("DELETE FROM code_chunks WHERE repo_id = :rid"), {"rid": repo_id})
+                session.execute(sa_text("DELETE FROM repository_files WHERE repo_id = :rid"), {"rid": repo_id})
+                session.execute(sa_text("DELETE FROM user_repositories WHERE repo_id = :rid"), {"rid": repo_id})
+                session.execute(sa_text("DELETE FROM repositories WHERE repo_id = :rid"), {"rid": repo_id})
+                session.commit()
+
+            # Delete local clone
+            service = IndexingService()
+            service.git_client.delete_repo(owner, name, branch)
+            _cache_invalidate_user(auth.user_id)
+
+            logger.info("Admin hard-deleted repository", repo_id=repo_id, owner=owner, name=name)
+            return SafeJSONResponse(content={
+                "success": True,
+                "repo_id": repo_id,
+                "files_deleted": files_count,
+                "chunks_deleted": chunks_count,
+                "message": f"Repository {owner}/{name} permanently deleted",
+            })
+        except Exception as e:
+            logger.error("Failed to admin-delete repository", error=str(e))
+            return SafeJSONResponse(
+                content={"success": False, "error": "Failed to delete repository."},
+                status_code=500,
+            )
 
     @app.post("/v1/files/get", tags=["Code"])
     def get_file(
