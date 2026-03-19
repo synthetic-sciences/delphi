@@ -29,6 +29,7 @@ services:
       DATABASE_URL: postgresql://synsc:synsc@postgres:5432/synsc
       SYNSC_API_HOST: "0.0.0.0"
       SYNSC_API_PORT: "8742"
+      SYNSC_LOG_FORMAT: json
       FRONTEND_URL: http://localhost:3000
     ports:
       - "8742:8742"
@@ -44,6 +45,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://synsc:synsc@postgres:5432/synsc
+      SYNSC_LOG_FORMAT: json
       SYNSC_WORKER_THREADS: "4"
 
   frontend:

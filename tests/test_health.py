@@ -2,6 +2,8 @@
 
 from unittest.mock import patch, MagicMock
 
+from synsc import __version__
+
 
 def test_root_returns_api_info(client):
     """GET / should return API name, version, and doc links."""
@@ -10,7 +12,7 @@ def test_root_returns_api_info(client):
 
     data = resp.json()
     assert data["name"] == "Synsc Context API"
-    assert data["version"] == "1.0.0"
+    assert data["version"] == __version__
     assert data["docs"] == "/docs"
     assert data["health"] == "/health"
 
@@ -29,10 +31,10 @@ def test_health_returns_healthy(client):
 
     data = resp.json()
     assert data["status"] == "healthy"
-    assert data["version"] == "1.0.0"
+    assert data["version"] == __version__
     assert data["database_backend"] == "postgresql"
     assert data["vector_backend"] == "pgvector"
-    assert data["auth_backend"] == "local"
+    assert data["auth_backend"] == "github_oauth+jwt"
     assert isinstance(data["uptime_seconds"], float)
 
 
