@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getAccessToken, setAccessToken } from "@/lib/api";
+import { isAuthenticated } from "@/lib/api";
 
 interface ServerConfig {
   github_oauth_enabled: boolean;
@@ -19,8 +19,8 @@ export default function LoginPage() {
 
   // If already authenticated, redirect to overview
   useEffect(() => {
-    getAccessToken().then((token) => {
-      if (token) router.replace("/overview");
+    isAuthenticated().then((authed) => {
+      if (authed) router.replace("/overview");
     });
   }, [router]);
 
@@ -47,6 +47,7 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),
+        credentials: "include",  // Receive httpOnly cookie
       });
 
       if (!resp.ok) {
@@ -56,8 +57,7 @@ export default function LoginPage() {
         return;
       }
 
-      const data = await resp.json();
-      setAccessToken(data.token);
+      // Cookie is set by the response — just redirect
       router.replace("/overview");
     } catch {
       setError("Could not connect to server");

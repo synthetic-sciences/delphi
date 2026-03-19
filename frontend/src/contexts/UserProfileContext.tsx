@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { getAccessToken, getUserProfile } from "@/lib/api";
+import { getUserProfile, isAuthenticated } from "@/lib/api";
 
 interface UserProfile {
   user_id: string;
@@ -33,11 +33,14 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     try {
       setLoading(true);
       setError(null);
-      const token = await getAccessToken();
-      if (!token) {
-        setLoading(false);
+
+      // Check session first (no 401 noise in logs)
+      const authed = await isAuthenticated();
+      if (!authed) {
+        setProfile(null);
         return;
       }
+
       const resp = await getUserProfile();
       if (resp.ok) {
         const data = await resp.json();

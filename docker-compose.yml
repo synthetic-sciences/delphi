@@ -2,16 +2,16 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: synsc
-      POSTGRES_PASSWORD: synsc
-      POSTGRES_DB: synsc
+      POSTGRES_USER: ${POSTGRES_USER:-synsc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synsc}
+      POSTGRES_DB: ${POSTGRES_DB:-synsc}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./setup_local.sql:/docker-entrypoint-initdb.d/01-setup.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U synsc -d synsc"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synsc} -d ${POSTGRES_DB:-synsc}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -26,7 +26,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://synsc:synsc@postgres:5432/synsc
+      DATABASE_URL: postgresql://${POSTGRES_USER:-synsc}:${POSTGRES_PASSWORD:-synsc}@postgres:5432/${POSTGRES_DB:-synsc}
       SYNSC_API_HOST: "0.0.0.0"
       SYNSC_API_PORT: "8742"
       SYNSC_LOG_FORMAT: json
@@ -44,7 +44,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://synsc:synsc@postgres:5432/synsc
+      DATABASE_URL: postgresql://${POSTGRES_USER:-synsc}:${POSTGRES_PASSWORD:-synsc}@postgres:5432/${POSTGRES_DB:-synsc}
       SYNSC_LOG_FORMAT: json
       SYNSC_WORKER_THREADS: "4"
 
