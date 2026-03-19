@@ -74,10 +74,7 @@ FROM runtime AS api
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -f http://localhost:8742/health || exit 1
 
-CMD ["uv", "run", "uvicorn", "synsc.api.http_server:create_app", \
-     "--factory", \
-     "--host", "0.0.0.0", \
-     "--port", "8742"]
+CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn synsc.api.http_server:create_app --factory --host 0.0.0.0 --port 8742"]
 
 # ---------------------------------------------------------------------------
 # Target: worker
