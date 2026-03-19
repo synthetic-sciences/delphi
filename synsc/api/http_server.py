@@ -305,11 +305,16 @@ async def verify_api_key(
     """Verify credentials from request headers.
 
     Checks (in order):
+      0. If auth is disabled (SYNSC_REQUIRE_AUTH=false), return dev context
       1. JWT session token (from OAuth login or password login)
       2. DB-stored API key (for AI agents / MCP tools)
       3. SYSTEM_PASSWORD (admin fallback)
     Via: Authorization: Bearer <token> or X-API-Key: <token>
     """
+    config = get_config()
+    if not config.api.require_auth:
+        return AuthContext(api_key="dev", user_id="local-dev")
+
     token = x_api_key
     if not token and authorization and authorization.startswith("Bearer "):
         token = authorization[7:]
@@ -379,6 +384,49 @@ def _cache_invalidate_user(user_id: str) -> None:
 
 
 # =============================================================================
+# Security Headers Middleware (raw ASGI for performance)
+# =============================================================================
+
+
+class SecurityHeadersMiddleware:
+    """Inject security headers into every HTTP response.
+
+    Uses raw ASGI (not BaseHTTPMiddleware) to avoid streaming/performance issues.
+    HSTS is opt-in via SYNSC_ENABLE_HSTS env var.
+    """
+
+    def __init__(self, app):
+        self.app = app
+        enable_hsts = os.getenv("SYNSC_ENABLE_HSTS", "false").lower() in ("true", "1", "yes")
+        self.headers: list[tuple[bytes, bytes]] = [
+            (b"x-frame-options", b"DENY"),
+            (b"x-content-type-options", b"nosniff"),
+            (b"referrer-policy", b"strict-origin-when-cross-origin"),
+            (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
+            (b"content-security-policy", b"default-src 'self'; frame-ancestors 'none'"),
+            (b"x-xss-protection", b"0"),
+        ]
+        if enable_hsts:
+            self.headers.append(
+                (b"strict-transport-security", b"max-age=63072000; includeSubDomains")
+            )
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.extend(self.headers)
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+# =============================================================================
 # Application Factory
 # =============================================================================
 
@@ -387,38 +435,8 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     import logging as _logging
 
-    if not isinstance(
-        structlog.get_config().get("wrapper_class"),
-        type,
-    ) or not issubclass(
-        structlog.get_config().get("wrapper_class", object),
-        structlog.stdlib.BoundLogger,
-    ):
-        # Remove any existing handlers (e.g. RichHandler from sentence_transformers)
-        _logging.root.handlers.clear()
-        _logging.basicConfig(
-            format="%(message)s",
-            level=_logging.INFO,
-            force=True,
-        )
-
-        structlog.configure(
-            processors=[
-                structlog.stdlib.filter_by_level,
-                structlog.stdlib.add_log_level,
-                structlog.processors.StackInfoRenderer(),
-                structlog.processors.format_exc_info,
-                structlog.processors.UnicodeDecoder(),
-                structlog.dev.ConsoleRenderer(
-                    colors=False,
-                    pad_event_to=40,
-                ),
-            ],
-            wrapper_class=structlog.stdlib.BoundLogger,
-            context_class=dict,
-            logger_factory=structlog.stdlib.LoggerFactory(),
-            cache_logger_on_first_use=True,
-        )
+    from synsc.logging import configure_logging
+    configure_logging(force=True)
 
     # Silence noisy loggers
     _logging.getLogger("httpx").setLevel(_logging.WARNING)
@@ -485,9 +503,18 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=config.api.cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=config.api.cors_methods,
+        allow_headers=config.api.cors_headers,
     )
+
+    # Security headers (wraps the ASGI app after CORS)
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # Rate limiting
+    from synsc.api.rate_limit import limiter, _rate_limit_exceeded_handler, AUTH_LIMIT, INDEX_LIMIT, SEARCH_LIMIT
+    from slowapi.errors import RateLimitExceeded
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     # ==========================================================================
     # Health & Info Endpoints
@@ -542,6 +569,7 @@ def create_app() -> FastAPI:
             _oauth_states.pop(s, None)
 
     @app.get("/auth/github", tags=["Auth"])
+    @limiter.limit(AUTH_LIMIT)
     async def auth_github(request: Request) -> RedirectResponse:
         """Start GitHub OAuth flow — redirects to GitHub."""
         from synsc.auth.oauth import build_authorize_url, generate_state
@@ -556,6 +584,7 @@ def create_app() -> FastAPI:
         return RedirectResponse(url=authorize_url)
 
     @app.get("/auth/github/callback", tags=["Auth"])
+    @limiter.limit(AUTH_LIMIT)
     async def auth_github_callback(
         request: Request,
         code: str = Query(...),
@@ -643,7 +672,8 @@ def create_app() -> FastAPI:
         password: str = Field(description="System password (SYSTEM_PASSWORD env var)")
 
     @app.post("/auth/login", tags=["Auth"])
-    async def login(request: LoginRequest) -> dict:
+    @limiter.limit(AUTH_LIMIT)
+    async def login(request: Request, body: LoginRequest) -> dict:
         """Authenticate with the system password (admin fallback).
 
         Returns a JWT session token for the admin user.
@@ -652,7 +682,7 @@ def create_app() -> FastAPI:
         if not system_pw:
             raise HTTPException(status_code=501, detail="SYSTEM_PASSWORD not configured. Use GitHub OAuth.")
 
-        if not hmac.compare_digest(request.password, system_pw):
+        if not hmac.compare_digest(body.password, system_pw):
             raise HTTPException(status_code=401, detail="Invalid password.")
 
         admin_id = _get_or_create_admin_user()
@@ -694,35 +724,39 @@ def create_app() -> FastAPI:
     # ==========================================================================
 
     @app.post("/v1/repositories/index", tags=["Code"])
+    @limiter.limit(INDEX_LIMIT)
     async def index_repository(
-        request: IndexRepositoryRequest,
+        request: Request,
+        body: IndexRepositoryRequest,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Index a GitHub repository for semantic code search."""
-        logger.info("API: Indexing repository", url=request.url, branch=request.branch, user_id=auth.user_id)
+        logger.info("API: Indexing repository", url=body.url, branch=body.branch, user_id=auth.user_id)
         try:
             from synsc.services.indexing_service import IndexingService
             service = IndexingService()
             result = await asyncio.to_thread(
                 service.index_repository,
-                request.url, request.branch, user_id=auth.user_id,
-                deep_index=request.deep_index,
-                force_reindex=request.force_reindex,
+                body.url, body.branch, user_id=auth.user_id,
+                deep_index=body.deep_index,
+                force_reindex=body.force_reindex,
             )
             _cache_invalidate_user(auth.user_id)
-            _log_activity(auth.user_id, "index_repository", "repository", metadata={"url": request.url, "branch": request.branch})
+            _log_activity(auth.user_id, "index_repository", "repository", metadata={"url": body.url, "branch": body.branch})
             return SafeJSONResponse(content=result)
         except Exception as e:
             logger.error("Indexing failed", error=str(e))
             return SafeJSONResponse(content={"success": False, "error": "Repository indexing failed. Check server logs for details."}, status_code=500)
 
     @app.post("/v1/repositories/index/stream", tags=["Code"])
+    @limiter.limit(INDEX_LIMIT)
     async def index_repository_stream(
-        request: IndexRepositoryRequest,
+        request: Request,
+        body: IndexRepositoryRequest,
         auth: AuthContext = Depends(verify_api_key),
     ):
         """Index a repository with Server-Sent Events for progress updates."""
-        logger.info("API: Streaming index repository", url=request.url, branch=request.branch, user_id=auth.user_id)
+        logger.info("API: Streaming index repository", url=body.url, branch=body.branch, user_id=auth.user_id)
 
         async def event_stream():
             """Generate SSE events during indexing."""
@@ -755,12 +789,12 @@ def create_app() -> FastAPI:
                         result = await loop.run_in_executor(
                             pool,
                             lambda: service.index_repository(
-                                request.url,
-                                request.branch,
+                                body.url,
+                                body.branch,
                                 user_id=auth.user_id,
                                 progress_callback=progress_callback,
-                                deep_index=request.deep_index,
-                                force_reindex=request.force_reindex,
+                                deep_index=body.deep_index,
+                                force_reindex=body.force_reindex,
                             )
                         )
                         return result
@@ -1068,26 +1102,28 @@ def create_app() -> FastAPI:
         return SafeJSONResponse(content=result)
 
     @app.post("/v1/search/code", tags=["Code"])
+    @limiter.limit(SEARCH_LIMIT)
     def search_code(
-        request: SearchCodeRequest,
+        request: Request,
+        body: SearchCodeRequest,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Search code using natural language or keywords."""
-        logger.info("API: Searching code", query=request.query, user_id=auth.user_id)
+        logger.info("API: Searching code", query=body.query, user_id=auth.user_id)
         try:
             from synsc.services.search_service import SearchService
             t0 = int(time.time() * 1000)
             service = SearchService(user_id=auth.user_id)
             result = service.search_code(
-                query=request.query,
-                repo_ids=request.repo_ids,
-                language=request.language,
-                file_pattern=request.file_pattern,
-                top_k=request.top_k,
+                query=body.query,
+                repo_ids=body.repo_ids,
+                language=body.language,
+                file_pattern=body.file_pattern,
+                top_k=body.top_k,
             )
             dur = int(time.time() * 1000) - t0
             rc = len(result.get("results", []))
-            _log_activity(auth.user_id, "search_code", "search", query=request.query, results_count=rc, duration_ms=dur)
+            _log_activity(auth.user_id, "search_code", "search", query=body.query, results_count=rc, duration_ms=dur)
             return SafeJSONResponse(content=result)
         except Exception as e:
             logger.error("Code search failed", error=str(e))
@@ -1097,26 +1133,28 @@ def create_app() -> FastAPI:
             )
 
     @app.post("/v1/symbols/search", tags=["Code"])
+    @limiter.limit(SEARCH_LIMIT)
     def search_symbols(
-        request: SearchSymbolsRequest,
+        request: Request,
+        body: SearchSymbolsRequest,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Search for code symbols (functions, classes, methods)."""
-        logger.info("API: Searching symbols", name=request.name, user_id=auth.user_id)
+        logger.info("API: Searching symbols", name=body.name, user_id=auth.user_id)
         from synsc.services.symbol_service import SymbolService
         t0 = int(time.time() * 1000)
         service = SymbolService(user_id=auth.user_id)
         result = service.search_symbols(
-            name=request.name,
-            repo_ids=request.repo_ids,
-            symbol_type=request.symbol_type,
-            language=request.language,
-            top_k=request.top_k,
-            offset=request.offset,
+            name=body.name,
+            repo_ids=body.repo_ids,
+            symbol_type=body.symbol_type,
+            language=body.language,
+            top_k=body.top_k,
+            offset=body.offset,
         )
         dur = int(time.time() * 1000) - t0
         rc = len(result.get("results", []))
-        _log_activity(auth.user_id, "search_symbols", "search", query=request.name, results_count=rc, duration_ms=dur)
+        _log_activity(auth.user_id, "search_symbols", "search", query=body.name, results_count=rc, duration_ms=dur)
         return SafeJSONResponse(content=result)
 
     # ==========================================================================
@@ -1129,15 +1167,17 @@ def create_app() -> FastAPI:
         source_type: str = Field(default="arxiv", description="Source type: arxiv or pdf")
 
     @app.post("/v1/papers/index", tags=["Papers"])
+    @limiter.limit(INDEX_LIMIT)
     async def index_paper(
-        request: IndexPaperRequest,
+        request: Request,
+        body: IndexPaperRequest,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Index a research paper from arXiv or URL."""
         import tempfile
         import os
 
-        logger.info("API: Indexing paper", arxiv_id=request.arxiv_id, url=request.url, user_id=auth.user_id)
+        logger.info("API: Indexing paper", arxiv_id=body.arxiv_id, url=body.url, user_id=auth.user_id)
 
         from synsc.services.paper_service import get_paper_service
         from synsc.core.arxiv_client import parse_arxiv_id, download_arxiv_pdf, get_arxiv_metadata, ArxivError
@@ -1145,12 +1185,12 @@ def create_app() -> FastAPI:
         service = get_paper_service(user_id=auth.user_id)
 
         # Determine source arXiv ID
-        source_arxiv_id = request.arxiv_id
+        source_arxiv_id = body.arxiv_id
 
         # Extract arXiv ID from URL if provided
-        if request.url:
+        if body.url:
             try:
-                source_arxiv_id = parse_arxiv_id(request.url)
+                source_arxiv_id = parse_arxiv_id(body.url)
             except ArxivError:
                 pass
 
@@ -1199,7 +1239,9 @@ def create_app() -> FastAPI:
             return SafeJSONResponse(content={"success": False, "error": "Paper indexing failed. Check server logs for details."}, status_code=500)
 
     @app.post("/v1/papers/upload", tags=["Papers"])
+    @limiter.limit(INDEX_LIMIT)
     async def upload_paper(
+        request: Request,
         file: UploadFile = File(...),
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
@@ -1263,20 +1305,22 @@ def create_app() -> FastAPI:
         })
 
     @app.post("/v1/search/papers", tags=["Papers"])
+    @limiter.limit(SEARCH_LIMIT)
     def search_papers(
-        request: SearchPapersRequest,
+        request: Request,
+        body: SearchPapersRequest,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Search papers using semantic search."""
-        logger.info("API: Searching papers", query=request.query, user_id=auth.user_id)
+        logger.info("API: Searching papers", query=body.query, user_id=auth.user_id)
 
         from synsc.services.paper_service import get_paper_service
         t0 = int(time.time() * 1000)
         service = get_paper_service(user_id=auth.user_id)
-        result = service.search_papers(query=request.query, top_k=request.top_k)
+        result = service.search_papers(query=body.query, top_k=body.top_k)
         dur = int(time.time() * 1000) - t0
         rc = len(result.get("results", []))
-        _log_activity(auth.user_id, "search_papers", "search", query=request.query, results_count=rc, duration_ms=dur)
+        _log_activity(auth.user_id, "search_papers", "search", query=body.query, results_count=rc, duration_ms=dur)
         return SafeJSONResponse(content=result)
 
     @app.get("/v1/papers/{paper_id}/citations", tags=["Papers"])
@@ -1333,12 +1377,14 @@ def create_app() -> FastAPI:
     # ==========================================================================
 
     @app.post("/v1/datasets/index", tags=["Datasets"])
+    @limiter.limit(INDEX_LIMIT)
     async def index_dataset(
-        request: IndexDatasetRequest,
+        request: Request,
+        body: IndexDatasetRequest,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Index a HuggingFace dataset for semantic search."""
-        logger.info("API: Indexing dataset", hf_id=request.hf_id, user_id=auth.user_id)
+        logger.info("API: Indexing dataset", hf_id=body.hf_id, user_id=auth.user_id)
 
         hf_token = _get_user_hf_token(auth.user_id)
         if not hf_token:
@@ -1350,8 +1396,8 @@ def create_app() -> FastAPI:
         from synsc.services.dataset_service import get_dataset_service
         service = get_dataset_service(user_id=auth.user_id)
 
-        result = await asyncio.to_thread(service.index_dataset, request.hf_id, hf_token)
-        _log_activity(auth.user_id, "index_dataset", "dataset", metadata={"hf_id": request.hf_id})
+        result = await asyncio.to_thread(service.index_dataset, body.hf_id, hf_token)
+        _log_activity(auth.user_id, "index_dataset", "dataset", metadata={"hf_id": body.hf_id})
         return SafeJSONResponse(content=result)
 
     @app.get("/v1/datasets", tags=["Datasets"])
@@ -1420,12 +1466,14 @@ def create_app() -> FastAPI:
         return SafeJSONResponse(content=result)
 
     @app.post("/v1/search/datasets", tags=["Datasets"])
+    @limiter.limit(SEARCH_LIMIT)
     def search_datasets(
-        request: SearchDatasetsRequest,
+        request: Request,
+        body: SearchDatasetsRequest,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Search datasets using semantic search."""
-        logger.info("API: Searching datasets", query=request.query, user_id=auth.user_id)
+        logger.info("API: Searching datasets", query=body.query, user_id=auth.user_id)
 
         if not _user_has_hf_token(auth.user_id):
             return SafeJSONResponse(
@@ -1436,10 +1484,10 @@ def create_app() -> FastAPI:
         from synsc.services.dataset_service import get_dataset_service
         t0 = int(time.time() * 1000)
         service = get_dataset_service(user_id=auth.user_id)
-        result = service.search_datasets(query=request.query, top_k=request.top_k)
+        result = service.search_datasets(query=body.query, top_k=body.top_k)
         dur = int(time.time() * 1000) - t0
         rc = len(result.get("results", []))
-        _log_activity(auth.user_id, "search_datasets", "search", query=request.query, results_count=rc, duration_ms=dur)
+        _log_activity(auth.user_id, "search_datasets", "search", query=body.query, results_count=rc, duration_ms=dur)
         return SafeJSONResponse(content=result)
 
     # ==========================================================================

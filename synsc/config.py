@@ -206,6 +206,14 @@ class APIConfig(BaseModel):
         default=["http://localhost:3000"],
         description="Allowed CORS origins",
     )
+    cors_methods: list[str] = Field(
+        default=["GET", "POST", "DELETE", "PUT", "OPTIONS"],
+        description="Allowed CORS methods",
+    )
+    cors_headers: list[str] = Field(
+        default=["Authorization", "Content-Type", "X-API-Key"],
+        description="Allowed CORS headers",
+    )
 
 
 class FeatureFlags(BaseModel):
@@ -279,6 +287,10 @@ class SynscConfig(BaseModel):
         # CORS origins (comma-separated)
         if cors := os.getenv("SYNSC_CORS_ORIGINS"):
             config.api.cors_origins = [o.strip() for o in cors.split(",") if o.strip()]
+        if cors_methods := os.getenv("SYNSC_CORS_METHODS"):
+            config.api.cors_methods = [m.strip() for m in cors_methods.split(",") if m.strip()]
+        if cors_headers := os.getenv("SYNSC_CORS_HEADERS"):
+            config.api.cors_headers = [h.strip() for h in cors_headers.split(",") if h.strip()]
 
         # Temp directory
         if temp_dir := os.getenv("SYNSC_TEMP_DIR"):

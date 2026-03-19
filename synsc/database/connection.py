@@ -115,6 +115,28 @@ def init_db() -> None:
 
             logger.info("Database verified", tables=tables)
 
+            # Check Alembic migration status (non-fatal)
+            try:
+                alembic_result = conn.execute(
+                    text(
+                        "SELECT version_num FROM alembic_version "
+                        "ORDER BY version_num DESC LIMIT 1"
+                    )
+                )
+                version_row = alembic_result.fetchone()
+                if version_row:
+                    logger.info("Alembic migration version", version=version_row[0])
+                else:
+                    logger.warning(
+                        "Alembic version table exists but is empty — "
+                        "run 'alembic upgrade head' to stamp the baseline"
+                    )
+            except Exception:
+                logger.warning(
+                    "Alembic version table not found — "
+                    "run 'alembic upgrade head' to initialize migrations"
+                )
+
     except Exception as e:
         logger.error("Failed to connect to database", error=str(e))
         raise
