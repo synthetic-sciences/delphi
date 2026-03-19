@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import PageShell from "@/components/PageShell";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import {
   Search, GitBranch, Plus, Trash2, RefreshCw, X,
   FolderGit2, FileCode, Box, Minimize2, Maximize2,
-  Lock, Globe, Info, ChevronDown, Check,
+  Lock, Globe, Info, ChevronDown, Check, Zap,
 } from "lucide-react";
 import Link from "next/link";
 import { getAuthHeaders, getAccessToken, API_URL, DIRECT_API_URL } from "@/lib/api";
@@ -19,6 +21,9 @@ interface Repository {
   chunks_count?: number;
   symbols_count?: number;
   created_at?: string;
+  deep_indexed?: boolean;
+  is_public?: boolean;
+  is_owner?: boolean;
 }
 
 interface GitHubRepo {
@@ -73,6 +78,10 @@ const stageLabels: Record<string, string> = {
   reading: "reading files",
   chunking: "chunking files",
   embeddings: "generating embeddings",
+  computing_diff: "comparing files",
+  removing_deleted: "removing changed files",
+  reprocessing: "re-processing changed files",
+  relationships: "building relationships",
   complete: "complete!",
   error: "error",
 };
@@ -86,6 +95,9 @@ export default function RepositoriesPage() {
   const [branch, setBranch] = useState("main");
   const [deepIndex, setDeepIndex] = useState(false);
   const [actionLoading] = useState<string | null>(null);
+
+  // Confirm dialog state
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   // Track multiple concurrent indexing jobs
   const [indexingJobs, setIndexingJobs] = useState<Map<string, IndexingJob>>(new Map());
@@ -318,11 +330,13 @@ export default function RepositoriesPage() {
 
       const decoder = new TextDecoder();
       let buffer = "";
+      let maxProgress = 0;
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) {
           // Flush any remaining buffer (final SSE event may not end with \n)
+          let handled = false;
           if (buffer.trim().startsWith("data: ")) {
             try {
               const data = JSON.parse(buffer.trim().substring(6)) as IndexProgress;
@@ -340,13 +354,39 @@ export default function RepositoriesPage() {
                 fetchRepos();
                 setTimeout(() => {
                   removeJob(jobId);
-                  if (activeJobId === jobId) {
-                    setShowIndexModal(false);
-                    resetModal();
-                  }
+                  setActiveJobId((curr) => {
+                    if (curr === jobId) {
+                      setShowIndexModal(false);
+                      resetModal();
+                    }
+                    return curr;
+                  });
                 }, 5000);
+                handled = true;
               }
             } catch { /* ignore */ }
+          }
+          // Fallback: stream ended without explicit complete event
+          if (!handled) {
+            updateJob(jobId, {
+              progress: { stage: "complete", message: "Indexing complete!", progress: 100 },
+              success: "Indexing finished",
+              isIndexing: false,
+              isMinimized: false,
+            });
+            setShowIndexModal(true);
+            setActiveJobId(jobId);
+            fetchRepos();
+            setTimeout(() => {
+              removeJob(jobId);
+              setActiveJobId((curr) => {
+                if (curr === jobId) {
+                  setShowIndexModal(false);
+                  resetModal();
+                }
+                return curr;
+              });
+            }, 5000);
           }
           break;
         }
@@ -377,10 +417,13 @@ export default function RepositoriesPage() {
 
                 setTimeout(() => {
                   removeJob(jobId);
-                  if (activeJobId === jobId) {
-                    setShowIndexModal(false);
-                    resetModal();
-                  }
+                  setActiveJobId((curr) => {
+                    if (curr === jobId) {
+                      setShowIndexModal(false);
+                      resetModal();
+                    }
+                    return curr;
+                  });
                 }, 5000);
                 return;
               }
@@ -394,7 +437,10 @@ export default function RepositoriesPage() {
               }
 
               if (data.stage !== "heartbeat") {
-                updateJob(jobId, { progress: data });
+                // Never let progress bar go backwards — pipeline interleaves
+                // file processing (40-70%) with embedding (72-90%)
+                maxProgress = Math.max(maxProgress, data.progress);
+                updateJob(jobId, { progress: { ...data, progress: maxProgress } });
               }
             } catch {
               // skip unparseable lines
@@ -412,8 +458,6 @@ export default function RepositoriesPage() {
 
   // Delete a repository
   async function deleteRepo(repoId: string) {
-    if (!confirm("Are you sure you want to delete this repository?")) return;
-
     // Optimistic removal — hide it from the list immediately
     const previous = repos;
     setRepos((prev) => prev.filter((r) => r.repo_id !== repoId));
@@ -435,6 +479,123 @@ export default function RepositoriesPage() {
     } catch (error) {
       console.error("Failed to delete repository:", error);
       setRepos(previous); // Restore on network error
+    }
+  }
+
+  // Re-index a repository (triggers diff-aware update via the index/stream endpoint)
+  async function reindexRepo(repo: Repository, forceDeepIndex: boolean = false) {
+    const url = `https://github.com/${repo.owner}/${repo.name}`;
+    setRepoUrl(url);
+    setBranch(repo.branch);
+    setShowIndexModal(true);
+
+    // Create job and start indexing immediately
+    const jobId = `reindex-${Date.now()}-${repo.repo_id}`;
+    const newJob: IndexingJob = {
+      id: jobId,
+      repoUrl: url,
+      branch: repo.branch,
+      progress: { stage: "starting", message: "Checking for updates...", progress: 0 },
+      isMinimized: false,
+      error: null,
+      success: null,
+      isIndexing: true,
+    };
+
+    setIndexingJobs((prev) => new Map(prev).set(jobId, newJob));
+    setActiveJobId(jobId);
+
+    try {
+      const token = (await getAccessToken()) || "";
+      const res = await fetch(`${DIRECT_API_URL}/v1/repositories/index/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ url, branch: repo.branch, deep_index: forceDeepIndex, force_reindex: forceDeepIndex }),
+      });
+
+      if (!res.ok) throw new Error(`HTTP error: ${res.status}`);
+
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let maxProgress = 0;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          // Fallback: stream ended without explicit complete
+          updateJob(jobId, {
+            progress: { stage: "complete", message: "Update complete!", progress: 100 },
+            success: "Update finished",
+            isIndexing: false,
+            isMinimized: false,
+          });
+          setShowIndexModal(true);
+          setActiveJobId(jobId);
+          fetchRepos();
+          setTimeout(() => {
+            removeJob(jobId);
+            setActiveJobId((curr) => {
+              if (curr === jobId) { setShowIndexModal(false); resetModal(); }
+              return curr;
+            });
+          }, 5000);
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.substring(6)) as IndexProgress;
+            if (data.stage === "complete" && data.result) {
+              const r = data.result;
+              const ds = r.diff_stats as Record<string, number> | undefined;
+              const successMsg = ds
+                ? `updated: ${ds.added || 0} added, ${ds.modified || 0} modified, ${ds.deleted || 0} deleted (${ds.unchanged || 0} unchanged)`
+                : `indexed ${r.files_indexed || 0} files, ${r.chunks_created || 0} chunks`;
+              updateJob(jobId, {
+                progress: { stage: "complete", message: "Update complete!", progress: 100 },
+                success: successMsg,
+                isIndexing: false,
+                isMinimized: false,
+              });
+              setShowIndexModal(true);
+              setActiveJobId(jobId);
+              fetchRepos();
+              setTimeout(() => {
+                removeJob(jobId);
+                setActiveJobId((curr) => {
+                  if (curr === jobId) { setShowIndexModal(false); resetModal(); }
+                  return curr;
+                });
+              }, 5000);
+              return;
+            }
+            if (data.stage === "error") {
+              updateJob(jobId, { error: data.message || "Re-index failed", isIndexing: false });
+              return;
+            }
+            if (data.stage !== "heartbeat") {
+              maxProgress = Math.max(maxProgress, data.progress);
+              updateJob(jobId, { progress: { ...data, progress: maxProgress } });
+            }
+          } catch { /* skip */ }
+        }
+      }
+    } catch (err) {
+      updateJob(jobId, {
+        error: err instanceof Error ? err.message : "Failed to re-index",
+        isIndexing: false,
+      });
     }
   }
 
@@ -564,8 +725,15 @@ export default function RepositoriesPage() {
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-[#2e2522] truncate mb-1">
-                    {repo.owner}/{repo.name}
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-medium text-[#2e2522] truncate">
+                      {repo.owner}/{repo.name}
+                    </span>
+                    {repo.deep_indexed && (
+                      <span className="px-1.5 py-0.5 rounded text-[8px] font-semibold uppercase tracking-wider bg-[#b58a73]/15 text-[#b58a73] flex-shrink-0">
+                        deep
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-[#a09488]">
                     <span className="flex items-center gap-1">
@@ -589,8 +757,25 @@ export default function RepositoriesPage() {
 
                 {/* Actions */}
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {!repo.deep_indexed && (
+                    <button
+                      onClick={() => reindexRepo(repo, true)}
+                      className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs text-[#b58a73] hover:bg-[#b58a73]/10 transition-colors"
+                      title="Deep index — full AST chunking per function/class"
+                    >
+                      <Zap size={12} />
+                      <span className="lowercase">deep index</span>
+                    </button>
+                  )}
                   <button
-                    onClick={() => deleteRepo(repo.repo_id)}
+                    onClick={() => reindexRepo(repo)}
+                    className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#b58a73] transition-colors"
+                    title="Re-index (check for updates)"
+                  >
+                    <RefreshCw size={14} />
+                  </button>
+                  <button
+                    onClick={() => setConfirmDelete(repo.repo_id)}
                     disabled={actionLoading === repo.repo_id}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Delete repository"
@@ -604,8 +789,8 @@ export default function RepositoriesPage() {
         )}
       </div>
 
-      {/* Minimized Indexing Indicators — floating pills at bottom-right */}
-      {minimizedJobs.length > 0 && (
+      {/* Minimized Indexing Indicators — floating pills at bottom-right (portal to escape overflow) */}
+      {minimizedJobs.length > 0 && createPortal(
         <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-xs">
           {minimizedJobs.map((job) => (
             <button
@@ -650,14 +835,16 @@ export default function RepositoriesPage() {
               <Maximize2 size={14} className="text-[#a09488] group-hover:text-[#b58a73] transition-colors flex-shrink-0" />
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Index Repository Modal */}
-      {showIndexModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Index Repository Modal — rendered via portal so backdrop-blur works */}
+      {showIndexModal && createPortal(
+        <div className="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center">
+          {/* Backdrop: blur + dim the content area only (sidebar excluded) */}
           <div
-            className="absolute inset-0 bg-[#2e2522]/55"
+            className="modal-backdrop absolute inset-0 bg-[#2e2522]/55 backdrop-blur-sm"
             onClick={() => {
               if (activeJob?.isIndexing) {
                 minimizeJob(activeJob.id);
@@ -667,7 +854,7 @@ export default function RepositoriesPage() {
               }
             }}
           />
-          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="modal-panel relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">index repository</h2>
               <div className="flex items-center gap-1">
@@ -937,7 +1124,7 @@ export default function RepositoriesPage() {
                 </button>
                 <button
                   onClick={indexRepository}
-                  disabled={!repoUrl.trim()}
+                  disabled={!repoUrl.trim() || branchesLoading}
                   className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   index repository
@@ -945,8 +1132,33 @@ export default function RepositoriesPage() {
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title={(() => {
+          const repo = repos.find(r => r.repo_id === confirmDelete);
+          return repo?.is_public === false ? "delete private repository?" : "remove repository?";
+        })()}
+        message={(() => {
+          const repo = repos.find(r => r.repo_id === confirmDelete);
+          return repo?.is_public === false
+            ? "this will permanently delete the repository and all its indexed data. this cannot be undone."
+            : "this will remove the repository from your collection. the shared index will remain available for other users.";
+        })()}
+        confirmLabel={(() => {
+          const repo = repos.find(r => r.repo_id === confirmDelete);
+          return repo?.is_public === false ? "delete" : "remove";
+        })()}
+        destructive
+        onConfirm={() => {
+          if (confirmDelete) deleteRepo(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </PageShell>
   );
 }

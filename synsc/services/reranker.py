@@ -39,15 +39,12 @@ class Reranker:
 
         Args:
             model_name: HuggingFace cross-encoder model name.
-                        Defaults to RERANKER_MODEL env var or ms-marco-MiniLM-L-6-v2.
+                        Defaults to config (RERANKER_MODEL env var) or ms-marco-MiniLM-L-6-v2.
         """
         from sentence_transformers import CrossEncoder
 
-        self.model_name = (
-            model_name
-            or os.getenv("RERANKER_MODEL")
-            or DEFAULT_RERANKER_MODEL
-        )
+        config = get_config()
+        self.model_name = model_name or config.search.reranker_model
 
         logger.info("Loading cross-encoder reranker: %s", self.model_name)
         self.model = CrossEncoder(self.model_name)

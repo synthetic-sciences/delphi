@@ -509,19 +509,15 @@ class SearchService:
             raw_results.sort(key=lambda r: r["similarity"], reverse=True)
 
             # 3. Cross-encoder reranking (blended with vector similarity)
-            #    Disabled by default — ms-marco model hurts code search quality.
-            #    Enable with SYNSC_ENABLE_RERANKER=true when a code-specific
-            #    cross-encoder is available.
-            if (
-                len(raw_results) > 1
-                and os.getenv("SYNSC_ENABLE_RERANKER", "").lower() in ("true", "1")
-            ):
+            #    Enable with SYNSC_ENABLE_RERANKER=true in .env
+            if len(raw_results) > 1 and self.config.search.enable_reranker:
                 try:
                     from synsc.services.reranker import get_reranker
                     reranker = get_reranker()
                     raw_results = reranker.rerank(
                         query=query,
                         results=raw_results,
+                        blend_alpha=self.config.search.reranker_blend_alpha,
                     )
                 except Exception as e:
                     logger.warning(

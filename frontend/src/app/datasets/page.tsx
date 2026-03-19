@@ -1,7 +1,9 @@
 "use client";
 
 import PageShell from "@/components/PageShell";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import {
   Database, Plus, Search, X, Trash2, ExternalLink,
   RefreshCw, Minimize2, Maximize2, Key,
@@ -46,6 +48,7 @@ export default function DatasetsPage() {
   const [indexError, setIndexError] = useState<string | null>(null);
   const [indexSuccess, setIndexSuccess] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   // HF token state
   const [hasHfToken, setHasHfToken] = useState<boolean | null>(null);
@@ -141,8 +144,6 @@ export default function DatasetsPage() {
   }
 
   async function removeDataset(datasetId: string) {
-    if (!confirm("Remove this dataset from your collection?")) return;
-
     setActionLoading(datasetId);
     try {
       const res = await fetch(`${API_URL}/v1/datasets/${datasetId}`, {
@@ -339,7 +340,7 @@ export default function DatasetsPage() {
                     <ExternalLink size={14} />
                   </a>
                   <button
-                    onClick={() => removeDataset(dataset.dataset_id)}
+                    onClick={() => setConfirmDelete(dataset.dataset_id)}
                     disabled={actionLoading === dataset.dataset_id}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Remove dataset"
@@ -368,11 +369,11 @@ export default function DatasetsPage() {
         </button>
       )}
 
-      {/* Add Dataset Modal */}
-      {showAddModal && !isMinimized && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Add Dataset Modal — rendered via portal so backdrop-blur works */}
+      {showAddModal && !isMinimized && createPortal(
+        <div className="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-[#2e2522]/55"
+            className="modal-backdrop absolute inset-0 bg-[#2e2522]/55 backdrop-blur-sm"
             onClick={() => {
               if (isIndexing) {
                 setIsMinimized(true);
@@ -383,7 +384,7 @@ export default function DatasetsPage() {
               }
             }}
           />
-          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+          <div className="modal-panel relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">add dataset</h2>
               <div className="flex items-center gap-1">
@@ -483,8 +484,22 @@ export default function DatasetsPage() {
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="remove dataset?"
+        message="this will permanently remove the dataset and all its indexed data. this action cannot be undone."
+        confirmLabel="remove"
+        destructive
+        onConfirm={() => {
+          if (confirmDelete) removeDataset(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </PageShell>
   );
 }

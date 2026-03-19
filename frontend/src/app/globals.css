@@ -133,12 +133,14 @@ a:focus:not(:focus-visible) {
 }
 
 /* Animate modal backdrops and panels — will-change tells browser to composite on GPU */
-.fixed.inset-0 > .absolute.inset-0 {
+.fixed.inset-0 > .absolute.inset-0,
+.modal-backdrop {
   animation: fadeIn 0.18s ease both;
   will-change: opacity;
 }
 
-.fixed.inset-0 > .relative {
+.fixed.inset-0 > .relative,
+.modal-panel {
   animation: scaleIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
   will-change: transform, opacity;
 }

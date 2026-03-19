@@ -4,8 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BarChart3, Activity, Code2, FileText,
-  Key, BookOpen, Database,
+  Key, BookOpen, Database, Shield,
 } from "lucide-react";
+import { useUserProfile } from "@/contexts/UserProfileContext";
 
 const nav = [
   { icon: BarChart3, label: "overview", href: "/overview" },
@@ -18,8 +19,16 @@ const nav = [
   { icon: BookOpen, label: "docs", href: "/docs" },
 ];
 
+const adminNav = [
+  null,
+  { icon: Shield, label: "admin", href: "/admin/repos" },
+];
+
 export default function Sidebar() {
   const pathname = usePathname();
+  const { profile } = useUserProfile();
+
+  const items = profile?.is_admin ? [...nav, ...adminNav] : nav;
 
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-52 bg-[#f7f0e8] border-r border-[#e5d5c5] flex flex-col">
@@ -33,7 +42,7 @@ export default function Sidebar() {
 
       {/* nav */}
       <nav className="flex-1 px-2 py-3 overflow-y-auto">
-        {nav.map((item, i) => {
+        {items.map((item, i) => {
           if (!item) return <div key={i} className="h-4" />;
           const active = pathname === item.href || pathname.startsWith(item.href + "/");
           return (

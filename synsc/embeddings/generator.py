@@ -29,6 +29,9 @@ class EmbeddingGenerator:
     ):
         # Suppress tokenizers parallelism warnings
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        # Prevent CUDA memory fragmentation on small GPUs
+        if "PYTORCH_CUDA_ALLOC_CONF" not in os.environ:
+            os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
         from sentence_transformers import SentenceTransformer
 
@@ -38,8 +41,9 @@ class EmbeddingGenerator:
         self.dimension = config.embeddings.dimension
         self.device = device or config.embeddings.device
 
-        # Auto-detect GPU
-        if self.device == "cpu":
+        # Auto-detect GPU only when no explicit device was configured
+        explicit_device = device or os.getenv("EMBEDDING_DEVICE")
+        if not explicit_device:
             try:
                 import torch
                 if torch.cuda.is_available():
@@ -49,14 +53,34 @@ class EmbeddingGenerator:
             except ImportError:
                 pass
 
+        # Scale batch size to available VRAM on CUDA
+        if self.device == "cuda":
+            try:
+                import torch
+                free_gb = torch.cuda.mem_get_info()[0] / (1024 ** 3)
+                # ~0.5 GB per 64 batch for all-mpnet-base-v2
+                # Conservative: leave headroom for model weights + activations
+                vram_batch = max(16, min(int(free_gb * 128), 512))
+                if vram_batch < self.batch_size:
+                    logger.info(
+                        "Scaling batch_size to fit VRAM: %d → %d (%.1f GiB free)",
+                        self.batch_size, vram_batch, free_gb,
+                    )
+                    self.batch_size = vram_batch
+            except Exception:
+                pass
+
         logger.info(
             "Loading sentence-transformers model: %s on %s",
             self.model_name,
             self.device,
         )
-        self.model = SentenceTransformer(self.model_name, device=self.device)
+        # trust_remote_code needed for models like jina-embeddings-v2-base-code
+        self.model = SentenceTransformer(
+            self.model_name, device=self.device, trust_remote_code=True
+        )
 
-        # Verify dimension
+        # Verify dimension matches DB schema (vector(768) in setup_local.sql)
         test_embedding = self.model.encode("test", convert_to_numpy=True)
         actual_dim = len(test_embedding)
         if actual_dim != self.dimension:
@@ -66,27 +90,64 @@ class EmbeddingGenerator:
                 actual_dim,
             )
             self.dimension = actual_dim
+        if actual_dim != 768:
+            logger.error(
+                "Model dimension (%d) != DB schema dimension (768). "
+                "Update setup_local.sql vector columns or choose a 768-dim model. "
+                "Indexing will fail with a dimension mismatch error.",
+                actual_dim,
+            )
 
         logger.info(
-            "Embedding generator ready: model=%s, dim=%d, device=%s",
+            "Embedding generator ready: model=%s, dim=%d, device=%s, batch_size=%d",
             self.model_name,
             self.dimension,
             self.device,
+            self.batch_size,
         )
 
     def generate(self, texts: list[str]) -> np.ndarray:
-        """Generate embeddings for a list of texts."""
+        """Generate embeddings for a list of texts.
+
+        On CUDA OOM, halves the batch size and retries (down to 8).
+        """
         if not texts:
             return np.array([]).reshape(0, self.dimension)
 
-        embeddings = self.model.encode(
-            texts,
-            batch_size=self.batch_size,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-            normalize_embeddings=True,
-        )
-        return embeddings
+        # Free cached CUDA memory before each encode to prevent fragmentation
+        if self.device == "cuda":
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+        batch_size = self.batch_size
+        while batch_size >= 8:
+            try:
+                embeddings = self.model.encode(
+                    texts,
+                    batch_size=batch_size,
+                    convert_to_numpy=True,
+                    show_progress_bar=len(texts) > 10,
+                    normalize_embeddings=True,
+                )
+                # If we had to reduce, keep the smaller size for future calls
+                if batch_size < self.batch_size:
+                    logger.info("Reducing batch_size for future calls: %d", batch_size)
+                    self.batch_size = batch_size
+                return embeddings
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower() and batch_size > 8:
+                    import torch
+                    torch.cuda.empty_cache()
+                    batch_size //= 2
+                    logger.warning(
+                        "CUDA OOM, retrying with smaller batch: %d", batch_size,
+                    )
+                else:
+                    raise
+        raise RuntimeError("CUDA OOM even at batch_size=8")
 
     def generate_single(self, text: str) -> np.ndarray:
         """Generate embedding for a single text."""
@@ -101,37 +162,21 @@ class EmbeddingGenerator:
     def generate_batched(
         self, texts: list[str], batch_size: int | None = None
     ) -> np.ndarray:
-        """Generate embeddings in batches with progress logging."""
+        """Generate embeddings in batches with progress bar."""
         if not texts:
             return np.array([]).reshape(0, self.dimension)
 
         batch_size = batch_size or self.batch_size
 
-        # For small sets, do it in one call
-        if len(texts) <= batch_size:
-            return self.generate(texts)
-
-        all_embeddings = []
-        total_batches = (len(texts) + batch_size - 1) // batch_size
-
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            batch_num = i // batch_size + 1
-
-            start = time.time()
-            embeddings = self.generate(batch)
-            elapsed = time.time() - start
-
-            all_embeddings.append(embeddings)
-            logger.debug(
-                "Batch %d/%d done (%.1fs, %d texts)",
-                batch_num,
-                total_batches,
-                elapsed,
-                len(batch),
-            )
-
-        return np.vstack(all_embeddings)
+        # Let sentence-transformers handle batching + tqdm internally
+        embeddings = self.model.encode(
+            texts,
+            batch_size=batch_size,
+            convert_to_numpy=True,
+            show_progress_bar=len(texts) > 10,
+            normalize_embeddings=True,
+        )
+        return embeddings
 
     # Aliases for compatibility
     def embed_batch(self, texts: list[str]) -> np.ndarray:

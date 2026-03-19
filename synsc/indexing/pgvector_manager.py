@@ -96,14 +96,14 @@ class PgVectorManager:
                 params,
             )
             embedding_ids.extend(str(row[0]) for row in result.fetchall())
-            logger.info(
+            logger.debug(
                 "Stored embedding batch",
                 batch=f"{batch_num}/{total_batches}",
                 size=len(batch_chunk_ids),
                 insert_ms=round((time.time() - insert_start) * 1000),
             )
 
-        logger.info(
+        logger.debug(
             "All embeddings stored in pgvector",
             count=len(embedding_ids),
             repo_id=repo_id,

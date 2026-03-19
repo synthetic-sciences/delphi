@@ -115,6 +115,13 @@ export async function deleteRepository(repoId: string) {
   return apiFetch(`/v1/repositories/${repoId}`, { method: "DELETE" });
 }
 
+export async function reindexRepository(repoId: string, force = false, deepIndex = false) {
+  return apiFetch(`/v1/repositories/${repoId}/reindex`, {
+    method: "POST",
+    body: JSON.stringify({ force, deep_index: deepIndex }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------

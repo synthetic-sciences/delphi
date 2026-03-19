@@ -1,7 +1,9 @@
 "use client";
 
 import PageShell from "@/components/PageShell";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   FileText, Plus, Search, X, Trash2, ExternalLink,
   RefreshCw, Upload, Link as LinkIcon, Minimize2, Maximize2
@@ -38,6 +40,7 @@ export default function PapersPage() {
   const [indexError, setIndexError] = useState<string | null>(null);
   const [indexSuccess, setIndexSuccess] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -125,8 +128,6 @@ export default function PapersPage() {
   }
 
   async function removePaper(paperId: string) {
-    if (!confirm('Remove this paper from your collection?')) return;
-
     setActionLoading(paperId);
     try {
       const res = await fetch(`${API_URL}/v1/papers/${paperId}`, {
@@ -308,7 +309,7 @@ export default function PapersPage() {
                     </a>
                   )}
                   <button
-                    onClick={() => removePaper(paper.paper_id)}
+                    onClick={() => setConfirmDelete(paper.paper_id)}
                     disabled={actionLoading === paper.paper_id}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Remove paper"
@@ -346,11 +347,11 @@ export default function PapersPage() {
         </button>
       )}
 
-      {/* Add Paper Modal */}
-      {showAddModal && !isMinimized && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+      {/* Add Paper Modal — rendered via portal so backdrop-blur works */}
+      {showAddModal && !isMinimized && createPortal(
+        <div className="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center">
           <div
-            className="absolute inset-0 bg-[#2e2522]/55"
+            className="modal-backdrop absolute inset-0 bg-[#2e2522]/55 backdrop-blur-sm"
             onClick={() => {
               if (isIndexing) {
                 setIsMinimized(true);
@@ -361,7 +362,7 @@ export default function PapersPage() {
               }
             }}
           />
-          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+          <div className="modal-panel relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-medium lowercase">add paper</h2>
               <div className="flex items-center gap-1">
@@ -536,8 +537,22 @@ export default function PapersPage() {
               </div>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="remove paper?"
+        message="this will permanently remove the paper and all its indexed data. this action cannot be undone."
+        confirmLabel="remove"
+        destructive
+        onConfirm={() => {
+          if (confirmDelete) removePaper(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </PageShell>
   );
 }
