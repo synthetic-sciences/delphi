@@ -1,22 +1,15 @@
 "use client";
 
 import { useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { setAccessToken } from "@/lib/api";
+import { useRouter } from "next/navigation";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   useEffect(() => {
-    const token = searchParams.get("token");
-    if (token) {
-      setAccessToken(token);
-      router.replace("/overview");
-    } else {
-      router.replace("/?error=auth_failed");
-    }
-  }, [router, searchParams]);
+    // Session cookie was set by the backend redirect — just navigate to app.
+    router.replace("/overview");
+  }, [router]);
 
   return (
     <div className="min-h-screen bg-[#f7f0e8] flex items-center justify-center">

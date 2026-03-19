@@ -9,7 +9,7 @@ import {
   Search, GitBranch, Trash2, RefreshCw, Shield,
   FileCode, Box, Layers, Zap, Globe, Lock,
 } from "lucide-react";
-import { getAuthHeaders, getAccessToken, API_URL, DIRECT_API_URL } from "@/lib/api";
+import { getAuthHeaders, API_URL, DIRECT_API_URL } from "@/lib/api";
 
 interface AdminRepo {
   repo_id: string;
@@ -161,14 +161,13 @@ export default function AdminReposPage() {
     });
 
     try {
-      const token = (await getAccessToken()) || "";
       const url = repo.url || `https://github.com/${repo.owner}/${repo.name}`;
       const res = await fetch(`${DIRECT_API_URL}/v1/repositories/index/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
+        credentials: "include",
         body: JSON.stringify({
           url,
           branch: repo.branch,

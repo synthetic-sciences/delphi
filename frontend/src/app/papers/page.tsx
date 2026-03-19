@@ -8,7 +8,7 @@ import {
   FileText, Plus, Search, X, Trash2, ExternalLink,
   RefreshCw, Upload, Link as LinkIcon, Minimize2, Maximize2
 } from "lucide-react";
-import { getAuthHeaders, getAccessToken, API_URL, DIRECT_API_URL } from "@/lib/api";
+import { getAuthHeaders, API_URL, DIRECT_API_URL } from "@/lib/api";
 
 interface Paper {
   paper_id: string;
@@ -89,15 +89,9 @@ export default function PapersPage() {
         const formData = new FormData();
         formData.append('file', selectedFile);
 
-        const token = await getAccessToken();
-        const uploadHeaders: HeadersInit = {};
-        if (token) {
-          (uploadHeaders as Record<string, string>)['Authorization'] = `Bearer ${token}`;
-        }
-
         res = await fetch(`${DIRECT_API_URL}/v1/papers/upload`, {
           method: 'POST',
-          headers: uploadHeaders,
+          credentials: 'include',
           body: formData,
         });
       }
