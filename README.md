@@ -1,10 +1,10 @@
 ```
- ███████╗██╗   ██╗███╗   ██╗███████╗ ██████╗  ██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗
- ██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝██╔════╝  ██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║
- ███████╗ ╚████╔╝ ██╔██╗ ██║███████╗██║       ██║  ██║█████╗  ██║     ██████╔╝███████║██║
- ╚════██║  ╚██╔╝  ██║╚██╗██║╚════██║██║       ██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║
- ███████║   ██║   ██║ ╚████║███████║╚██████╗  ██████╔╝███████╗███████╗██║     ██║  ██║██║
- ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚══════╝ ╚═════╝  ╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝
+ ███████╗██╗   ██╗███╗   ██╗███████╗ ██████╗██╗  ██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗
+ ██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝██╔════╝██║  ██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║
+ ███████╗ ╚████╔╝ ██╔██╗ ██║███████╗██║     ██║  ██║  ██║█████╗  ██║     ██████╔╝███████║██║
+ ╚════██║  ╚██╔╝  ██║╚██╗██║╚════██║██║     ██║  ██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║
+ ███████║   ██║   ██║ ╚████║███████║╚██████╗██║  ██████╔╝███████╗███████╗██║     ██║  ██║██║
+ ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚══════╝ ╚═════╝╚═╝  ╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝
 ```
 
 <h3 align="center">open-source MCP server for AI agents</h3>
@@ -37,8 +37,8 @@ Everything runs on your machine — PostgreSQL for storage, sentence-transformer
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/InkVell/synsc-delphi.git
-cd synsc-delphi
+git clone https://github.com/synthetic-sciences/delhpi.git
+cd delhpi
 cp env.example .env
 ```
 
@@ -52,10 +52,10 @@ SYSTEM_PASSWORD=<your-admin-password>
 ### 2. Launch
 
 ```bash
-./launch_app.sh
+./scripts/launch_app.sh
 ```
 
-That's it. The script handles everything — installs dependencies, starts PostgreSQL via Docker, launches the API server, background worker, and frontend dashboard.
+That's it. The script handles everything — installs dependencies (via `uv` in `backend/` and `npm` in `frontend/`), starts PostgreSQL via Docker, launches the API server, background worker, and frontend dashboard.
 
 > **Dashboard:** [localhost:3000](http://localhost:3000) &nbsp;&middot;&nbsp; **API:** [localhost:8742](http://localhost:8742) &nbsp;&middot;&nbsp; **Health:** [localhost:8742/health](http://localhost:8742/health)
 
@@ -81,7 +81,7 @@ Create an API key from the dashboard at `/api-keys`, then add Delphi to your AI 
   "mcpServers": {
     "synsc-delphi": {
       "command": "uv",
-      "args": ["--directory", "/path/to/synsc-delphi", "run", "synsc-context-mcp"],
+      "args": ["--directory", "/path/to/delhpi/backend", "run", "synsc-context-mcp"],
       "env": { "SYNSC_API_KEY": "your-api-key" }
     }
   }
@@ -97,7 +97,7 @@ Create an API key from the dashboard at `/api-keys`, then add Delphi to your AI 
   "mcpServers": {
     "synsc-delphi": {
       "command": "uv",
-      "args": ["--directory", "/path/to/synsc-delphi", "run", "synsc-context-mcp"],
+      "args": ["--directory", "/path/to/delhpi/backend", "run", "synsc-context-mcp"],
       "env": { "SYNSC_API_KEY": "your-api-key" }
     }
   }
@@ -156,23 +156,6 @@ curl "http://localhost:8742/api/search/code?query=authentication+middleware" \
 
 ---
 
-## Benchmarks
-
-Evaluated across 8 phases with ~3,300 queries against [Context7](https://context7.com) and [Nia](https://trynia.ai). 100 queries per engine per phase, scored with automated IR metrics and a position-debiased LLM judge (Claude Sonnet 4.6).
-
-| Benchmark | Metric | Delphi |
-|-----------|--------|:---:|
-| Retrieval | MRR | **0.962** |
-| CodeSearchNet | MRR | **0.865** |
-| CoSQA | MRR | **0.703** |
-| Adversarial | Discrimination | **0.560** |
-| Hallucination | Rate (lower = better) | **39%** |
-| Enhanced Judge | Score (0-3) | **1.705** |
-
-Full results, methodology, and statistical analysis: [**SynSci-Context-Bench**](https://github.com/synthetic-sciences/SynSci-Context-Bench)
-
----
-
 ## Architecture
 
 ```
@@ -204,18 +187,29 @@ Full results, methodology, and statistical analysis: [**SynSci-Context-Bench**](
 ## Project Structure
 
 ```
-synsc/                  Python backend
-  api/                  HTTP + MCP server entry points
-  services/             Business logic (search, indexing, papers, datasets)
-  database/             SQLAlchemy models, session management
-  embeddings/           sentence-transformers embedding provider
-  extractors/           Symbol extraction (tree-sitter AST)
-  indexing/             Repo/paper/dataset indexing pipelines
-frontend/               Next.js dashboard
-packages/mcp-proxy/     MCP stdio-to-HTTP bridge
-docker-compose.yml      Local dev stack
-launch_app.sh           One-command launcher
+backend/                  Python backend (FastAPI + MCP)
+  synsc/                  Application package
+    api/                  HTTP + MCP server entry points
+    services/             Business logic (search, indexing, papers, datasets)
+    database/             SQLAlchemy models, session management
+    embeddings/           sentence-transformers embedding provider
+    extractors/           Symbol extraction (tree-sitter AST)
+    indexing/             Repo/paper/dataset indexing pipelines
+    parsing/              Language parsers
+    workers/              Background indexing worker
+  alembic/                DB migrations
+  tests/                  Pytest suite
+  pyproject.toml          Python deps & entry points
+  Dockerfile              Image for api + worker targets
+frontend/                 Next.js dashboard
+packages/mcp-proxy/       MCP stdio-to-HTTP bridge (published separately)
+database/supabase/        Local PostgreSQL init SQL
+scripts/                  Developer scripts (launch_app.sh, etc.)
+docs/                     Architecture + engineering docs
+docker-compose.yml        Local dev stack (postgres + api + worker + frontend)
 ```
+
+See [`docs/architecture.md`](docs/architecture.md) for a walk-through of how the pieces fit together.
 
 ## Configuration
 
@@ -233,7 +227,10 @@ All configuration is via environment variables. See [`env.example`](env.example)
 
 ## Development
 
+All Python commands run from `backend/`:
+
 ```bash
+cd backend
 uv run pytest                         # tests
 uv run ruff check synsc/ tests/       # lint
 uv run ruff format synsc/ tests/      # format
