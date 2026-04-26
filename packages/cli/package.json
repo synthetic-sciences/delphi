@@ -1,0 +1,38 @@
+{
+  "name": "@synsci/delphi",
+  "version": "0.2.1",
+  "description": "One-command installer for Delphi — semantic context for AI coding agents.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "delphi": "./bin/delphi.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.0.0",
+    "picocolors": "^1.0.0"
+  },
+  "keywords": [
+    "mcp",
+    "delphi",
+    "synsci",
+    "ai",
+    "code-search",
+    "research-papers",
+    "claude",
+    "cursor",
+    "windsurf"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/synthetic-sciences/delhpi"
+  },
+  "homepage": "https://github.com/synthetic-sciences/delhpi"
+}

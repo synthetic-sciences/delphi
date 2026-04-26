@@ -14,10 +14,10 @@
 FROM python:3.12-slim AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git curl build-essential \
+        git curl build-essential ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN pip install --no-cache-dir uv
 
 WORKDIR /app
 
@@ -31,7 +31,8 @@ RUN uv run python -c \
     "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-mpnet-base-v2')"
 
 COPY synsc/ ./synsc/
-COPY setup_local.sql ./
+COPY alembic/ ./alembic/
+COPY alembic.ini ./
 
 # ---------------------------------------------------------------------------
 # Stage 2: runtime

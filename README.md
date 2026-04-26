@@ -28,88 +28,76 @@ Delphi is a self-hosted [MCP (Model Context Protocol)](https://modelcontextproto
 | **Research Papers** | Index arXiv papers or PDFs, extract citations and equations, generate reports |
 | **HuggingFace Datasets** | Index dataset cards, search metadata |
 
-Everything runs on your machine — PostgreSQL for storage, sentence-transformers for embeddings. **No API keys required.**
+Everything runs on your machine — PostgreSQL for storage. Pick **local sentence-transformers** (no API keys) or wire up **Gemini** / **OpenAI** for hosted embeddings.
 
 ---
 
 ## Quick Start
 
-### 1. Clone and configure
+```bash
+npx @synsci/delphi
+```
+
+That's it. The installer asks two questions:
+
+1. **Add Delphi to your coding agent** (Claude Code, Cursor, Windsurf, Claude Desktop) — or **run your own index** with a Gemini / OpenAI / local-model key and a dashboard.
+2. Which embeddings provider to use.
+
+Then it pulls the source, spins up the Docker stack, mints an API key, and (if you picked the agent path) writes the MCP config for the tools you have installed.
+
+When it finishes, restart your AI tool — Delphi shows up as an MCP server. After install, just type `delphi` in any terminal to open the dashboard.
+
+```bash
+delphi              # open the dashboard (boots the stack if it's down)
+delphi status       # check health + container state
+delphi logs -f      # tail logs
+delphi stop         # tear it down
+delphi uninstall    # remove containers + data volume
+```
+
+> Requires Docker Desktop (or `docker compose` v2) and `git`.
+> **Dashboard:** [localhost:3000](http://localhost:3000) &nbsp;&middot;&nbsp; **API:** [localhost:8742](http://localhost:8742)
+
+<details>
+<summary><strong>Manual install (from source)</strong></summary>
+
+For contributors or anyone who wants to run a fork:
 
 ```bash
 git clone https://github.com/synthetic-sciences/delhpi.git
 cd delhpi
-cp env.example .env
-```
-
-Edit `.env` and set at minimum:
-
-```bash
-SERVER_SECRET=<generate-a-random-secret>
-SYSTEM_PASSWORD=<your-admin-password>
-```
-
-### 2. Launch
-
-```bash
-./scripts/launch_app.sh
-```
-
-That's it. The script handles everything — installs dependencies (via `uv` in `backend/` and `npm` in `frontend/`), starts PostgreSQL via Docker, launches the API server, background worker, and frontend dashboard.
-
-> **Dashboard:** [localhost:3000](http://localhost:3000) &nbsp;&middot;&nbsp; **API:** [localhost:8742](http://localhost:8742) &nbsp;&middot;&nbsp; **Health:** [localhost:8742/health](http://localhost:8742/health)
-
-### Alternative: Docker Compose (everything containerized)
-
-```bash
-cp env.example .env       # edit .env
-docker compose up --build
-```
-
----
-
-## Connect Your AI Tools
-
-Create an API key from the dashboard at `/api-keys`, then add Delphi to your AI tool:
-
-<details>
-<summary><strong>Claude Code</strong></summary>
-
-```json
-// ~/.claude/settings.json
-{
-  "mcpServers": {
-    "synsc-delphi": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/delhpi/backend", "run", "synsc-context-mcp"],
-      "env": { "SYNSC_API_KEY": "your-api-key" }
-    }
-  }
-}
+cp env.example .env       # set SERVER_SECRET and SYSTEM_PASSWORD
+./scripts/launch_app.sh   # or: docker compose up --build
 ```
 </details>
 
 <details>
-<summary><strong>Claude Desktop / Cursor</strong></summary>
+<summary><strong>Manual MCP config (for any client the installer doesn't cover)</strong></summary>
+
+Once you have an API key (from the dashboard at `/api-keys` or via `npx @synsci/delphi init`), add this to your client's MCP config:
 
 ```json
 {
   "mcpServers": {
-    "synsc-delphi": {
-      "command": "uv",
-      "args": ["--directory", "/path/to/delhpi/backend", "run", "synsc-context-mcp"],
-      "env": { "SYNSC_API_KEY": "your-api-key" }
+    "synsci-delphi": {
+      "command": "uvx",
+      "args": ["synsc-context-proxy"],
+      "env": {
+        "SYNSC_API_KEY": "your-api-key",
+        "SYNSC_API_URL": "http://localhost:8742"
+      }
     }
   }
 }
 ```
+
+**Config file paths:** Cursor `~/.cursor/mcp.json` · Windsurf `~/.codeium/windsurf/mcp_config.json` · Claude Desktop `~/Library/Application Support/Claude/claude_desktop_config.json` · Claude Code use `claude mcp add --scope user synsci-delphi -- uvx synsc-context-proxy`.
 </details>
 
 <details>
 <summary><strong>HTTP API (any client)</strong></summary>
 
 ```bash
-# Health check
 curl http://localhost:8742/health
 
 # Index a repository
@@ -202,6 +190,7 @@ backend/                  Python backend (FastAPI + MCP)
   pyproject.toml          Python deps & entry points
   Dockerfile              Image for api + worker targets
 frontend/                 Next.js dashboard
+packages/cli/             `npx @synsci/delphi` installer (one-command setup)
 packages/mcp-proxy/       MCP stdio-to-HTTP bridge (published separately)
 database/supabase/        Local PostgreSQL init SQL
 scripts/                  Developer scripts (launch_app.sh, etc.)
