@@ -9,7 +9,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./setup_local.sql:/docker-entrypoint-initdb.d/01-setup.sql
+      - ./database/supabase/setup_local.sql:/docker-entrypoint-initdb.d/01-setup.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synsc} -d ${POSTGRES_DB:-synsc}"]
       interval: 5s
@@ -18,7 +18,7 @@ services:
 
   api:
     build:
-      context: .
+      context: ./backend
       target: api
     env_file:
       - .env
@@ -36,7 +36,7 @@ services:
 
   worker:
     build:
-      context: .
+      context: ./backend
       target: worker
     env_file:
       - .env
