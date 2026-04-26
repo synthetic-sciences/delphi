@@ -35,7 +35,7 @@ from synsc.database.models import (
     Symbol,
     UserRepository,
 )
-from synsc.embeddings.generator import EmbeddingGenerator
+from synsc.embeddings.generator import EmbeddingGenerator, get_embedding_generator
 from synsc.indexing.vector_store import get_vector_store
 from synsc.parsing.registry import get_parser_registry
 
@@ -159,9 +159,9 @@ class IndexingService:
     
     @property
     def embedding_generator(self):
-        """Lazy-load embedding generator."""
+        """Lazy-load embedding generator (dispatches by EMBEDDING_PROVIDER)."""
         if self._embedding_generator is None:
-            self._embedding_generator = EmbeddingGenerator()
+            self._embedding_generator = get_embedding_generator()
         return self._embedding_generator
     
     @property
