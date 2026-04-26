@@ -31,6 +31,7 @@ dependencies = [
     # Vector Search & Embeddings (all local)
     # ===========================================
     "faiss-cpu>=1.9.0",
+    "google-genai>=1.0.0",
     "sentence-transformers>=2.2.0",
     "transformers>=4.40,<4.50",
     "torch>=2.0.0",
