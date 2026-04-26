@@ -136,6 +136,59 @@ test rewrite, plus the verification step above.
 
 ---
 
+---
+
+## 2. Per-user research API keys (Gemini / Anthropic / OpenAI)
+
+**Status:** ⏳ Open. Currently the research provider key lives globally on
+`config.research.api_key` (env var `GEMINI_API_KEY`). Multi-tenant Delphi
+deployments need each user to bring their own key.
+
+**Affected repos:** Synsci-Delphi (this repo). Upstream uses Supabase storage,
+non-applicable.
+
+**Priority:** medium — feature gap, not a correctness bug. Today's structured
+`error_code: provider_not_configured` response is the agent-facing safety net
+until this lands.
+
+### What exists today
+
+- `/v1/research` and the MCP `research` tool both pre-flight check
+  `config.research.api_key` and return a structured 503 / tool error with
+  `error_code: provider_not_configured`, `provider`, `action_required:
+  configure_api_key`, and a human message naming `GEMINI_API_KEY`.
+- The MCP tool docstring (visible to LLMs at tool-list time) flags the
+  provider requirement so the agent knows the tool may be unavailable on a
+  fresh Delphi instance.
+- LLMs / agents pattern-match on `error_code` to surface the message to the
+  end user without retrying.
+
+### What's missing
+
+A per-user storage path that lets each user bring their own key:
+
+1. Migration: `user_research_credentials (user_id, provider, encrypted_key,
+   created_at, updated_at)` — same encryption pattern as
+   [`backend/synsc/services/token_encryption.py`](backend/synsc/services/token_encryption.py)
+   (already used for GitHub + HuggingFace tokens).
+2. HTTP endpoints mirroring the GitHub-token surface:
+   - `PUT /v1/keys/research` — body `{provider, api_key}`; encrypt + upsert.
+   - `GET /v1/keys/research` — return `{configured: bool, provider}` (never
+     the key itself).
+   - `DELETE /v1/keys/research`.
+3. Wire-up in `ResearchService.provider`: look up the caller's encrypted
+   key first, fall back to `config.research.api_key`, error with
+   `provider_not_configured` only if both are missing.
+4. The `/v1/research` 503 message should change to point at
+   `/v1/keys/research` when per-user keys are enabled, not just the env var.
+
+### Estimated effort
+
+~150 LOC + Alembic migration + 6–8 tests. One PR. No upstream coupling —
+this is a Delphi-only feature.
+
+---
+
 ## How to use this file
 
 - Add new entries below as additional "correct but not optimal" fixes
