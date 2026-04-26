@@ -1192,10 +1192,20 @@ Provides deep context to AI agents through:
             user_id=user_id,
             action="index_source",
             resource_type=source_type,
-            resource_id=result.get("source_id"),
+            resource_id=result.get("source_id") or None,
             duration_ms=int((time.time() - start) * 1000),
             metadata={"url": url, "source": "mcp"},
         )
+
+        # Reflect a per-type service failure in the tool envelope so the
+        # calling agent can surface it instead of believing the index ran.
+        if result.get("status") == "error":
+            return {
+                "success": False,
+                "error_code": "indexing_failed",
+                "message": result.get("error") or "indexing failed",
+                "raw": result.get("raw"),
+            }
         return {"success": True, **result}
 
     @server.tool()
