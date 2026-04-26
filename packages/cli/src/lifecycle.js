@@ -15,17 +15,19 @@ async function ensureInstalled() {
 }
 
 export async function runStart() {
-  await ensureInstalled();
+  const state = await ensureInstalled();
   log.step("Starting Delphi");
-  await composeUp({ build: false });
+  await composeUp({ build: false, profiles: state.profiles || [] });
   await waitForHealth();
   log.success(`up at ${API_BASE}`);
 }
 
 export async function runStop() {
-  await ensureInstalled();
+  const state = await ensureInstalled();
   log.step("Stopping Delphi");
-  await composeDown();
+  // `down` with the saved profiles removes everything we started; without
+  // them, profile-gated containers (e.g. frontend) are left orphaned.
+  await composeDown({ profiles: state.profiles || [] });
   log.success("stopped");
 }
 
@@ -41,7 +43,7 @@ export async function runStatus() {
     healthOk = false;
   }
 
-  const services = await composeStatus();
+  const services = await composeStatus({ profiles: state.profiles || [] });
 
   log.raw(`  Status:    ${healthOk ? pc.green("healthy") : pc.red("not responding")}`);
   log.raw(`  API:       ${pc.cyan(API_BASE)}`);
@@ -63,14 +65,23 @@ export async function runStatus() {
 }
 
 export async function runLogs({ follow = false, services = [] } = {}) {
-  await ensureInstalled();
-  await composeLogs({ follow, services });
+  const state = await ensureInstalled();
+  await composeLogs({ follow, services, profiles: state.profiles || [] });
 }
 
 /** Open the dashboard in the user's default browser, ensuring the stack is up. */
 export async function runOpen() {
-  await ensureInstalled();
-  // Make sure the stack is running before launching the browser.
+  const state = await ensureInstalled();
+
+  // Opening the dashboard implies the dashboard profile, even if the user
+  // initially picked the agent path. Persist so `delphi start` keeps it on.
+  const profiles = Array.from(new Set([...(state.profiles || []), "dashboard"]));
+  if (profiles.length !== (state.profiles || []).length) {
+    const { saveState } = await import("./env.js");
+    await saveState({ ...state, profiles });
+  }
+
+  // Make sure the stack (incl. dashboard) is running before launching the browser.
   let healthy = false;
   try {
     const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(2_000) });
@@ -78,11 +89,12 @@ export async function runOpen() {
   } catch {
     healthy = false;
   }
-  if (!healthy) {
-    log.info("starting Delphi (it isn't running)…");
-    await composeUp({ build: false });
-    await waitForHealth();
-  }
+  // Even if api/health is up, frontend may not be — `up -d` is a no-op for
+  // already-running services but will start the dashboard if it isn't.
+  if (!healthy) log.info("starting Delphi (it isn't running)…");
+  else log.info("starting dashboard…");
+  await composeUp({ build: true, profiles });
+  if (!healthy) await waitForHealth();
 
   const url = "http://localhost:3000";
   const cmd =
@@ -94,11 +106,11 @@ export async function runOpen() {
 }
 
 export async function runUninstall() {
-  await ensureInstalled();
+  const state = await ensureInstalled();
   log.warn("This will tear down containers AND delete the local Delphi data volume.");
   const { confirm } = await import("@inquirer/prompts");
   const ok = await confirm({ message: "Continue?", default: false });
   if (!ok) return;
-  await composeDown({ removeVolumes: true });
+  await composeDown({ removeVolumes: true, profiles: state.profiles || [] });
   log.success("Delphi removed (source dir kept at ~/.synsci/delphi/source).");
 }
