@@ -346,6 +346,64 @@ class DocsService:
         )
         return True
 
+    def search_docs(self, query: str, top_k: int = 10) -> dict:
+        """Semantic search over indexed docs via pgvector cosine similarity.
+
+        Scoped to docs the current user has in their collection. Uses raw
+        SQL against ``documentation_chunk_embeddings`` — no new RPC required.
+        """
+        if not self.user_id:
+            return {"success": False, "error": "User ID required", "results": []}
+
+        try:
+            from synsc.embeddings.generator import get_paper_embedding_generator
+
+            gen = get_paper_embedding_generator()
+            q_emb = gen.generate_single(query)
+            emb_list = (
+                q_emb.tolist() if hasattr(q_emb, "tolist") else list(q_emb)
+            )
+            emb_str = "[" + ",".join(str(x) for x in emb_list) + "]"
+
+            with get_session() as session:
+                rows = (
+                    session.execute(
+                        text(
+                            """
+                            SELECT c.chunk_id AS chunk_id,
+                                   c.docs_id AS docs_id,
+                                   c.page_url,
+                                   c.heading,
+                                   c.content,
+                                   1 - (e.embedding <=> CAST(:q AS vector)) AS similarity,
+                                   ds.url AS docs_url,
+                                   ds.display_name
+                            FROM documentation_chunk_embeddings e
+                            JOIN documentation_chunks c ON c.chunk_id = e.chunk_id
+                            JOIN documentation_sources ds ON ds.docs_id = c.docs_id
+                            JOIN user_documentation_sources uds ON uds.docs_id = ds.docs_id
+                            WHERE uds.user_id = :uid
+                            ORDER BY e.embedding <=> CAST(:q AS vector)
+                            LIMIT :k
+                            """
+                        ),
+                        {"q": emb_str, "uid": self.user_id, "k": top_k},
+                    )
+                    .mappings()
+                    .all()
+                )
+
+            results = [dict(r) for r in rows]
+            return {
+                "success": True,
+                "query": query,
+                "results": results,
+                "count": len(results),
+            }
+        except Exception as exc:
+            logger.exception("docs: search failed")
+            return {"success": False, "error": str(exc), "results": []}
+
     def list_docs(self) -> list[dict]:
         if not self.user_id:
             return []
