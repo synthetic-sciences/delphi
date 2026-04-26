@@ -85,15 +85,29 @@ def test_mcp_index_source_repo_dispatches(monkeypatch):
     assert out["source_id"] == "r-uuid"
 
 
-def test_mcp_index_source_docs_returns_not_implemented_envelope(monkeypatch):
+def test_mcp_index_source_docs_dispatches(monkeypatch):
+    """Docs landed — MCP tool returns the canonical success envelope."""
     _isolate_mcp_auth(monkeypatch)
+    import synsc.api.mcp_server as mcp_mod
     from synsc.api.mcp_server import create_server
+    from synsc.services import docs_service as ds_mod
+
+    # Docs branch requires user_id; pre-seed the per-test contextvar.
+    mcp_mod._current_user_id.set("u1")
+
+    fake = MagicMock()
+    fake.index_docs.return_value = {
+        "success": True,
+        "status": "indexed",
+        "docs_id": "d-uuid",
+    }
+    monkeypatch.setattr(ds_mod, "get_docs_service", lambda user_id=None: fake)
 
     server = create_server()
     tool = server._tool_manager._tools["index_source"]
     out = tool.fn(source_type="docs", url="https://example.com")
-    assert out["success"] is False
-    assert out["error_code"] == "not_implemented"
+    assert out["success"] is True
+    assert out["source_id"] == "d-uuid"
 
 
 def test_mcp_list_sources_returns_envelope(monkeypatch):
