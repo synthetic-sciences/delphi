@@ -132,13 +132,26 @@ def test_index_source_unsupported_type_raises_value_error():
         index_source(source_type="movie", url="x", user_id="u1")
 
 
-def test_index_source_docs_raises_not_implemented_pre_p2():
-    import pytest
+def test_index_source_docs_now_dispatches_to_docs_service(monkeypatch):
+    """Docs indexing landed — dispatcher now hands off to DocsService."""
+    from synsc.services import source_service
+    from synsc.services import docs_service as ds_mod
 
-    from synsc.services.source_service import index_source
+    fake = MagicMock()
+    fake.index_docs.return_value = {
+        "success": True,
+        "status": "indexed",
+        "docs_id": "d-uuid",
+    }
+    monkeypatch.setattr(ds_mod, "get_docs_service", lambda user_id=None: fake)
 
-    with pytest.raises(NotImplementedError, match="docs indexer"):
-        index_source(source_type="docs", url="x", user_id="u1")
+    out = source_service.index_source(
+        source_type="docs",
+        url="https://docs.example.com",
+        user_id="u1",
+    )
+    assert out["source_type"] == "docs"
+    assert out["source_id"] == "d-uuid"
 
 
 def test_index_source_paper_requires_user_id():
@@ -278,10 +291,27 @@ def test_post_v1_sources_dispatches_to_index_source(client, monkeypatch):
     assert body["source_type"] == "repo"
 
 
-def test_post_v1_sources_docs_returns_501(client):
+def test_post_v1_sources_docs_dispatches_to_docs_service(client, monkeypatch):
+    """Docs landed — endpoint now returns 200 with the canonical envelope."""
+    from synsc.services import docs_service as ds_mod
+
+    fake = MagicMock()
+    fake.index_docs.return_value = {
+        "success": True,
+        "status": "indexed",
+        "docs_id": "d-uuid",
+        "url": "https://example.com",
+        "pages": 5,
+        "chunks": 30,
+    }
+    monkeypatch.setattr(ds_mod, "get_docs_service", lambda user_id=None: fake)
+
     r = client.post(
         "/v1/sources",
         json={"source_type": "docs", "url": "https://example.com/sitemap.xml"},
     )
-    assert r.status_code == 501
-    assert "docs indexer" in r.json()["detail"]
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["source_type"] == "docs"
+    assert body["source_id"] == "d-uuid"

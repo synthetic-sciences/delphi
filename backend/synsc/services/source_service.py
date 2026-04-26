@@ -328,7 +328,25 @@ def index_source(
         }
 
     if source_type == "docs":
-        raise NotImplementedError("docs indexer lands in the docs source_type task")
+        if not user_id:
+            raise ValueError("docs indexing requires an authenticated user")
+        from synsc.services.docs_service import get_docs_service
+
+        svc = get_docs_service(user_id=user_id)
+        res = svc.index_docs(
+            url=url,
+            display_name=display_name,
+            sitemap_url=opts.get("sitemap_url"),
+            max_pages=int(opts.get("max_pages", 200)),
+            req_delay_s=float(opts.get("req_delay_s", 1.0)),
+        )
+        return {
+            "source_id": res.get("docs_id", ""),
+            "source_type": "docs",
+            "status": res.get("status", "indexed"),
+            "external_ref": url,
+            "raw": res,
+        }
 
     raise ValueError(f"unsupported source_type: {source_type}")
 
@@ -343,7 +361,7 @@ def list_sources(
     user_id: str | None = None,
 ) -> list[dict]:
     """List indexed sources, optionally filtered by type."""
-    wanted = {source_type} if source_type else {"repo", "paper", "dataset"}
+    wanted = {source_type} if source_type else {"repo", "paper", "dataset", "docs"}
     out: list[dict] = []
 
     if "repo" in wanted:
@@ -396,5 +414,23 @@ def list_sources(
                 )
         except Exception as exc:
             logger.warning("list_sources: dataset branch failed", error=str(exc))
+
+    if "docs" in wanted and user_id:
+        try:
+            from synsc.services.docs_service import get_docs_service
+
+            for d in get_docs_service(user_id=user_id).list_docs():
+                out.append(
+                    {
+                        "source_id": d.get("docs_id", ""),
+                        "source_type": "docs",
+                        "display_name": d.get("display_name") or d.get("url", ""),
+                        "external_ref": d.get("url", ""),
+                        "status": "indexed",
+                        "created_at": d.get("indexed_at"),
+                    }
+                )
+        except Exception as exc:
+            logger.warning("list_sources: docs branch failed", error=str(exc))
 
     return out
