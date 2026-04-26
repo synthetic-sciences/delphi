@@ -140,6 +140,29 @@ class AuthContext:
     user_id: str
 
 
+# In-process per-(api_key_hash, mode) sliding window for the /v1/research
+# per-mode RPM caps. The global SEARCH_LIMIT slowapi limiter still applies on
+# top of this; this layer enforces the tighter mode-specific quotas.
+_RESEARCH_RATE_BUCKETS: dict[tuple[str, str], list[float]] = {}
+
+
+def _research_rate_check(api_key: str, mode: str, rpm: int) -> bool:
+    """Return True if a request is allowed under ``rpm``/min for this caller."""
+    if rpm <= 0:
+        return False
+    key = (hashlib.sha256(api_key.encode()).hexdigest()[:32], mode)
+    now = time.time()
+    window_start = now - 60.0
+    hits = _RESEARCH_RATE_BUCKETS.setdefault(key, [])
+    # Drop expired entries cheaply.
+    while hits and hits[0] < window_start:
+        hits.pop(0)
+    if len(hits) >= rpm:
+        return False
+    hits.append(now)
+    return True
+
+
 # =============================================================================
 # Request/Response Models
 # =============================================================================
@@ -237,6 +260,20 @@ class CreateJobRequest(BaseModel):
     """Request to create an indexing job."""
     job_type: str = Field(..., description="Job type: 'repository' or 'paper'")
     target: str = Field(..., description="Repository URL or paper ID/URL")
+
+
+class ResearchRequest(BaseModel):
+    """Request to /v1/research."""
+    query: str = Field(..., min_length=1, max_length=4000, description="Research question")
+    mode: str = Field(
+        default="quick",
+        description="quick (1-shot), deep (iterative), oracle (tool-use)",
+    )
+    source_ids: list[str] | None = Field(default=None, description="Scope to these source IDs")
+    source_types: list[str] | None = Field(
+        default=None, description="Filter by types: 'repo', 'paper', 'dataset'"
+    )
+    k: int | None = Field(default=None, ge=1, le=100, description="Retrieval top_k override")
 
 
 # =============================================================================
@@ -1601,6 +1638,87 @@ def create_app() -> FastAPI:
         rc = len(result.get("results", []))
         _log_activity(auth.user_id, "search_datasets", "search", query=body.query, results_count=rc, duration_ms=dur)
         return SafeJSONResponse(content=result)
+
+    # ==========================================================================
+    # Research Endpoint
+    # ==========================================================================
+
+    @app.post("/v1/research", tags=["Research"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def research_endpoint(
+        request: Request,
+        body: ResearchRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """RAG synthesis across indexed sources. Modes: quick / deep / oracle.
+
+        Quick mode runs a single retrieve→synthesize pass. Deep mode iterates
+        up to ``research.deep_max_hops`` retrieve-then-refine hops. Oracle mode
+        v1 shares the deep loop.
+
+        Per-mode RPM caps (config.research.{quick,deep,oracle}_rpm) layer on
+        top of the global SEARCH_LIMIT via an in-process sliding window keyed
+        on (api_key_hash, mode).
+        """
+        if body.mode not in ("quick", "deep", "oracle"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid mode '{body.mode}': expected quick / deep / oracle",
+            )
+
+        config = get_config()
+        per_mode_rpm = {
+            "quick": config.research.quick_rpm,
+            "deep": config.research.deep_rpm,
+            "oracle": config.research.oracle_rpm,
+        }[body.mode]
+
+        if not _research_rate_check(auth.api_key, body.mode, per_mode_rpm):
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"Research rate limit exceeded: "
+                    f"max {per_mode_rpm}/min in {body.mode} mode"
+                ),
+            )
+
+        if config.research.provider == "gemini" and not config.research.api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="Research provider not configured (set GEMINI_API_KEY)",
+            )
+
+        from synsc.services.research_service import ResearchService
+
+        start = time.time()
+        try:
+            result = ResearchService().run(
+                query=body.query,
+                mode=body.mode,  # type: ignore[arg-type]
+                source_ids=body.source_ids,
+                source_types=body.source_types,
+                k=body.k,
+                user_id=auth.user_id,
+            )
+        except Exception as exc:
+            logger.exception("research failed")
+            raise HTTPException(
+                status_code=500, detail=f"research failed: {exc}"
+            ) from exc
+
+        _log_activity(
+            user_id=auth.user_id,
+            action="research",
+            resource_type="research",
+            query=body.query,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={
+                "mode": body.mode,
+                "tokens_in": result["usage"]["tokens_in"],
+                "tokens_out": result["usage"]["tokens_out"],
+            },
+        )
+        return SafeJSONResponse(content={"success": True, **result})
 
     # ==========================================================================
     # Job Queue Endpoints
