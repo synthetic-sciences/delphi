@@ -331,10 +331,11 @@ class DocsService:
     def _grant_user_access(self, session, docs_id: str) -> bool:
         if not self.user_id:
             return False
+        uid = str(self.user_id)
         existing = (
             session.query(UserDocumentationSource)
             .filter(
-                UserDocumentationSource.user_id == self.user_id,
+                UserDocumentationSource.user_id == uid,
                 UserDocumentationSource.docs_id == docs_id,
             )
             .first()
@@ -342,7 +343,7 @@ class DocsService:
         if existing:
             return True
         session.add(
-            UserDocumentationSource(user_id=self.user_id, docs_id=docs_id)
+            UserDocumentationSource(user_id=uid, docs_id=docs_id)
         )
         return True
 
@@ -364,6 +365,10 @@ class DocsService:
                 q_emb.tolist() if hasattr(q_emb, "tolist") else list(q_emb)
             )
             emb_str = "[" + ",".join(str(x) for x in emb_list) + "]"
+
+            # Force user_id to a plain str — auth may hand us a UUID object,
+            # and the join column is VARCHAR, so Postgres refuses uuid = varchar.
+            uid = str(self.user_id)
 
             with get_session() as session:
                 rows = (
@@ -387,7 +392,7 @@ class DocsService:
                             LIMIT :k
                             """
                         ),
-                        {"q": emb_str, "uid": self.user_id, "k": top_k},
+                        {"q": emb_str, "uid": uid, "k": top_k},
                     )
                     .mappings()
                     .all()
@@ -408,6 +413,7 @@ class DocsService:
         if not self.user_id:
             return []
         try:
+            uid = str(self.user_id)
             with get_session() as session:
                 rows = (
                     session.query(DocumentationSource)
@@ -415,7 +421,7 @@ class DocsService:
                         UserDocumentationSource,
                         UserDocumentationSource.docs_id == DocumentationSource.docs_id,
                     )
-                    .filter(UserDocumentationSource.user_id == self.user_id)
+                    .filter(UserDocumentationSource.user_id == uid)
                     .order_by(UserDocumentationSource.added_at.desc())
                     .all()
                 )
