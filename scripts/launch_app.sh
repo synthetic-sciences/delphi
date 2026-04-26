@@ -5,18 +5,21 @@
 # =============================================================================
 # One command to start everything: PostgreSQL, backend, frontend, worker.
 #
-# Usage:
-#   ./launch_app.sh              # Start everything
-#   ./launch_app.sh --no-worker  # Skip background worker
-#   ./launch_app.sh --no-frontend # Skip frontend
-#   ./launch_app.sh --docker     # Use docker-compose for everything
-#   ./launch_app.sh --help       # Show all options
+# Usage (run from anywhere — paths are resolved from the script's location):
+#   ./scripts/launch_app.sh              # Start everything
+#   ./scripts/launch_app.sh --no-worker  # Skip background worker
+#   ./scripts/launch_app.sh --no-frontend # Skip frontend
+#   ./scripts/launch_app.sh --docker     # Use docker-compose for everything
+#   ./scripts/launch_app.sh --help       # Show all options
 # =============================================================================
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BACKEND_DIR="$PROJECT_ROOT/backend"
+FRONTEND_DIR="$PROJECT_ROOT/frontend"
+cd "$PROJECT_ROOT"
 
 # Colors
 GREEN='\033[0;32m'
@@ -109,22 +112,31 @@ else
 fi
 
 # Set defaults
-export DATABASE_URL="${DATABASE_URL:-postgresql://synsc:synsc@localhost:5432/synsc}"
+# Derive DATABASE_URL from POSTGRES_* if it isn't pinned explicitly. Without
+# this, the docker-managed Postgres container is created with whatever
+# POSTGRES_PASSWORD .env supplies, but DATABASE_URL would still default to
+# synsc:synsc and auth would fail.
+export POSTGRES_USER="${POSTGRES_USER:-synsc}"
+export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-synsc}"
+export POSTGRES_DB="${POSTGRES_DB:-synsc}"
+export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+export DATABASE_URL="${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}}"
 export SYNSC_API_PORT="${SYNSC_API_PORT:-8742}"
 export SYNSC_REQUIRE_AUTH="${SYNSC_REQUIRE_AUTH:-false}"
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
 
-# Check Python deps
-if [ ! -d ".venv" ] || ! uv run python -c "import synsc" 2>/dev/null; then
+# Check Python deps (pyproject lives under backend/ after the restructure)
+if [ ! -d "$BACKEND_DIR/.venv" ] || ! (cd "$BACKEND_DIR" && uv run python -c "import synsc") 2>/dev/null; then
     echo -e "${CYAN}Installing Python dependencies...${NC}"
-    uv sync
+    (cd "$BACKEND_DIR" && uv sync --extra dev)
 fi
 
 # Check frontend deps
-if [ "$START_FRONTEND" = true ] && [ -d "frontend" ] && [ ! -d "frontend/node_modules" ]; then
+if [ "$START_FRONTEND" = true ] && [ -d "$FRONTEND_DIR" ] && [ ! -d "$FRONTEND_DIR/node_modules" ]; then
     echo -e "${CYAN}Installing frontend dependencies...${NC}"
-    cd frontend && npm install && cd "$SCRIPT_DIR"
+    (cd "$FRONTEND_DIR" && npm install)
 fi
 
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
@@ -143,26 +155,33 @@ if ! pg_isready -h localhost -p 5432 -q 2>/dev/null; then
 fi
 echo -e "${GREEN}PostgreSQL ready.${NC}"
 
+# ── Migrations ───────────────────────────────────────────────────────────────
+# Run after Postgres is up. Creates research_jobs + docs_sources tables on top
+# of the setup_local.sql baseline (which Alembic 001 stamps idempotently).
+
+echo -e "${DIM}Applying database migrations...${NC}"
+(cd "$BACKEND_DIR" && uv run alembic upgrade head) || \
+    echo -e "${YELLOW}Migrations failed or skipped. Continuing — fix and rerun if endpoints 500.${NC}"
+
 # ── Services ─────────────────────────────────────────────────────────────────
 
 echo -e "${CYAN}Starting API server on port ${SYNSC_API_PORT}...${NC}"
-uv run synsc-context-http &
+(cd "$BACKEND_DIR" && uv run synsc-context-http) &
 PIDS+=($!)
 
 if [ "$START_WORKER" = true ]; then
     echo -e "${CYAN}Starting background worker...${NC}"
-    uv run synsc-context-worker &
+    (cd "$BACKEND_DIR" && uv run synsc-context-worker) &
     PIDS+=($!)
 fi
 
-if [ "$START_FRONTEND" = true ] && [ -d "frontend" ]; then
+if [ "$START_FRONTEND" = true ] && [ -d "$FRONTEND_DIR" ]; then
     FRONTEND_PORT="${FRONTEND_PORT:-3000}"
     API_PORT="${SYNSC_API_PORT:-8742}"
     echo -e "${CYAN}Starting frontend on port ${FRONTEND_PORT}...${NC}"
-    cd frontend
-    NEXT_PUBLIC_API_URL="http://localhost:${API_PORT}" PORT="$FRONTEND_PORT" npm run dev &
+    (cd "$FRONTEND_DIR" && \
+        NEXT_PUBLIC_API_URL="http://localhost:${API_PORT}" PORT="$FRONTEND_PORT" npm run dev) &
     PIDS+=($!)
-    cd "$SCRIPT_DIR"
 fi
 
 # ── Ready ────────────────────────────────────────────────────────────────────

@@ -6,15 +6,15 @@ Provides tools for code repository, research paper, and HuggingFace dataset inde
 
 import contextvars
 import json
-import logging
 import os
 import time
 from typing import Any
 
+import structlog
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Context variables for request-scoped auth (set by http_server.py /mcp proxy)
 _current_api_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -548,23 +548,32 @@ Provides deep context to AI agents through:
         return result
 
     @server.tool()
-    def get_paper(paper_id: str) -> dict[str, Any]:
-        """Get full paper content with all extracted features.
+    def get_paper(paper_id: str, section: str | None = None) -> dict[str, Any]:
+        """Get full paper content, optionally filtered to a single section.
 
         Args:
-            paper_id: Paper identifier
-
-        Returns:
-            Complete paper data including sections, citations, equations
+            paper_id: Paper identifier.
+            section: Optional section filter — one of 'abstract',
+                'introduction', 'methods', 'results', 'discussion',
+                'conclusion', 'references', 'related work', or a regex
+                that matches `chunk.section_title`.
         """
         from synsc.services.paper_service import get_paper_service
 
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
 
-        paper = service.get_paper(paper_id)
-        result = {"success": True, **paper} if paper else {"success": False, "error": "Paper not found"}
-        return result
+        try:
+            paper = service.get_paper(paper_id, section=section)
+        except ValueError as e:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(e),
+            }
+        if not paper:
+            return {"success": False, "error_code": "not_found", "message": "Paper not found"}
+        return {"success": True, **paper}
 
     @server.tool()
     async def search_papers(query: str, top_k: int = 5) -> dict[str, Any]:
@@ -946,6 +955,432 @@ Provides deep context to AI agents through:
         service = get_dataset_service(user_id=user_id)
         result = service.delete_dataset(dataset_id)
 
+        return result
+
+    # ==========================================================================
+    # UNIFIED RESEARCH TOOL
+    # ==========================================================================
+
+    @server.tool()
+    def research(
+        query: str,
+        mode: str = "quick",
+        source_ids: list[str] | None = None,
+        source_types: list[str] | None = None,
+        k: int | None = None,
+    ) -> dict[str, Any]:
+        """RAG synthesis across indexed sources. Modes: quick / deep / oracle.
+
+        Requires a configured research provider (Gemini API key) on the Delphi
+        server. If the server has no provider configured, this tool returns
+        ``{"success": False, "error_code": "provider_not_configured"}`` —
+        relay that message to the user; do not retry.
+
+        Args:
+            query: Research question or topic.
+            mode: 'quick' (~30s, top_k=10), 'deep' (~120s, iterative),
+                  'oracle' (~300s, tool-use).
+            source_ids: Optional list of source IDs (repos, papers, datasets)
+                        to scope retrieval to.
+            source_types: Optional filter: any of 'repo', 'paper', 'dataset'.
+            k: Override retrieval top_k.
+
+        On error, the response shape is always
+        ``{"success": False, "error_code": <stable-string>, "message": <human-readable>}``
+        with one of the codes: ``invalid_mode``, ``provider_not_configured``,
+        ``internal_error``.
+        """
+        from synsc.config import get_config
+        from synsc.services.research_service import ResearchService
+
+        if mode not in ("quick", "deep", "oracle"):
+            return {
+                "success": False,
+                "error_code": "invalid_mode",
+                "message": (
+                    f"Invalid mode '{mode}': expected quick / deep / oracle"
+                ),
+            }
+
+        config = get_config()
+        if config.research.provider == "gemini" and not config.research.api_key:
+            return {
+                "success": False,
+                "error_code": "provider_not_configured",
+                "provider": config.research.provider,
+                "action_required": "configure_api_key",
+                "message": (
+                    f"Research provider '{config.research.provider}' is not "
+                    "configured on this Delphi instance. Ask the user to set "
+                    "GEMINI_API_KEY in the server environment to enable this "
+                    "tool — do not retry until they confirm it's configured."
+                ),
+            }
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        try:
+            result = ResearchService().run(
+                query=query,
+                mode=mode,  # type: ignore[arg-type]
+                source_ids=source_ids,
+                source_types=source_types,
+                k=k,
+                user_id=user_id,
+            )
+        except Exception as e:
+            return {
+                "success": False,
+                "error_code": "internal_error",
+                "message": str(e),
+            }
+        _log_activity(
+            user_id=user_id,
+            action="research",
+            resource_type="research",
+            query=query,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"mode": mode, "source": "mcp"},
+        )
+        return {"success": True, **result}
+
+    @server.tool()
+    def grep_source(
+        source_id: str,
+        pattern: str,
+        source_type: str = "repo",
+        path_prefix: str | None = None,
+        max_matches: int = 100,
+        context_lines: int = 2,
+    ) -> dict[str, Any]:
+        """Regex search within a single indexed source.
+
+        Args:
+            source_id: Repository or paper ID.
+            pattern: Python regex pattern.
+            source_type: 'repo' or 'paper'.
+            path_prefix: Optional path prefix to scope the search.
+            max_matches: Upper bound on matches returned (default 100).
+            context_lines: Lines of context above / below each match (default 2).
+        """
+        from synsc.services.grep_service import GrepService
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        try:
+            matches = GrepService().grep_source(
+                source_id=source_id,
+                source_type=source_type,
+                pattern=pattern,
+                path_prefix=path_prefix,
+                max_matches=max_matches,
+                context_lines=context_lines,
+                user_id=user_id,
+            )
+        except ValueError as e:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(e),
+            }
+        _log_activity(
+            user_id=user_id,
+            action="grep_source",
+            resource_type=source_type,
+            resource_id=source_id,
+            query=pattern,
+            results_count=len(matches),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"source": "mcp"},
+        )
+        return {"success": True, "source_id": source_id, "matches": matches}
+
+    # ==========================================================================
+    # UNIFIED SOURCE TOOLS (Nia-parity P1)
+    # ==========================================================================
+
+    @server.tool()
+    def search(
+        query: str,
+        source_ids: list[str] | None = None,
+        source_types: list[str] | None = None,
+        k: int = 10,
+        mode: str = "precise",
+    ) -> dict[str, Any]:
+        """Unified search across indexed code + papers + datasets.
+
+        Modes: 'precise' (fewer, higher quality), 'thorough' (more results),
+        'web' (fallback, returns empty stub). Accepts Nia aliases: 'targeted'
+        maps to 'precise', 'universal' maps to 'thorough'.
+
+        Args:
+            query: Natural language query.
+            source_ids: Optional list of source IDs to scope the search.
+            source_types: Filter: any of 'repo', 'paper', 'dataset'.
+            k: Number of hits (default 10, max 100).
+            mode: 'precise' / 'thorough' / 'web' / 'targeted' / 'universal'.
+        """
+        from synsc.services.source_service import unified_search
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        try:
+            result = unified_search(
+                query=query,
+                source_ids=source_ids,
+                source_types=source_types,
+                k=k,
+                mode=mode,
+                user_id=user_id,
+            )
+        except ValueError as e:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(e),
+            }
+        _log_activity(
+            user_id=user_id,
+            action="unified_search",
+            query=query,
+            results_count=result.get("total", 0),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"mode": mode, "source": "mcp"},
+        )
+        return {"success": True, **result}
+
+    @server.tool()
+    def index_source(
+        source_type: str,
+        url: str,
+        display_name: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Unified indexing dispatch — repo / paper / dataset / docs.
+
+        Args:
+            source_type: 'repo', 'paper', 'dataset', or 'docs' (docs lands later).
+            url: GitHub URL, arXiv URL/ID, HF dataset ID, or docs URL.
+            display_name: Optional friendly label.
+            options: Per-type options (e.g., {'branch': 'main', 'deep_index': false}).
+        """
+        from synsc.services.source_service import index_source as _index_source
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        try:
+            result = _index_source(
+                source_type=source_type,
+                url=url,
+                display_name=display_name,
+                options=options,
+                user_id=user_id,
+            )
+        except NotImplementedError as e:
+            return {
+                "success": False,
+                "error_code": "not_implemented",
+                "message": str(e),
+            }
+        except ValueError as e:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(e),
+            }
+        _log_activity(
+            user_id=user_id,
+            action="index_source",
+            resource_type=source_type,
+            resource_id=result.get("source_id") or None,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"url": url, "source": "mcp"},
+        )
+
+        # Reflect a per-type service failure in the tool envelope so the
+        # calling agent can surface it instead of believing the index ran.
+        if result.get("status") == "error":
+            return {
+                "success": False,
+                "error_code": "indexing_failed",
+                "message": result.get("error") or "indexing failed",
+                "raw": result.get("raw"),
+            }
+        return {"success": True, **result}
+
+    @server.tool()
+    def list_sources(source_type: str | None = None) -> dict[str, Any]:
+        """List indexed sources, optionally filtered by type.
+
+        Args:
+            source_type: Optional filter: 'repo', 'paper', 'dataset'.
+        """
+        from synsc.services.source_service import list_sources as _list_sources
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        sources = _list_sources(source_type=source_type, user_id=user_id)
+        _log_activity(
+            user_id=user_id,
+            action="list_sources",
+            results_count=len(sources),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"type_filter": source_type, "source": "mcp"},
+        )
+        return {"success": True, "sources": sources, "total": len(sources)}
+
+    @server.tool()
+    def read_source(
+        source_id: str,
+        source_type: str = "paper",
+        path: str | None = None,
+        section: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> dict[str, Any]:
+        """Read content from an indexed source.
+
+        - paper: supports ``section=`` (canonical token or regex).
+        - repo:  requires ``path=``; optional ``start_line``/``end_line``.
+
+        Args:
+            source_id: Paper or repo ID.
+            source_type: 'paper' (default) or 'repo'.
+            path: Required for repo reads.
+            section: Optional for paper reads — 'abstract', 'introduction',
+                'methods', 'results', 'discussion', 'conclusion', 'references',
+                'related work', or a regex.
+            start_line: Repo read — optional 1-indexed start line.
+            end_line: Repo read — optional end line.
+        """
+        start = time.time()
+        user_id = get_authenticated_user_id()
+
+        if source_type == "paper":
+            from synsc.services.paper_service import get_paper_service
+
+            try:
+                paper = get_paper_service(user_id=user_id).get_paper(
+                    source_id, section=section
+                )
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "error_code": "invalid_input",
+                    "message": str(e),
+                }
+            if paper is None:
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "message": "paper not found",
+                }
+            _log_activity(
+                user_id=user_id,
+                action="read_source",
+                resource_type="paper",
+                resource_id=source_id,
+                duration_ms=int((time.time() - start) * 1000),
+                metadata={"section": section, "source": "mcp"},
+            )
+            return {
+                "success": True,
+                "source_id": source_id,
+                "source_type": "paper",
+                **paper,
+            }
+
+        if source_type == "repo":
+            if not path:
+                return {
+                    "success": False,
+                    "error_code": "invalid_input",
+                    "message": "repo read requires path=",
+                }
+            from synsc.services.search_service import SearchService
+
+            res = SearchService(user_id=user_id).get_file(
+                repo_id=source_id,
+                file_path=path,
+                start_line=start_line,
+                end_line=end_line,
+                user_id=user_id,
+            )
+            if not res.get("success"):
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "message": res.get("error", "not found"),
+                }
+            _log_activity(
+                user_id=user_id,
+                action="read_source",
+                resource_type="repo",
+                resource_id=source_id,
+                duration_ms=int((time.time() - start) * 1000),
+                metadata={"path": path, "source": "mcp"},
+            )
+            return {**res, "source_id": source_id, "source_type": "repo"}
+
+        return {
+            "success": False,
+            "error_code": "invalid_input",
+            "message": f"unsupported source_type: {source_type}",
+        }
+
+    @server.tool()
+    def tree_source(
+        source_id: str,
+        action: str = "tree",
+        path: str = "/",
+        max_depth: int = 4,
+        annotate: bool = True,
+    ) -> dict[str, Any]:
+        """Browse the directory structure of an indexed repository source.
+
+        Two modes:
+        - 'tree' (default): recursive tree view with optional annotations.
+        - 'ls': flat single-level listing at ``path`` — equivalent to ``ls``.
+
+        Args:
+            source_id: Repository identifier.
+            action: 'tree' or 'ls'.
+            path: For ``action='ls'``, the directory path (default root).
+            max_depth: For ``action='tree'``, max depth (default 4).
+            annotate: For ``action='tree'``, attach directory purpose annotations.
+        """
+        if action not in ("tree", "ls"):
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": f"invalid action: {action}",
+            }
+
+        from synsc.services.analysis_service import AnalysisService
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        svc = AnalysisService(user_id=user_id)
+        if action == "ls":
+            result = svc.list_directory(
+                repo_id=source_id, path=path, user_id=user_id
+            )
+        else:
+            result = svc.get_directory_structure(
+                repo_id=source_id,
+                max_depth=max_depth,
+                annotate=annotate,
+                user_id=user_id,
+            )
+
+        _log_activity(
+            user_id=user_id,
+            action=f"tree_source_{action}",
+            resource_type="repository",
+            resource_id=source_id,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"action": action, "source": "mcp"},
+        )
         return result
 
     return server

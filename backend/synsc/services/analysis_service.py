@@ -782,6 +782,78 @@ class AnalysisService:
                 "total_directories": self._count_directories(tree),
             }
 
+    def list_directory(
+        self,
+        repo_id: str,
+        path: str = "/",
+        user_id: str | None = None,
+    ) -> dict:
+        """Flat single-level listing of files + directories at ``path``.
+
+        Complement to ``get_directory_structure`` (recursive tree view).
+        Returns ``{success, repo_id, path, directories: [{name, path}],
+        files: [{name, path}]}``.
+        """
+        effective_user_id = user_id or self.user_id
+
+        norm_path = path.strip("/").strip()
+
+        with get_session() as session:
+            repo = (
+                session.query(Repository)
+                .filter(Repository.repo_id == repo_id)
+                .first()
+            )
+
+            if not repo:
+                return {"success": False, "error": "Repository not found"}
+
+            if not repo.can_user_access(effective_user_id):
+                return {
+                    "success": False,
+                    "error": "Access denied",
+                    "message": "You don't have access to this private repository",
+                }
+
+            files = (
+                session.query(RepositoryFile)
+                .filter(RepositoryFile.repo_id == repo_id)
+                .all()
+            )
+
+            prefix = (norm_path + "/") if norm_path else ""
+            dirs: dict[str, str] = {}
+            out_files: list[dict] = []
+
+            for f in files:
+                fp = f.file_path
+                if not fp.startswith(prefix):
+                    continue
+                remainder = fp[len(prefix):]
+                if "/" in remainder:
+                    dir_name = remainder.split("/", 1)[0]
+                    dir_path = (
+                        (norm_path + "/" + dir_name) if norm_path else dir_name
+                    )
+                    dirs[dir_name] = dir_path
+                else:
+                    out_files.append({"name": remainder, "path": fp})
+
+            directories = [
+                {"name": n, "path": p}
+                for n, p in sorted(dirs.items(), key=lambda kv: kv[0])
+            ]
+            out_files.sort(key=lambda e: e["name"])
+
+            return {
+                "success": True,
+                "repo_id": repo_id,
+                "repo_name": f"{repo.owner}/{repo.name}",
+                "path": norm_path or "/",
+                "directories": directories,
+                "files": out_files,
+            }
+
     def _analyze_structure(self, file_paths: list[str]) -> dict:
         """Analyze the directory structure."""
         # Count files per top-level directory
