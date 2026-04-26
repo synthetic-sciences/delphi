@@ -47,10 +47,16 @@ class _HttpEmbeddingProvider:
     _api_key_env: str = ""
 
     def __init__(self) -> None:
-        self.api_key = os.getenv(self._api_key_env, "")
+        # Provider-specific env var wins (GEMINI_API_KEY, OPENAI_API_KEY, ...);
+        # fall back to the generic EMBEDDING_API_KEY so users can set one
+        # key when they only need a single provider.
+        self.api_key = os.getenv(self._api_key_env, "") or os.getenv(
+            "EMBEDDING_API_KEY", ""
+        )
         if not self.api_key:
             raise RuntimeError(
-                f"{self.name}: {self._api_key_env} is not set in the environment."
+                f"{self.name}: set {self._api_key_env} (or the generic "
+                "EMBEDDING_API_KEY) in the environment."
             )
 
     # ------------------------------------------------------------------
