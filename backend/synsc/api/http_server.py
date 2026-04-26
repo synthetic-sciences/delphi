@@ -1978,6 +1978,48 @@ def create_app() -> FastAPI:
             content={"success": True, "source_id": source_id, "matches": matches}
         )
 
+    @app.get("/v1/sources/{source_id}/tree", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def tree_source_endpoint(
+        request: Request,
+        source_id: str,
+        action: Literal["tree", "ls"] = "tree",
+        path: str = "/",
+        max_depth: int = 4,
+        annotate: bool = True,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Browse the directory structure of an indexed repo source.
+
+        ``action=tree`` (default): recursive tree, optional ``max_depth`` +
+        ``annotate``. ``action=ls``: flat single-level listing at ``path``.
+        """
+        from synsc.services.analysis_service import AnalysisService
+
+        svc = AnalysisService(user_id=auth.user_id)
+        start = time.time()
+        if action == "ls":
+            result = svc.list_directory(
+                repo_id=source_id, path=path, user_id=auth.user_id
+            )
+        else:
+            result = svc.get_directory_structure(
+                repo_id=source_id,
+                max_depth=max_depth,
+                annotate=annotate,
+                user_id=auth.user_id,
+            )
+
+        _log_activity(
+            user_id=auth.user_id,
+            action=f"tree_source_{action}",
+            resource_type="repository",
+            resource_id=source_id,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"action": action, "path": path if action == "ls" else None},
+        )
+        return SafeJSONResponse(content=result)
+
     # ==========================================================================
     # Job Queue Endpoints
     # ==========================================================================
