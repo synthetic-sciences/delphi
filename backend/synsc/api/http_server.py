@@ -748,6 +748,57 @@ def create_app() -> FastAPI:
                 return {"authenticated": True, "user_id": user_id}
         return {"authenticated": False}
 
+    class BootstrapRequest(BaseModel):
+        password: str = Field(description="SYSTEM_PASSWORD value, used as a one-time bootstrap token")
+        client_name: str = Field(default="cli-bootstrap", description="Label stored on the minted API key")
+
+    @app.post("/api/bootstrap", tags=["Auth"])
+    @limiter.limit(AUTH_LIMIT)
+    async def bootstrap(request: Request, body: BootstrapRequest) -> JSONResponse:
+        """Mint an API key for the admin user using the system password.
+
+        Designed for the `npx @synsci/delphi` installer so it can configure
+        MCP clients without driving the dashboard UI.
+        """
+        import secrets
+        import hashlib
+
+        system_pw = os.getenv("SYSTEM_PASSWORD", "")
+        if not system_pw:
+            raise HTTPException(status_code=501, detail="SYSTEM_PASSWORD not configured.")
+
+        if not hmac.compare_digest(body.password, system_pw):
+            raise HTTPException(status_code=401, detail="Invalid bootstrap password.")
+
+        admin_id = _get_or_create_admin_user()
+
+        key = f"synsc_{secrets.token_hex(24)}"
+        key_preview = key[:12]
+        key_hash = hashlib.sha256(key.encode()).hexdigest()
+        key_name = f"{body.client_name}-{int(time.time())}"
+
+        with get_session() as session:
+            session.execute(
+                text(
+                    "INSERT INTO api_keys (user_id, name, key_hash, key_preview, is_revoked) "
+                    "VALUES (:uid, :name, :hash, :preview, false)"
+                ),
+                {"uid": admin_id, "name": key_name, "hash": key_hash, "preview": key_preview},
+            )
+            session.commit()
+
+        logger.info("Bootstrap API key minted", user_id=admin_id, key_preview=key_preview, name=key_name)
+
+        return JSONResponse(content={
+            "success": True,
+            "api_key": key,
+            "key_preview": key_preview,
+            "name": key_name,
+            "user_id": admin_id,
+            "api_url": os.getenv("FRONTEND_URL", "http://localhost:3000"),
+            "message": "Save this key — it will not be shown again.",
+        })
+
     @app.post("/auth/logout", tags=["Auth"])
     async def logout() -> JSONResponse:
         """Clear the session cookie."""
