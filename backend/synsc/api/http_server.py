@@ -12,7 +12,7 @@ import time
 import uuid as _uuid
 from dataclasses import dataclass
 from datetime import datetime, date
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 
@@ -274,6 +274,17 @@ class ResearchRequest(BaseModel):
         default=None, description="Filter by types: 'repo', 'paper', 'dataset'"
     )
     k: int | None = Field(default=None, ge=1, le=100, description="Retrieval top_k override")
+
+
+class GrepSourceRequest(BaseModel):
+    """Request to /v1/sources/{source_id}/grep."""
+    pattern: str = Field(..., min_length=1, max_length=1000, description="Python regex")
+    source_type: Literal["repo", "paper"] = Field(
+        default="repo", description="Source category to grep"
+    )
+    path_prefix: str | None = Field(default=None, description="Restrict to this path prefix")
+    max_matches: int = Field(default=100, ge=1, le=1000)
+    context_lines: int = Field(default=2, ge=0, le=20)
 
 
 # =============================================================================
@@ -1746,6 +1757,49 @@ def create_app() -> FastAPI:
             },
         )
         return SafeJSONResponse(content={"success": True, **result})
+
+    # ==========================================================================
+    # Sources (unified grep + read + tree surface)
+    # ==========================================================================
+
+    @app.post("/v1/sources/{source_id}/grep", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def grep_source_endpoint(
+        request: Request,
+        source_id: str,
+        body: GrepSourceRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Regex search within a single indexed source (repo or paper)."""
+        from synsc.services.grep_service import GrepService
+
+        start = time.time()
+        try:
+            matches = GrepService().grep_source(
+                source_id=source_id,
+                source_type=body.source_type,
+                pattern=body.pattern,
+                path_prefix=body.path_prefix,
+                max_matches=body.max_matches,
+                context_lines=body.context_lines,
+                user_id=auth.user_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        _log_activity(
+            user_id=auth.user_id,
+            action="grep_source",
+            resource_type=body.source_type,
+            resource_id=source_id,
+            query=body.pattern,
+            results_count=len(matches),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"path_prefix": body.path_prefix},
+        )
+        return SafeJSONResponse(
+            content={"success": True, "source_id": source_id, "matches": matches}
+        )
 
     # ==========================================================================
     # Job Queue Endpoints
