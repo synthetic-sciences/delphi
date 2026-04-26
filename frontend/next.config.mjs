@@ -1,5 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Trace runtime deps and emit a self-contained server bundle. The Docker
+  // runtime stage copies just .next/standalone instead of the full
+  // node_modules tree (~700MB → ~150MB).
+  output: 'standalone',
   // Allow cross-origin requests from backend API during development
   allowedDevOrigins: [
     'http://localhost:8742',
