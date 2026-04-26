@@ -51,7 +51,11 @@ async def _call_remote(tool_name: str, arguments: dict) -> dict[str, Any]:
                 "method": "tools/call",
                 "params": {"name": tool_name, "arguments": arguments},
             },
-            headers={"Authorization": f"Bearer {API_KEY}"},
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                # MCP Streamable HTTP requires both content types in Accept.
+                "Accept": "application/json, text/event-stream",
+            },
             timeout=300,
         )
 

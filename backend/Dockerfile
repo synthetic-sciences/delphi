@@ -105,7 +105,10 @@ FROM runtime AS api
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -f http://localhost:8742/health || exit 1
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn synsc.api.http_server:create_app --factory --host 0.0.0.0 --port 8742"]
+# Use the module-level `app` (wraps FastAPI in _MCPMiddleware to expose /mcp).
+# The `:create_app --factory` form returns the bare FastAPI app and skips the
+# /mcp mount, leaving the synsc-context-proxy with HTTP 404 on every call.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn synsc.api.http_server:app --host 0.0.0.0 --port 8742"]
 
 # ---------------------------------------------------------------------------
 # Target: worker
