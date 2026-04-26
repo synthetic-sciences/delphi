@@ -189,6 +189,88 @@ this is a Delphi-only feature.
 
 ---
 
+## 3. POST /v1/sources lies about success when the per-type indexer fails
+
+**Status:** ✅ Done in Delphi (commit `3a35d0d` on `feat/upstream-sync-2026-04`). ⏳ Open in `synsc-context` (upstream).
+**Affected repos:** ~~Synsci-Delphi (this repo)~~, `synsc-context` (upstream).
+**Priority:** medium — correctness bug that masks real upstream failures
+behind misleading 200 / `status: indexed` responses.
+
+### Symptom
+
+Hitting `POST /v1/sources` with a docs URL whose sitemap 404s, a GitHub
+URL that requires auth, an arxiv ID that times out, etc. returns:
+
+```json
+HTTP/1.1 200 OK
+{
+  "success": true,
+  "source_id": "",
+  "source_type": "docs",
+  "status": "indexed",
+  "external_ref": "https://example.com/sitemap.xml",
+  "raw": {"success": false, "error": "sitemap fetch failed: 404 Not Found", ...}
+}
+```
+
+The truth lives in `raw`, but the outer envelope says
+`status: indexed` because the dispatcher's per-branch return-shape
+falls back to a literal `"indexed"` when the per-type response omits
+a `status` field — and per-type services omit it specifically on
+failure.
+
+### Cause
+
+Each per-branch return in
+[`backend/synsc/services/source_service.py`](backend/synsc/services/source_service.py)
+(in the upstream-equivalent: `synsc/services/source_service.py`) wraps
+the per-type response without inspecting `res.get("success")`. The
+HTTP endpoint then returns `{success: True, **result}` regardless. The
+MCP `index_source` tool has the same wrapping.
+
+### Fix (already landed in Delphi)
+
+1. Add a single `_normalize_index_response(source_type, res, id_key,
+   external_ref, default_status)` helper. When `res.get("success")` is
+   explicitly `False`, return `status="error"` plus an `error` field
+   carrying the underlying message; otherwise apply the existing
+   default-status fallback.
+2. Route every per-branch return (`repo`, `paper`, `dataset`, `docs`)
+   through that helper.
+3. In `POST /v1/sources`, after calling `index_source(...)`, raise
+   `HTTPException(status_code=502, detail=result["error"])` when
+   `result.get("status") == "error"`.
+4. In MCP `index_source` tool, return
+   `{success: False, error_code: "indexing_failed", message, raw}`
+   for the same case.
+5. Drive-by while you're there: pass `None` instead of `""` for
+   `_log_activity(resource_id=...)` when the indexer didn't return an
+   id; `""` can't cast to UUID and `activity_log` was silently failing.
+
+### Verification (Delphi)
+
+```bash
+KEY="..."
+curl -i -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"source_type":"docs","url":"https://example.com/sitemap.xml"}' \
+  "http://localhost:8742/v1/sources" -m 30
+# Expected: HTTP/1.1 502 Bad Gateway, detail = "sitemap fetch failed: ..."
+```
+
+### Where to land it (upstream)
+
+Single PR against `synsc-context:main`. The diff in `synsc/services/source_service.py`
+is structurally identical (no Supabase coupling); ports cleanly. Same
+two-line addition to the HTTP endpoint and MCP tool. Add ~4 tests
+mirroring `backend/tests/test_sources_unified.py` and
+`backend/tests/test_mcp_unified_tools.py` failure-path cases.
+
+### Estimated effort
+
+Single PR, < 1 hour: ~50 lines of code + ~50 lines of test.
+
+---
+
 ## How to use this file
 
 - Add new entries below as additional "correct but not optimal" fixes
