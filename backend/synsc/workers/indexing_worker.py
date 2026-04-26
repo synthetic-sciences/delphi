@@ -36,7 +36,7 @@ from synsc.database.models import (
     Symbol,
     UserRepository,
 )
-from synsc.embeddings.generator import EmbeddingGenerator
+from synsc.embeddings.generator import EmbeddingGenerator, get_embedding_generator
 from synsc.indexing.vector_store import get_vector_store
 from synsc.parsing.registry import get_parser_registry
 from synsc.services.job_queue_service import get_job_queue_service
@@ -66,7 +66,7 @@ class IndexingWorker:
         self.job_queue = get_job_queue_service()
         self.git_client = GitClient()
         self.chunker = CodeChunker()
-        self.embedding_generator = EmbeddingGenerator()
+        self.embedding_generator = get_embedding_generator()
         self.vector_store = get_vector_store()
         self.running = True
         
