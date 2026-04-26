@@ -1318,6 +1318,61 @@ Provides deep context to AI agents through:
             "message": f"unsupported source_type: {source_type}",
         }
 
+    @server.tool()
+    def tree_source(
+        source_id: str,
+        action: str = "tree",
+        path: str = "/",
+        max_depth: int = 4,
+        annotate: bool = True,
+    ) -> dict[str, Any]:
+        """Browse the directory structure of an indexed repository source.
+
+        Two modes:
+        - 'tree' (default): recursive tree view with optional annotations.
+        - 'ls': flat single-level listing at ``path`` — equivalent to ``ls``.
+
+        Args:
+            source_id: Repository identifier.
+            action: 'tree' or 'ls'.
+            path: For ``action='ls'``, the directory path (default root).
+            max_depth: For ``action='tree'``, max depth (default 4).
+            annotate: For ``action='tree'``, attach directory purpose annotations.
+        """
+        if action not in ("tree", "ls"):
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": f"invalid action: {action}",
+            }
+
+        from synsc.services.analysis_service import AnalysisService
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        svc = AnalysisService(user_id=user_id)
+        if action == "ls":
+            result = svc.list_directory(
+                repo_id=source_id, path=path, user_id=user_id
+            )
+        else:
+            result = svc.get_directory_structure(
+                repo_id=source_id,
+                max_depth=max_depth,
+                annotate=annotate,
+                user_id=user_id,
+            )
+
+        _log_activity(
+            user_id=user_id,
+            action=f"tree_source_{action}",
+            resource_type="repository",
+            resource_id=source_id,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"action": action, "source": "mcp"},
+        )
+        return result
+
     return server
 
 
