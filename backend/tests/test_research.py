@@ -124,6 +124,69 @@ def test_research_deep_mode_iterates_up_to_max_hops():
     assert result["usage"]["tokens_out"] == 40
 
 
+def test_unified_retrieve_merges_code_and_papers(monkeypatch):
+    from synsc.services import source_service
+
+    fake_code_service = MagicMock()
+    fake_code_service.search_code.return_value = {
+        "results": [
+            {"chunk_id": "cc1", "repo_id": "r1", "content": "code A",
+             "relevance_score": 0.9, "file_path": "a.py", "start_line": 10},
+        ],
+    }
+    fake_paper_service = MagicMock()
+    fake_paper_service.search_papers.return_value = {
+        "results": [
+            {"chunk_id": "pp1", "paper_id": "p1", "content": "paper B",
+             "similarity": 0.8, "section_title": "Introduction"},
+        ],
+    }
+
+    monkeypatch.setattr(
+        source_service, "_get_search_service", lambda user_id: fake_code_service
+    )
+    monkeypatch.setattr(
+        source_service, "_get_paper_service", lambda user_id: fake_paper_service
+    )
+
+    hits = source_service.unified_retrieve(
+        query="q", source_ids=None, source_types=["repo", "paper"], k=10, user_id="u1",
+    )
+
+    assert len(hits) == 2
+    by_type = {h["source_type"]: h for h in hits}
+    assert by_type["repo"]["source_id"] == "r1"
+    assert by_type["repo"]["path"] == "a.py"
+    assert by_type["repo"]["line_no"] == 10
+    assert by_type["paper"]["source_id"] == "p1"
+    assert by_type["paper"]["path"] == "Introduction"
+    assert hits[0]["score"] >= hits[1]["score"]
+
+
+def test_unified_retrieve_skips_paper_dataset_branches_without_user_id(monkeypatch):
+    """Without user_id, the paper / dataset branches are skipped (not even
+    constructed) — they require user-scoped access; the code branch may
+    still run for public-repo callers."""
+    from synsc.services import source_service
+
+    fake_code_service = MagicMock()
+    fake_code_service.search_code.return_value = {"results": []}
+    paper_called = MagicMock()
+    dataset_called = MagicMock()
+
+    monkeypatch.setattr(
+        source_service, "_get_search_service", lambda user_id: fake_code_service
+    )
+    monkeypatch.setattr(source_service, "_get_paper_service", paper_called)
+    monkeypatch.setattr(source_service, "_get_dataset_service", dataset_called)
+
+    hits = source_service.unified_retrieve(query="q", k=5, user_id=None)
+
+    assert hits == []
+    assert not paper_called.called
+    assert not dataset_called.called
+
+
 def test_research_config_defaults():
     """ResearchConfig has sensible defaults that don't require env vars to read."""
     from synsc.config import ResearchConfig
