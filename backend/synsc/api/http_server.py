@@ -1661,9 +1661,15 @@ def create_app() -> FastAPI:
         on (api_key_hash, mode).
         """
         if body.mode not in ("quick", "deep", "oracle"):
-            raise HTTPException(
+            return SafeJSONResponse(
                 status_code=400,
-                detail=f"Invalid mode '{body.mode}': expected quick / deep / oracle",
+                content={
+                    "success": False,
+                    "error_code": "invalid_mode",
+                    "message": (
+                        f"Invalid mode '{body.mode}': expected quick / deep / oracle"
+                    ),
+                },
             )
 
         config = get_config()
@@ -1674,18 +1680,34 @@ def create_app() -> FastAPI:
         }[body.mode]
 
         if not _research_rate_check(auth.api_key, body.mode, per_mode_rpm):
-            raise HTTPException(
+            return SafeJSONResponse(
                 status_code=429,
-                detail=(
-                    f"Research rate limit exceeded: "
-                    f"max {per_mode_rpm}/min in {body.mode} mode"
-                ),
+                content={
+                    "success": False,
+                    "error_code": "rate_limit_exceeded",
+                    "mode": body.mode,
+                    "limit_per_minute": per_mode_rpm,
+                    "message": (
+                        f"Research rate limit exceeded: "
+                        f"max {per_mode_rpm}/min in {body.mode} mode"
+                    ),
+                },
             )
 
         if config.research.provider == "gemini" and not config.research.api_key:
-            raise HTTPException(
+            return SafeJSONResponse(
                 status_code=503,
-                detail="Research provider not configured (set GEMINI_API_KEY)",
+                content={
+                    "success": False,
+                    "error_code": "provider_not_configured",
+                    "provider": config.research.provider,
+                    "action_required": "configure_api_key",
+                    "message": (
+                        f"Research provider '{config.research.provider}' is not "
+                        "configured on this Delphi instance. Set GEMINI_API_KEY "
+                        "in the server environment to enable the research tool."
+                    ),
+                },
             )
 
         from synsc.services.research_service import ResearchService
@@ -1702,9 +1724,14 @@ def create_app() -> FastAPI:
             )
         except Exception as exc:
             logger.exception("research failed")
-            raise HTTPException(
-                status_code=500, detail=f"research failed: {exc}"
-            ) from exc
+            return SafeJSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error_code": "internal_error",
+                    "message": f"research failed: {exc}",
+                },
+            )
 
         _log_activity(
             user_id=auth.user_id,

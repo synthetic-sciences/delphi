@@ -962,6 +962,11 @@ Provides deep context to AI agents through:
     ) -> dict[str, Any]:
         """RAG synthesis across indexed sources. Modes: quick / deep / oracle.
 
+        Requires a configured research provider (Gemini API key) on the Delphi
+        server. If the server has no provider configured, this tool returns
+        ``{"success": False, "error_code": "provider_not_configured"}`` —
+        relay that message to the user; do not retry.
+
         Args:
             query: Research question or topic.
             mode: 'quick' (~30s, top_k=10), 'deep' (~120s, iterative),
@@ -970,11 +975,38 @@ Provides deep context to AI agents through:
                         to scope retrieval to.
             source_types: Optional filter: any of 'repo', 'paper', 'dataset'.
             k: Override retrieval top_k.
+
+        On error, the response shape is always
+        ``{"success": False, "error_code": <stable-string>, "message": <human-readable>}``
+        with one of the codes: ``invalid_mode``, ``provider_not_configured``,
+        ``internal_error``.
         """
+        from synsc.config import get_config
         from synsc.services.research_service import ResearchService
 
         if mode not in ("quick", "deep", "oracle"):
-            return {"success": False, "error": f"invalid mode: {mode}"}
+            return {
+                "success": False,
+                "error_code": "invalid_mode",
+                "message": (
+                    f"Invalid mode '{mode}': expected quick / deep / oracle"
+                ),
+            }
+
+        config = get_config()
+        if config.research.provider == "gemini" and not config.research.api_key:
+            return {
+                "success": False,
+                "error_code": "provider_not_configured",
+                "provider": config.research.provider,
+                "action_required": "configure_api_key",
+                "message": (
+                    f"Research provider '{config.research.provider}' is not "
+                    "configured on this Delphi instance. Ask the user to set "
+                    "GEMINI_API_KEY in the server environment to enable this "
+                    "tool — do not retry until they confirm it's configured."
+                ),
+            }
 
         start = time.time()
         user_id = get_authenticated_user_id()
@@ -988,7 +1020,11 @@ Provides deep context to AI agents through:
                 user_id=user_id,
             )
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {
+                "success": False,
+                "error_code": "internal_error",
+                "message": str(e),
+            }
         _log_activity(
             user_id=user_id,
             action="research",
