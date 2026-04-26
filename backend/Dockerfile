@@ -26,6 +26,22 @@ COPY pyproject.toml uv.lock* README.md ./
 RUN uv sync --frozen --no-dev --no-editable 2>/dev/null \
     || uv sync --no-dev --no-editable
 
+# torch ships with `test/` (~150 MB) and `include/` (C++ headers, ~30 MB)
+# baked into the wheel. They're only used for compiling extensions / running
+# torch's own test suite — useless at runtime. Same for __pycache__ and .pyc
+# files which uv has already populated. Stripping them shaves 250–400 MB off
+# the image and keeps Docker Desktop's default VM from hitting ENOSPC during
+# layer export.
+RUN set -eux; \
+    find .venv -type d -name '__pycache__' -prune -exec rm -rf {} + ; \
+    find .venv -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete ; \
+    rm -rf .venv/lib/python*/site-packages/torch/test \
+           .venv/lib/python*/site-packages/torch/include \
+           .venv/lib/python*/site-packages/torch/utils/benchmark/utils/valgrind_wrapper \
+           .venv/lib/python*/site-packages/functorch/test \
+           .venv/lib/python*/site-packages/torch/onnx/_internal/fx/passes/_tests ; \
+    true
+
 # The sentence-transformers model (~420 MB) is downloaded lazily on first
 # request rather than baked into the image — keeps build smaller and avoids
 # blowing up disk-constrained installs (Docker Desktop default VM is tight).
