@@ -14,6 +14,7 @@ Coordinates:
 """
 
 import json
+import re as _re
 import time
 import uuid
 from typing import Any, Optional
@@ -32,6 +33,32 @@ from synsc.database.models import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+_SECTION_SYNONYMS = {
+    "abstract": r"^abstract\b",
+    "introduction": r"^(?:introduction|background)\b",
+    "methods": (
+        r"^(?:\d+(?:\.\d+)*\.\s*)?"
+        r"(?:methods?|materials\s+and\s+methods?|methodology)\b"
+    ),
+    "results": r"^(?:\d+(?:\.\d+)*\.\s*)?results?\b",
+    "discussion": r"^(?:\d+(?:\.\d+)*\.\s*)?discussion\b",
+    "conclusion": r"^(?:\d+(?:\.\d+)*\.\s*)?conclusions?\b",
+    "references": r"^references?\b",
+    "related work": r"^related\s+work\b",
+}
+
+
+def _compile_section_matcher(section: str) -> "_re.Pattern[str]":
+    """Resolve a canonical section token or fall back to treating the input
+    as a user-supplied regex. Raises ValueError on an invalid pattern."""
+    canonical = section.strip().lower()
+    pat = _SECTION_SYNONYMS.get(canonical, section)
+    try:
+        return _re.compile(pat, _re.IGNORECASE)
+    except _re.error as exc:
+        raise ValueError(f"invalid section regex: {exc}") from exc
 
 
 class PaperService:
@@ -568,11 +595,24 @@ class PaperService:
                 "error": f"Failed to index paper: {str(e)}",
             }
 
-    def get_paper(self, paper_id: str) -> Optional[dict]:
-        """Get a specific paper by ID."""
+    def get_paper(
+        self, paper_id: str, section: str | None = None
+    ) -> Optional[dict]:
+        """Get a specific paper by ID, optionally filtered to a single section.
+
+        When ``section`` is provided, match against ``chunk.section_title``
+        using either a canonical synonym (abstract, introduction, methods,
+        results, discussion, conclusion, references, related work) or a
+        user-supplied regex. Returns the paper record with a flattened
+        ``section_title`` + ``content`` (joined across matching consecutive
+        chunks) + ``section_query``. Raises ``ValueError`` on an invalid
+        regex. No-match returns the envelope with empty content.
+        """
+        # Invalid-regex guard runs first so it surfaces regardless of access.
+        matcher = _compile_section_matcher(section) if section is not None else None
+
         try:
             with get_session() as session:
-                # Check user has access
                 link = session.query(UserPaper).filter(
                     UserPaper.user_id == self.user_id,
                     UserPaper.paper_id == paper_id,
@@ -584,7 +624,6 @@ class PaperService:
                 if not paper:
                     return None
 
-                # Get chunks
                 chunks = (
                     session.query(PaperChunk)
                     .filter(PaperChunk.paper_id == paper_id)
@@ -592,7 +631,7 @@ class PaperService:
                     .all()
                 )
 
-                return {
+                base = {
                     "paper_id": paper.paper_id,
                     "title": paper.title,
                     "authors": paper.get_authors(),
@@ -603,19 +642,45 @@ class PaperService:
                     "indexed_at": (
                         paper.indexed_at.isoformat() if paper.indexed_at else None
                     ),
-                    "chunks": [
-                        {
-                            "chunk_id": c.chunk_id,
-                            "chunk_index": c.chunk_index,
-                            "content": c.content,
-                            "section_title": c.section_title,
-                            "chunk_type": c.chunk_type,
-                            "page_number": c.page_number,
-                            "token_count": c.token_count,
-                        }
-                        for c in chunks
-                    ],
                 }
+
+                chunk_dicts = [
+                    {
+                        "chunk_id": c.chunk_id,
+                        "chunk_index": c.chunk_index,
+                        "content": c.content,
+                        "section_title": c.section_title,
+                        "chunk_type": c.chunk_type,
+                        "page_number": c.page_number,
+                        "token_count": c.token_count,
+                    }
+                    for c in chunks
+                ]
+
+                if matcher is None:
+                    return {**base, "chunks": chunk_dicts}
+
+                matched = [
+                    c for c in chunk_dicts
+                    if c.get("section_title") and matcher.search(c["section_title"])
+                ]
+                if not matched:
+                    return {
+                        **base,
+                        "section_title": None,
+                        "content": "",
+                        "chunks": [],
+                        "section_query": section,
+                    }
+                return {
+                    **base,
+                    "section_title": matched[0].get("section_title"),
+                    "content": "\n\n".join(c.get("content", "") for c in matched),
+                    "chunks": matched,
+                    "section_query": section,
+                }
+        except ValueError:
+            raise
         except Exception as e:
             logger.error(f"Failed to get paper: {e}")
         return None
