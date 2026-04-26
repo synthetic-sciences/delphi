@@ -73,8 +73,26 @@ def _build_chunk_relationships(session: Session, repo_id: str) -> int:
     relationships: list[ChunkRelationship] = []
     seen: set[tuple[str, str, str]] = set()
 
+    # Pre-load existing relationship keys for this repo so re-runs (e.g. after
+    # a diff-aware reindex that preserved unchanged chunks) don't trip the
+    # unique_chunk_relationship constraint by re-inserting them.
+    existing_rows = session.execute(
+        text(
+            """
+            SELECT cr.source_chunk_id::text,
+                   cr.target_chunk_id::text,
+                   cr.relationship_type
+            FROM chunk_relationships cr
+            JOIN code_chunks cc ON cc.chunk_id = cr.source_chunk_id
+            WHERE cc.repo_id = :rid
+            """
+        ),
+        {"rid": repo_id},
+    ).all()
+    seen.update((src, tgt, rtype) for src, tgt, rtype in existing_rows)
+
     def _add(src: str, tgt: str, rtype: str, weight: float = 1.0) -> None:
-        key = (src, tgt, rtype)
+        key = (str(src), str(tgt), rtype)
         if key not in seen:
             seen.add(key)
             relationships.append(
