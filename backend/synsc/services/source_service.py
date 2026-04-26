@@ -80,6 +80,23 @@ def _norm_dataset_hit(r: dict) -> dict:
     }
 
 
+def _norm_docs_hit(r: dict) -> dict:
+    return {
+        "source_type": "docs",
+        "source_id": r.get("docs_id", ""),
+        "chunk_id": r.get("chunk_id", ""),
+        "text": r.get("content", ""),
+        "score": float(r.get("similarity", 0.0)),
+        "path": r.get("heading") or r.get("page_url"),
+        "line_no": None,
+        "metadata": {
+            "page_url": r.get("page_url"),
+            "docs_url": r.get("docs_url"),
+            "display_name": r.get("display_name"),
+        },
+    }
+
+
 def _any_looks_like_uuid(ids: list[str] | None) -> bool:
     if not ids:
         return False
@@ -99,7 +116,7 @@ def unified_retrieve(
     is logged and the branch contributes zero hits rather than aborting
     the whole call.
     """
-    types = set(source_types or ["repo", "paper", "dataset"])
+    types = set(source_types or ["repo", "paper", "dataset", "docs"])
     hits: list[dict] = []
 
     if "repo" in types:
@@ -130,6 +147,16 @@ def unified_retrieve(
                 hits.append(_norm_dataset_hit(r))
         except Exception as exc:
             logger.warning("unified_retrieve: dataset branch failed", error=str(exc))
+
+    if "docs" in types and user_id:
+        try:
+            from synsc.services.docs_service import get_docs_service
+
+            res = get_docs_service(user_id=user_id).search_docs(query=query, top_k=k)
+            for r in res.get("results", []):
+                hits.append(_norm_docs_hit(r))
+        except Exception as exc:
+            logger.warning("unified_retrieve: docs branch failed", error=str(exc))
 
     hits.sort(key=lambda h: h["score"], reverse=True)
     return hits[:k]

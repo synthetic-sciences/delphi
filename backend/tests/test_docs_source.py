@@ -158,6 +158,62 @@ def test_list_sources_includes_docs_branch(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_search_docs_requires_user_id():
+    from synsc.services.docs_service import DocsService
+
+    res = DocsService(user_id=None).search_docs(query="x")
+    assert res["success"] is False
+    assert res["results"] == []
+
+
+def test_unified_retrieve_includes_docs_branch_by_default(monkeypatch):
+    """Without an explicit source_types filter, the docs branch should fan out
+    alongside repo / paper / dataset (P2 — was previously excluded)."""
+    from synsc.services import source_service
+    from synsc.services import docs_service as ds_mod
+
+    fake_docs_svc = MagicMock()
+    fake_docs_svc.search_docs.return_value = {
+        "results": [
+            {
+                "chunk_id": "dc1",
+                "docs_id": "d1",
+                "page_url": "https://docs.example.com/page",
+                "heading": "Intro",
+                "content": "doc body",
+                "similarity": 0.95,
+                "docs_url": "https://docs.example.com",
+                "display_name": "Example Docs",
+            }
+        ]
+    }
+    monkeypatch.setattr(ds_mod, "get_docs_service", lambda user_id=None: fake_docs_svc)
+
+    # Stub out the other branches so the test isolates the docs branch.
+    monkeypatch.setattr(
+        source_service,
+        "_get_search_service",
+        lambda user_id: MagicMock(search_code=lambda **kw: {"results": []}),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_get_paper_service",
+        lambda user_id: MagicMock(search_papers=lambda **kw: {"results": []}),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_get_dataset_service",
+        lambda user_id: MagicMock(search_datasets=lambda **kw: {"results": []}),
+    )
+
+    hits = source_service.unified_retrieve(query="q", k=10, user_id="u1")
+    assert len(hits) == 1
+    assert hits[0]["source_type"] == "docs"
+    assert hits[0]["metadata"]["page_url"] == "https://docs.example.com/page"
+    assert hits[0]["metadata"]["docs_url"] == "https://docs.example.com"
+    assert hits[0]["score"] == 0.95
+
+
 def test_alembic_003_docs_sources_migration_exists():
     from pathlib import Path
 
