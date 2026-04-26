@@ -106,6 +106,32 @@ def test_index_source_docs_dispatches_to_docs_service(monkeypatch):
     fake_svc.index_docs.assert_called_once()
     assert out["source_id"] == "d-uuid"
     assert out["source_type"] == "docs"
+    assert out["status"] == "indexed"
+
+
+def test_index_source_docs_sitemap_failure_surfaces_as_error(monkeypatch):
+    """A sitemap that 404s should propagate as status='error' so the HTTP
+    layer can return 502 instead of a misleading 200."""
+    from synsc.services import source_service
+    from synsc.services import docs_service as ds_mod
+
+    fake_svc = MagicMock()
+    fake_svc.index_docs.return_value = {
+        "success": False,
+        "error": "sitemap fetch failed: 404 Not Found",
+        "url": "https://example.com/sitemap.xml",
+    }
+    monkeypatch.setattr(ds_mod, "get_docs_service", lambda user_id=None: fake_svc)
+
+    out = source_service.index_source(
+        source_type="docs",
+        url="https://example.com/sitemap.xml",
+        user_id="u1",
+    )
+
+    assert out["status"] == "error"
+    assert out["source_id"] == ""
+    assert "sitemap fetch failed" in out["error"]
 
 
 def test_index_source_docs_requires_user_id():

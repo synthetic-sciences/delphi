@@ -1929,14 +1929,28 @@ def create_app() -> FastAPI:
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
+        # Pass None (not "") when the per-type indexer didn't return an id —
+        # activity_log.resource_id is UUID-typed, so the empty string would
+        # blow up on cast.
         _log_activity(
             user_id=auth.user_id,
             action="index_source",
             resource_type=body.source_type,
-            resource_id=result.get("source_id"),
+            resource_id=result.get("source_id") or None,
             duration_ms=int((time.time() - start) * 1000),
             metadata={"url": body.url},
         )
+
+        # When the per-type service reported failure (e.g. sitemap fetch
+        # 404'd, GitHub clone failed, arxiv download timed out) the dispatcher
+        # returns status='error' with an error message. Surface that as 502
+        # rather than a misleading 200 / status='indexed'.
+        if result.get("status") == "error":
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("error") or "indexing failed",
+            )
+
         return SafeJSONResponse(content={"success": True, **result})
 
     @app.post("/v1/sources/{source_id}/grep", tags=["Sources"])
