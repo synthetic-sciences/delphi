@@ -1826,6 +1826,67 @@ def create_app() -> FastAPI:
         )
         return SafeJSONResponse(content={"success": True, **result})
 
+    @app.get("/v1/sources/{source_id}/read", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def read_source_endpoint(
+        request: Request,
+        source_id: str,
+        source_type: str = "paper",
+        path: str | None = None,
+        section: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Read content from an indexed source.
+
+        - ``paper``: supports ``section=`` (canonical synonym or regex).
+        - ``repo``:  requires ``path=``; optional ``start_line`` / ``end_line``.
+        """
+        if source_type == "paper":
+            from synsc.services.paper_service import get_paper_service
+
+            try:
+                paper = get_paper_service(user_id=auth.user_id).get_paper(
+                    source_id, section=section
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            if paper is None:
+                raise HTTPException(status_code=404, detail="paper not found")
+            return SafeJSONResponse(
+                content={
+                    "success": True,
+                    "source_id": source_id,
+                    "source_type": "paper",
+                    **paper,
+                }
+            )
+
+        if source_type == "repo":
+            if not path:
+                raise HTTPException(status_code=400, detail="repo read requires ?path=")
+            from synsc.services.search_service import SearchService
+
+            res = SearchService(user_id=auth.user_id).get_file(
+                repo_id=source_id,
+                file_path=path,
+                start_line=start_line,
+                end_line=end_line,
+                user_id=auth.user_id,
+            )
+            if not res.get("success"):
+                raise HTTPException(
+                    status_code=404, detail=res.get("error", "not found")
+                )
+            return SafeJSONResponse(
+                content={**res, "source_id": source_id, "source_type": "repo"}
+            )
+
+        raise HTTPException(
+            status_code=400, detail=f"unsupported source_type: {source_type}"
+        )
+
     @app.get("/v1/sources", tags=["Sources"])
     @limiter.limit(SEARCH_LIMIT)
     async def list_sources_endpoint(

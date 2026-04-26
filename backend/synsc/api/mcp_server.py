@@ -548,23 +548,32 @@ Provides deep context to AI agents through:
         return result
 
     @server.tool()
-    def get_paper(paper_id: str) -> dict[str, Any]:
-        """Get full paper content with all extracted features.
+    def get_paper(paper_id: str, section: str | None = None) -> dict[str, Any]:
+        """Get full paper content, optionally filtered to a single section.
 
         Args:
-            paper_id: Paper identifier
-
-        Returns:
-            Complete paper data including sections, citations, equations
+            paper_id: Paper identifier.
+            section: Optional section filter — one of 'abstract',
+                'introduction', 'methods', 'results', 'discussion',
+                'conclusion', 'references', 'related work', or a regex
+                that matches `chunk.section_title`.
         """
         from synsc.services.paper_service import get_paper_service
 
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
 
-        paper = service.get_paper(paper_id)
-        result = {"success": True, **paper} if paper else {"success": False, "error": "Paper not found"}
-        return result
+        try:
+            paper = service.get_paper(paper_id, section=section)
+        except ValueError as e:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(e),
+            }
+        if not paper:
+            return {"success": False, "error_code": "not_found", "message": "Paper not found"}
+        return {"success": True, **paper}
 
     @server.tool()
     async def search_papers(query: str, top_k: int = 5) -> dict[str, Any]:
