@@ -8,23 +8,32 @@ async function compose(args, opts = {}) {
   return run(bin, [...prefix, ...args], { cwd: SOURCE_DIR, ...opts });
 }
 
-export async function composeUp({ services = [], build = false } = {}) {
-  const args = ["up", "-d"];
+function profileFlags(profiles = []) {
+  const out = [];
+  for (const p of profiles) out.push("--profile", p);
+  return out;
+}
+
+export async function composeUp({ services = [], build = false, profiles = [] } = {}) {
+  const args = [...profileFlags(profiles), "up", "-d"];
   if (build) args.push("--build");
   args.push(...services);
   const { code } = await compose(args);
   if (code !== 0) throw new Error(`docker compose up failed (exit ${code})`);
 }
 
-export async function composeDown({ removeVolumes = false } = {}) {
-  const args = ["down"];
+export async function composeDown({ removeVolumes = false, profiles = [] } = {}) {
+  const args = [...profileFlags(profiles), "down"];
   if (removeVolumes) args.push("-v");
   const { code } = await compose(args);
   if (code !== 0) throw new Error(`docker compose down failed (exit ${code})`);
 }
 
-export async function composeStatus() {
-  const { code, stdout } = await compose(["ps", "--format", "json"], { silent: true });
+export async function composeStatus({ profiles = [] } = {}) {
+  const { code, stdout } = await compose(
+    [...profileFlags(profiles), "ps", "--format", "json"],
+    { silent: true }
+  );
   if (code !== 0) return [];
   return stdout
     .split("\n")
@@ -40,8 +49,8 @@ export async function composeStatus() {
     .filter(Boolean);
 }
 
-export async function composeLogs({ follow = false, services = [] } = {}) {
-  const args = ["logs"];
+export async function composeLogs({ follow = false, services = [], profiles = [] } = {}) {
+  const args = [...profileFlags(profiles), "logs"];
   if (follow) args.push("-f");
   args.push("--tail", "200", ...services);
   await compose(args);
