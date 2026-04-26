@@ -71,6 +71,7 @@ def test_mcp_index_source_repo_dispatches(monkeypatch):
 
     fake_indexer = MagicMock()
     fake_indexer.index_repository.return_value = {
+        "success": True,
         "repo_id": "r-uuid",
         "status": "indexed",
     }
@@ -83,6 +84,30 @@ def test_mcp_index_source_repo_dispatches(monkeypatch):
     out = tool.fn(source_type="repo", url="https://github.com/owner/repo")
     assert out["success"] is True
     assert out["source_id"] == "r-uuid"
+
+
+def test_mcp_index_source_failure_returns_structured_error(monkeypatch):
+    """Per-type service failure must surface as the structured error envelope
+    on the MCP side too, mirroring the HTTP 502."""
+    _isolate_mcp_auth(monkeypatch)
+    from synsc.api.mcp_server import create_server
+    from synsc.services import source_service
+
+    fake_indexer = MagicMock()
+    fake_indexer.index_repository.return_value = {
+        "success": False,
+        "error": "clone failed: dead repo",
+    }
+    monkeypatch.setattr(
+        source_service, "_get_indexing_service", lambda user_id: fake_indexer
+    )
+
+    server = create_server()
+    tool = server._tool_manager._tools["index_source"]
+    out = tool.fn(source_type="repo", url="https://github.com/dead/dead")
+    assert out["success"] is False
+    assert out["error_code"] == "indexing_failed"
+    assert "clone failed" in out["message"]
 
 
 def test_mcp_index_source_docs_dispatches(monkeypatch):

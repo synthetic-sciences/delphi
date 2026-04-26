@@ -269,6 +269,38 @@ def _get_indexing_service(user_id: str | None):
     return IndexingService(user_id=user_id)
 
 
+def _normalize_index_response(
+    *,
+    source_type: str,
+    res: dict,
+    id_key: str,
+    external_ref: str,
+    default_status: str = "indexed",
+) -> dict:
+    """Translate a per-type indexer response into the unified envelope.
+
+    Reflects the underlying ``success`` flag in the outer ``status`` so the
+    HTTP layer can map a service-side failure to an HTTP error status code
+    instead of falsely reporting 200 / status='indexed'.
+    """
+    if not res.get("success", True):
+        return {
+            "source_id": res.get(id_key, "") or "",
+            "source_type": source_type,
+            "status": "error",
+            "external_ref": external_ref,
+            "error": res.get("error") or res.get("message") or "indexing failed",
+            "raw": res,
+        }
+    return {
+        "source_id": res.get(id_key, "") or "",
+        "source_type": source_type,
+        "status": res.get("status", default_status),
+        "external_ref": external_ref,
+        "raw": res,
+    }
+
+
 def index_source(
     source_type: str,
     url: str,
@@ -278,8 +310,10 @@ def index_source(
 ) -> dict:
     """Dispatch to the per-type indexer and normalize the response.
 
-    Returns ``{source_id, source_type, status, external_ref, raw}`` where
-    ``raw`` carries the full per-type response for callers that need more.
+    Returns ``{source_id, source_type, status, external_ref, raw}``. On
+    failure the envelope carries ``status='error'`` plus an ``error`` field
+    so the HTTP endpoint can surface 5xx with a useful message rather than
+    pretending the index succeeded.
     """
     opts = options or {}
 
@@ -290,13 +324,13 @@ def index_source(
             user_id=user_id,
             deep_index=bool(opts.get("deep_index", False)),
         )
-        return {
-            "source_id": res.get("repo_id", ""),
-            "source_type": "repo",
-            "status": res.get("status", "pending"),
-            "external_ref": url,
-            "raw": res,
-        }
+        return _normalize_index_response(
+            source_type="repo",
+            res=res,
+            id_key="repo_id",
+            external_ref=url,
+            default_status="pending",
+        )
 
     if source_type == "paper":
         if not user_id:
@@ -346,13 +380,12 @@ def index_source(
                     pass
             ext_ref = arxiv_id
 
-        return {
-            "source_id": res.get("paper_id", ""),
-            "source_type": "paper",
-            "status": res.get("status", "indexed"),
-            "external_ref": ext_ref,
-            "raw": res,
-        }
+        return _normalize_index_response(
+            source_type="paper",
+            res=res,
+            id_key="paper_id",
+            external_ref=ext_ref,
+        )
 
     if source_type == "dataset":
         if not user_id:
@@ -366,13 +399,12 @@ def index_source(
             hf_id = url.strip()
 
         res = _get_dataset_service(user_id).index_dataset(hf_id)
-        return {
-            "source_id": res.get("dataset_id", ""),
-            "source_type": "dataset",
-            "status": res.get("status", "indexed"),
-            "external_ref": hf_id,
-            "raw": res,
-        }
+        return _normalize_index_response(
+            source_type="dataset",
+            res=res,
+            id_key="dataset_id",
+            external_ref=hf_id,
+        )
 
     if source_type == "docs":
         if not user_id:
@@ -387,13 +419,12 @@ def index_source(
             max_pages=int(opts.get("max_pages", 200)),
             req_delay_s=float(opts.get("req_delay_s", 1.0)),
         )
-        return {
-            "source_id": res.get("docs_id", ""),
-            "source_type": "docs",
-            "status": res.get("status", "indexed"),
-            "external_ref": url,
-            "raw": res,
-        }
+        return _normalize_index_response(
+            source_type="docs",
+            res=res,
+            id_key="docs_id",
+            external_ref=url,
+        )
 
     raise ValueError(f"unsupported source_type: {source_type}")
 
@@ -603,7 +634,7 @@ def _lookup_repo_by_owner_name(
                     .filter(
                         Repository.owner == owner,
                         Repository.name == name,
-                        UserRepository.user_id == user_id,
+                        UserRepository.user_id == str(user_id),
                     )
                     .first()
                 )

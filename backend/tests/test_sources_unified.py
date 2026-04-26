@@ -103,6 +103,7 @@ def test_index_source_repo_dispatches_to_indexing_service(monkeypatch):
 
     fake_indexer = MagicMock()
     fake_indexer.index_repository.return_value = {
+        "success": True,
         "repo_id": "r-uuid",
         "status": "indexed",
     }
@@ -120,7 +121,55 @@ def test_index_source_repo_dispatches_to_indexing_service(monkeypatch):
     fake_indexer.index_repository.assert_called_once()
     assert result["source_id"] == "r-uuid"
     assert result["source_type"] == "repo"
+    assert result["status"] == "indexed"
     assert result["external_ref"] == "https://github.com/owner/repo"
+
+
+def test_index_source_repo_failure_surfaces_error_envelope(monkeypatch):
+    """When the underlying indexer reports success=False, the dispatcher
+    must mirror that as status='error' instead of pretending it indexed."""
+    from synsc.services import source_service
+
+    fake_indexer = MagicMock()
+    fake_indexer.index_repository.return_value = {
+        "success": False,
+        "error": "b'main' is not a valid branch or tag",
+        "status": "error",
+    }
+    monkeypatch.setattr(
+        source_service, "_get_indexing_service", lambda user_id: fake_indexer
+    )
+
+    result = source_service.index_source(
+        source_type="repo",
+        url="https://github.com/owner/repo",
+        user_id="u1",
+    )
+
+    assert result["status"] == "error"
+    assert result["source_id"] == ""
+    assert "not a valid branch" in result["error"]
+
+
+def test_post_v1_sources_failure_returns_502(client, monkeypatch):
+    """A per-type service failure must map to HTTP 502, not 200."""
+    from synsc.services import source_service
+
+    fake_indexer = MagicMock()
+    fake_indexer.index_repository.return_value = {
+        "success": False,
+        "error": "clone failed",
+    }
+    monkeypatch.setattr(
+        source_service, "_get_indexing_service", lambda user_id: fake_indexer
+    )
+
+    r = client.post(
+        "/v1/sources",
+        json={"source_type": "repo", "url": "https://github.com/dead/dead"},
+    )
+    assert r.status_code == 502
+    assert "clone failed" in r.json()["detail"]
 
 
 def test_index_source_unsupported_type_raises_value_error():
