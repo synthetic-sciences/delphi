@@ -187,6 +187,86 @@ def test_unified_retrieve_skips_paper_dataset_branches_without_user_id(monkeypat
     assert not dataset_called.called
 
 
+def test_post_v1_research_quick_returns_answer_and_citations(client, monkeypatch):
+    """POST /v1/research returns the synthesized answer + citations."""
+    from synsc.config import get_config
+    from synsc.services import research_service as rs_mod
+
+    monkeypatch.setattr(get_config().research, "api_key", "test-key")
+
+    def fake_run(self, **kwargs):
+        return {
+            "answer_markdown": "# Hi",
+            "citations": [
+                {
+                    "source_id": "r1",
+                    "chunk_id": "c1",
+                    "text": "x",
+                    "score": 0.9,
+                    "path": "a.py",
+                    "line_no": 1,
+                }
+            ],
+            "usage": {
+                "tokens_in": 10,
+                "tokens_out": 5,
+                "mode": kwargs.get("mode", "quick"),
+                "latency_ms": 1,
+            },
+        }
+
+    monkeypatch.setattr(rs_mod.ResearchService, "run", fake_run)
+
+    r = client.post(
+        "/v1/research",
+        json={
+            "query": "explain state management",
+            "mode": "quick",
+            "source_ids": None,
+            "source_types": ["repo"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["answer_markdown"] == "# Hi"
+    assert body["citations"][0]["chunk_id"] == "c1"
+    assert body["usage"]["mode"] == "quick"
+
+
+def test_post_v1_research_rejects_invalid_mode(client):
+    """Modes outside quick/deep/oracle return 400."""
+    r = client.post("/v1/research", json={"query": "x", "mode": "zoomzoom"})
+    assert r.status_code == 400
+    assert "quick" in r.json()["detail"].lower()
+
+
+def test_post_v1_research_503_when_provider_unconfigured(client, monkeypatch):
+    """Without GEMINI_API_KEY, the endpoint must surface 503 rather than crash."""
+    from synsc.config import get_config
+
+    monkeypatch.setattr(get_config().research, "provider", "gemini")
+    monkeypatch.setattr(get_config().research, "api_key", "")
+
+    r = client.post("/v1/research", json={"query": "x", "mode": "quick"})
+    assert r.status_code == 503
+    assert "GEMINI_API_KEY" in r.json()["detail"]
+
+
+def test_research_per_mode_rate_check_blocks_after_quota():
+    """The per-mode sliding window blocks after rpm hits the cap."""
+    from synsc.api.http_server import _RESEARCH_RATE_BUCKETS, _research_rate_check
+
+    _RESEARCH_RATE_BUCKETS.clear()
+    api_key = "k1"
+    assert _research_rate_check(api_key, "quick", rpm=2) is True
+    assert _research_rate_check(api_key, "quick", rpm=2) is True
+    assert _research_rate_check(api_key, "quick", rpm=2) is False
+    # Different mode bucket is independent.
+    assert _research_rate_check(api_key, "deep", rpm=1) is True
+    assert _research_rate_check(api_key, "deep", rpm=1) is False
+
+
 def test_research_config_defaults():
     """ResearchConfig has sensible defaults that don't require env vars to read."""
     from synsc.config import ResearchConfig
