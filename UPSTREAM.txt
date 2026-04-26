@@ -2,6 +2,16 @@ This file tracks which commit of synsc-context (upstream) this branch is synced 
 Update this after each sync to make diffing easier.
 
 upstream: synsc-context
-last_synced_commit: 747643f
-last_synced_message: perf: add HNSW index, query embedding cache, and search timing
-last_synced_date: 2026-03-16
+last_synced_commit: 1634202
+last_synced_message: chore(frontend): drop dead /mcp Vercel rewrite
+last_synced_date: 2026-04-26
+
+Notes:
+- Synced via feat/upstream-sync-2026-04 (~16 commits, manual port due to
+  storage divergence: Delphi uses SQLAlchemy + pgvector, upstream uses
+  Supabase REST). See git log feat/upstream-sync-2026-04 for details.
+- Skipped: 0701bec (Supabase RLS admin), c8eb968 (Render URL),
+  1634202 (Vercel rewrite — meta), 12cd94f (already in Delphi).
+- Resilience batch (65aa9f5..fd43e9a) lives on upstream local feat
+  branches, not on origin/main, and is therefore out of scope for this
+  sync.

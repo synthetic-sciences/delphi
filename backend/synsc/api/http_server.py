@@ -12,7 +12,7 @@ import time
 import uuid as _uuid
 from dataclasses import dataclass
 from datetime import datetime, date
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 
@@ -140,6 +140,29 @@ class AuthContext:
     user_id: str
 
 
+# In-process per-(api_key_hash, mode) sliding window for the /v1/research
+# per-mode RPM caps. The global SEARCH_LIMIT slowapi limiter still applies on
+# top of this; this layer enforces the tighter mode-specific quotas.
+_RESEARCH_RATE_BUCKETS: dict[tuple[str, str], list[float]] = {}
+
+
+def _research_rate_check(api_key: str, mode: str, rpm: int) -> bool:
+    """Return True if a request is allowed under ``rpm``/min for this caller."""
+    if rpm <= 0:
+        return False
+    key = (hashlib.sha256(api_key.encode()).hexdigest()[:32], mode)
+    now = time.time()
+    window_start = now - 60.0
+    hits = _RESEARCH_RATE_BUCKETS.setdefault(key, [])
+    # Drop expired entries cheaply.
+    while hits and hits[0] < window_start:
+        hits.pop(0)
+    if len(hits) >= rpm:
+        return False
+    hits.append(now)
+    return True
+
+
 # =============================================================================
 # Request/Response Models
 # =============================================================================
@@ -237,6 +260,56 @@ class CreateJobRequest(BaseModel):
     """Request to create an indexing job."""
     job_type: str = Field(..., description="Job type: 'repository' or 'paper'")
     target: str = Field(..., description="Repository URL or paper ID/URL")
+
+
+class ResearchRequest(BaseModel):
+    """Request to /v1/research."""
+    query: str = Field(..., min_length=1, max_length=4000, description="Research question")
+    mode: str = Field(
+        default="quick",
+        description="quick (1-shot), deep (iterative), oracle (tool-use)",
+    )
+    source_ids: list[str] | None = Field(default=None, description="Scope to these source IDs")
+    source_types: list[str] | None = Field(
+        default=None, description="Filter by types: 'repo', 'paper', 'dataset'"
+    )
+    k: int | None = Field(default=None, ge=1, le=100, description="Retrieval top_k override")
+
+
+class GrepSourceRequest(BaseModel):
+    """Request to /v1/sources/{source_id}/grep."""
+    pattern: str = Field(..., min_length=1, max_length=1000, description="Python regex")
+    source_type: Literal["repo", "paper"] = Field(
+        default="repo", description="Source category to grep"
+    )
+    path_prefix: str | None = Field(default=None, description="Restrict to this path prefix")
+    max_matches: int = Field(default=100, ge=1, le=1000)
+    context_lines: int = Field(default=2, ge=0, le=20)
+
+
+class UnifiedSearchRequest(BaseModel):
+    """Request to /v1/search."""
+    query: str = Field(..., min_length=1, description="Natural language query")
+    source_ids: list[str] | None = Field(default=None, description="Scope to these source IDs")
+    source_types: list[str] | None = Field(
+        default=None, description="Filter: 'repo' | 'paper' | 'dataset'"
+    )
+    k: int = Field(default=10, ge=1, le=100, description="Top-k hits")
+    mode: str = Field(
+        default="precise",
+        description=(
+            "precise | thorough | web "
+            "(Nia aliases: targeted=precise, universal=thorough)"
+        ),
+    )
+
+
+class IndexSourceRequest(BaseModel):
+    """Request to /v1/sources."""
+    source_type: Literal["repo", "paper", "dataset", "docs"] = Field(...)
+    url: str = Field(..., min_length=1)
+    display_name: str | None = None
+    options: dict | None = None
 
 
 # =============================================================================
@@ -1607,6 +1680,365 @@ def create_app() -> FastAPI:
         dur = int(time.time() * 1000) - t0
         rc = len(result.get("results", []))
         _log_activity(auth.user_id, "search_datasets", "search", query=body.query, results_count=rc, duration_ms=dur)
+        return SafeJSONResponse(content=result)
+
+    # ==========================================================================
+    # Research Endpoint
+    # ==========================================================================
+
+    @app.post("/v1/research", tags=["Research"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def research_endpoint(
+        request: Request,
+        body: ResearchRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """RAG synthesis across indexed sources. Modes: quick / deep / oracle.
+
+        Quick mode runs a single retrieve→synthesize pass. Deep mode iterates
+        up to ``research.deep_max_hops`` retrieve-then-refine hops. Oracle mode
+        v1 shares the deep loop.
+
+        Per-mode RPM caps (config.research.{quick,deep,oracle}_rpm) layer on
+        top of the global SEARCH_LIMIT via an in-process sliding window keyed
+        on (api_key_hash, mode).
+        """
+        if body.mode not in ("quick", "deep", "oracle"):
+            return SafeJSONResponse(
+                status_code=400,
+                content={
+                    "success": False,
+                    "error_code": "invalid_mode",
+                    "message": (
+                        f"Invalid mode '{body.mode}': expected quick / deep / oracle"
+                    ),
+                },
+            )
+
+        config = get_config()
+        per_mode_rpm = {
+            "quick": config.research.quick_rpm,
+            "deep": config.research.deep_rpm,
+            "oracle": config.research.oracle_rpm,
+        }[body.mode]
+
+        if not _research_rate_check(auth.api_key, body.mode, per_mode_rpm):
+            return SafeJSONResponse(
+                status_code=429,
+                content={
+                    "success": False,
+                    "error_code": "rate_limit_exceeded",
+                    "mode": body.mode,
+                    "limit_per_minute": per_mode_rpm,
+                    "message": (
+                        f"Research rate limit exceeded: "
+                        f"max {per_mode_rpm}/min in {body.mode} mode"
+                    ),
+                },
+            )
+
+        if config.research.provider == "gemini" and not config.research.api_key:
+            return SafeJSONResponse(
+                status_code=503,
+                content={
+                    "success": False,
+                    "error_code": "provider_not_configured",
+                    "provider": config.research.provider,
+                    "action_required": "configure_api_key",
+                    "message": (
+                        f"Research provider '{config.research.provider}' is not "
+                        "configured on this Delphi instance. Set GEMINI_API_KEY "
+                        "in the server environment to enable the research tool."
+                    ),
+                },
+            )
+
+        from synsc.services.research_service import ResearchService
+
+        start = time.time()
+        try:
+            result = ResearchService().run(
+                query=body.query,
+                mode=body.mode,  # type: ignore[arg-type]
+                source_ids=body.source_ids,
+                source_types=body.source_types,
+                k=body.k,
+                user_id=auth.user_id,
+            )
+        except Exception as exc:
+            logger.exception("research failed")
+            return SafeJSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error_code": "internal_error",
+                    "message": f"research failed: {exc}",
+                },
+            )
+
+        _log_activity(
+            user_id=auth.user_id,
+            action="research",
+            resource_type="research",
+            query=body.query,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={
+                "mode": body.mode,
+                "tokens_in": result["usage"]["tokens_in"],
+                "tokens_out": result["usage"]["tokens_out"],
+            },
+        )
+        return SafeJSONResponse(content={"success": True, **result})
+
+    # ==========================================================================
+    # Sources (unified grep + read + tree surface)
+    # ==========================================================================
+
+    @app.post("/v1/search", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def unified_search_endpoint(
+        request: Request,
+        body: UnifiedSearchRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Unified search across indexed code + papers + datasets.
+
+        Modes: ``precise``, ``thorough``, ``web`` (web is a stub until a
+        provider lands). Nia compatibility: ``targeted`` aliases to
+        ``precise`` and ``universal`` aliases to ``thorough`` so existing
+        Nia-shaped clients keep working.
+        """
+        from synsc.services.source_service import unified_search
+
+        start = time.time()
+        try:
+            result = unified_search(
+                query=body.query,
+                source_ids=body.source_ids,
+                source_types=body.source_types,
+                k=body.k,
+                mode=body.mode,
+                user_id=auth.user_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        _log_activity(
+            user_id=auth.user_id,
+            action="unified_search",
+            query=body.query,
+            results_count=result["total"],
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"mode": body.mode},
+        )
+        return SafeJSONResponse(content={"success": True, **result})
+
+    @app.get("/v1/sources/{source_id}/read", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def read_source_endpoint(
+        request: Request,
+        source_id: str,
+        source_type: str = "paper",
+        path: str | None = None,
+        section: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Read content from an indexed source.
+
+        - ``paper``: supports ``section=`` (canonical synonym or regex).
+        - ``repo``:  requires ``path=``; optional ``start_line`` / ``end_line``.
+        """
+        if source_type == "paper":
+            from synsc.services.paper_service import get_paper_service
+
+            try:
+                paper = get_paper_service(user_id=auth.user_id).get_paper(
+                    source_id, section=section
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            if paper is None:
+                raise HTTPException(status_code=404, detail="paper not found")
+            return SafeJSONResponse(
+                content={
+                    "success": True,
+                    "source_id": source_id,
+                    "source_type": "paper",
+                    **paper,
+                }
+            )
+
+        if source_type == "repo":
+            if not path:
+                raise HTTPException(status_code=400, detail="repo read requires ?path=")
+            from synsc.services.search_service import SearchService
+
+            res = SearchService(user_id=auth.user_id).get_file(
+                repo_id=source_id,
+                file_path=path,
+                start_line=start_line,
+                end_line=end_line,
+                user_id=auth.user_id,
+            )
+            if not res.get("success"):
+                raise HTTPException(
+                    status_code=404, detail=res.get("error", "not found")
+                )
+            return SafeJSONResponse(
+                content={**res, "source_id": source_id, "source_type": "repo"}
+            )
+
+        raise HTTPException(
+            status_code=400, detail=f"unsupported source_type: {source_type}"
+        )
+
+    @app.get("/v1/sources", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def list_sources_endpoint(
+        request: Request,
+        type: str | None = None,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Unified listing across all indexed sources (repo / paper / dataset).
+
+        ``type`` query param filters to a single source_type when present.
+        """
+        from synsc.services.source_service import list_sources
+
+        sources = list_sources(source_type=type, user_id=auth.user_id)
+        return SafeJSONResponse(
+            content={"success": True, "sources": sources, "total": len(sources)}
+        )
+
+    @app.post("/v1/sources", tags=["Sources"])
+    @limiter.limit(INDEX_LIMIT)
+    async def index_source_endpoint(
+        request: Request,
+        body: IndexSourceRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Unified indexing dispatch (repo / paper / dataset / docs)."""
+        from synsc.services.source_service import index_source
+
+        start = time.time()
+        try:
+            result = index_source(
+                source_type=body.source_type,
+                url=body.url,
+                display_name=body.display_name,
+                options=body.options,
+                user_id=auth.user_id,
+            )
+        except NotImplementedError as e:
+            raise HTTPException(status_code=501, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        # Pass None (not "") when the per-type indexer didn't return an id —
+        # activity_log.resource_id is UUID-typed, so the empty string would
+        # blow up on cast.
+        _log_activity(
+            user_id=auth.user_id,
+            action="index_source",
+            resource_type=body.source_type,
+            resource_id=result.get("source_id") or None,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"url": body.url},
+        )
+
+        # When the per-type service reported failure (e.g. sitemap fetch
+        # 404'd, GitHub clone failed, arxiv download timed out) the dispatcher
+        # returns status='error' with an error message. Surface that as 502
+        # rather than a misleading 200 / status='indexed'.
+        if result.get("status") == "error":
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("error") or "indexing failed",
+            )
+
+        return SafeJSONResponse(content={"success": True, **result})
+
+    @app.post("/v1/sources/{source_id}/grep", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def grep_source_endpoint(
+        request: Request,
+        source_id: str,
+        body: GrepSourceRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Regex search within a single indexed source (repo or paper)."""
+        from synsc.services.grep_service import GrepService
+
+        start = time.time()
+        try:
+            matches = GrepService().grep_source(
+                source_id=source_id,
+                source_type=body.source_type,
+                pattern=body.pattern,
+                path_prefix=body.path_prefix,
+                max_matches=body.max_matches,
+                context_lines=body.context_lines,
+                user_id=auth.user_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        _log_activity(
+            user_id=auth.user_id,
+            action="grep_source",
+            resource_type=body.source_type,
+            resource_id=source_id,
+            query=body.pattern,
+            results_count=len(matches),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"path_prefix": body.path_prefix},
+        )
+        return SafeJSONResponse(
+            content={"success": True, "source_id": source_id, "matches": matches}
+        )
+
+    @app.get("/v1/sources/{source_id}/tree", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def tree_source_endpoint(
+        request: Request,
+        source_id: str,
+        action: Literal["tree", "ls"] = "tree",
+        path: str = "/",
+        max_depth: int = 4,
+        annotate: bool = True,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Browse the directory structure of an indexed repo source.
+
+        ``action=tree`` (default): recursive tree, optional ``max_depth`` +
+        ``annotate``. ``action=ls``: flat single-level listing at ``path``.
+        """
+        from synsc.services.analysis_service import AnalysisService
+
+        svc = AnalysisService(user_id=auth.user_id)
+        start = time.time()
+        if action == "ls":
+            result = svc.list_directory(
+                repo_id=source_id, path=path, user_id=auth.user_id
+            )
+        else:
+            result = svc.get_directory_structure(
+                repo_id=source_id,
+                max_depth=max_depth,
+                annotate=annotate,
+                user_id=auth.user_id,
+            )
+
+        _log_activity(
+            user_id=auth.user_id,
+            action=f"tree_source_{action}",
+            resource_type="repository",
+            resource_id=source_id,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"action": action, "path": path if action == "ls" else None},
+        )
         return SafeJSONResponse(content=result)
 
     # ==========================================================================

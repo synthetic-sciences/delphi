@@ -719,6 +719,96 @@ class PaperChunkEmbedding(Base):
 
 
 # ==============================================================================
+# DOCUMENTATION SOURCE_TYPE (Nia-parity P2)
+# ==============================================================================
+
+
+class DocumentationSource(Base):
+    """Indexed documentation site (sitemap-driven crawl)."""
+
+    __tablename__ = "documentation_sources"
+    __table_args__ = (
+        UniqueConstraint("url", name="uq_documentation_sources_url"),
+        Index("idx_docs_sources_indexed_by", "indexed_by"),
+    )
+
+    docs_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(Text)
+    sitemap_url: Mapped[str | None] = mapped_column(Text)
+    indexed_by: Mapped[str | None] = mapped_column(String(36), index=True)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    pages_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    chunks_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class DocumentationChunk(Base):
+    """A single chunk of crawled doc content; one page → many chunks."""
+
+    __tablename__ = "documentation_chunks"
+    __table_args__ = (Index("idx_docs_chunks_docs", "docs_id"),)
+
+    chunk_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    docs_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("documentation_sources.docs_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_url: Mapped[str] = mapped_column(Text, nullable=False)
+    heading: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    token_count: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+
+
+class DocumentationChunkEmbedding(Base):
+    """Doc chunk embeddings stored in pgvector. Embedding column is added by
+    migration 003 via raw SQL (vector(768) is not a first-class Alembic type).
+    """
+
+    __tablename__ = "documentation_chunk_embeddings"
+    __table_args__ = (Index("idx_docs_emb_chunk", "chunk_id"),)
+
+    embedding_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    docs_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("documentation_sources.docs_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chunk_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("documentation_chunks.chunk_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+
+
+class UserDocumentationSource(Base):
+    """Many-to-many link: user X has access to doc source Y."""
+
+    __tablename__ = "user_documentation_sources"
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    docs_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("documentation_sources.docs_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+
+
+# ==============================================================================
 # JOB QUEUE MODEL
 # ==============================================================================
 

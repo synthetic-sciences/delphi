@@ -67,6 +67,19 @@ def test_script_mako_template_exists():
     assert (PROJECT_ROOT / "alembic" / "script.py.mako").is_file()
 
 
+def test_research_jobs_migration_exists():
+    """research_jobs migration script should exist and chain off 001_initial."""
+    migration_file = next(
+        (PROJECT_ROOT / "alembic" / "versions").glob("002_research_jobs.py")
+    )
+    content = migration_file.read_text()
+    assert 'revision: str = "002_research_jobs"' in content
+    assert 'down_revision: Union[str, None] = "001_initial"' in content
+    assert "create_table" in content
+    assert "research_jobs" in content
+    assert "drop_table" in content  # downgrade is wired
+
+
 def test_alembic_config_importable():
     """Alembic configuration should be loadable."""
     from alembic.config import Config
