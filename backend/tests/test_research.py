@@ -62,6 +62,68 @@ def test_render_prompt_includes_question_and_blocks():
     assert "Answer:" in rendered.split("\n")[-1]
 
 
+def test_research_quick_mode_calls_provider_once():
+    from synsc.services.research_providers.base import GeneratedAnswer
+    from synsc.services.research_service import ResearchService
+
+    fake_provider = MagicMock()
+    fake_provider.generate.return_value = GeneratedAnswer(
+        text="# Answer\nSome text.",
+        tokens_in=50,
+        tokens_out=10,
+    )
+
+    fake_retrieval = MagicMock(return_value=[
+        {"chunk_id": "c1", "source_id": "r1", "source_type": "repo",
+         "text": "code snippet", "score": 0.9, "path": "a.py", "line_no": 10},
+        {"chunk_id": "c2", "source_id": "p1", "source_type": "paper",
+         "text": "paper bit", "score": 0.8},
+    ])
+
+    svc = ResearchService(provider=fake_provider, retrieve_fn=fake_retrieval)
+    result = svc.run(
+        query="how does X work?",
+        mode="quick",
+        source_ids=None,
+        source_types=None,
+        user_id="u1",
+    )
+
+    assert fake_provider.generate.call_count == 1
+    assert result["answer_markdown"].startswith("# Answer")
+    assert len(result["citations"]) == 2
+    assert result["citations"][0]["chunk_id"] == "c1"
+    assert result["usage"]["tokens_in"] == 50
+    assert result["usage"]["tokens_out"] == 10
+    assert result["usage"]["mode"] == "quick"
+    assert result["usage"]["latency_ms"] >= 0
+
+
+def test_research_deep_mode_iterates_up_to_max_hops():
+    from synsc.services.research_providers.base import GeneratedAnswer
+    from synsc.services.research_service import ResearchService
+
+    fake_provider = MagicMock()
+    fake_provider.generate.side_effect = [
+        GeneratedAnswer(text="REFINE: need more on Y", tokens_in=100, tokens_out=10),
+        GeneratedAnswer(text="REFINE: need more on Z", tokens_in=120, tokens_out=10),
+        GeneratedAnswer(text="# Final\nOK.", tokens_in=150, tokens_out=20),
+    ]
+    fake_retrieval = MagicMock(return_value=[
+        {"chunk_id": "c1", "source_id": "r1", "source_type": "repo",
+         "text": "snippet", "score": 0.9},
+    ])
+
+    svc = ResearchService(provider=fake_provider, retrieve_fn=fake_retrieval)
+    result = svc.run(query="deep q", mode="deep", source_ids=None,
+                     source_types=None, user_id="u1")
+
+    assert fake_provider.generate.call_count == 3
+    assert result["answer_markdown"].startswith("# Final")
+    assert result["usage"]["tokens_in"] == 370
+    assert result["usage"]["tokens_out"] == 40
+
+
 def test_research_config_defaults():
     """ResearchConfig has sensible defaults that don't require env vars to read."""
     from synsc.config import ResearchConfig
