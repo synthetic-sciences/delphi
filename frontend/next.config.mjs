@@ -4,6 +4,9 @@ const nextConfig = {
   // runtime stage copies just .next/standalone instead of the full
   // node_modules tree (~700MB → ~150MB).
   output: 'standalone',
+  // Lint runs in CI / `npm run lint` — don't break end-user installs over
+  // a stray unused import. Type errors still fail the build.
+  eslint: { ignoreDuringBuilds: true },
   // Allow cross-origin requests from backend API during development
   allowedDevOrigins: [
     'http://localhost:8742',

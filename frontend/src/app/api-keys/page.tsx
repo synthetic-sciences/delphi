@@ -4,7 +4,7 @@ import PageShell from "@/components/PageShell";
 import { useState, useEffect } from "react";
 import {
   Key, Copy, Trash2, Plus, X, AlertTriangle,
-  Check, Ban, RefreshCw, ExternalLink, Globe, Monitor,
+  Check, Ban, RefreshCw, ExternalLink,
   Github, Lock,
 } from "lucide-react";
 import Link from "next/link";
