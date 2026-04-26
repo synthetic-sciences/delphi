@@ -1,13 +1,15 @@
 """Embedding generation for Delphi.
 
-Single backend: sentence-transformers (runs locally, no API key required).
-Used for code repositories, research papers, and datasets.
+Default backend is sentence-transformers (local, no API key required), but the
+factory dispatches to API-based providers (Gemini, OpenAI) when
+`EMBEDDING_PROVIDER` is set. All providers normalize to the same 768-dim
+vector to match the pgvector schema.
 """
 
 import os
 import logging
 import time
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 
@@ -197,13 +199,34 @@ PaperEmbeddingGenerator = EmbeddingGenerator
 # Singletons
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-_embedding_generator: Optional[EmbeddingGenerator] = None
+_embedding_generator = None  # type: ignore[var-annotated]
 
 
-def get_embedding_generator() -> EmbeddingGenerator:
-    """Get global embedding generator."""
+def get_embedding_generator():
+    """Get the global embedding generator.
+
+    Dispatches based on the `EMBEDDING_PROVIDER` env var (`local` is the
+    default). API-based providers require their key in the environment:
+    - `gemini` → GEMINI_API_KEY
+    - `openai` → OPENAI_API_KEY
+    """
     global _embedding_generator
-    if _embedding_generator is None:
+    if _embedding_generator is not None:
+        return _embedding_generator
+
+    provider = os.getenv("EMBEDDING_PROVIDER", "local").strip().lower()
+
+    if provider == "gemini":
+        from synsc.embeddings.providers import GeminiEmbeddingProvider
+        logger.info("Initializing Gemini embedding provider")
+        _embedding_generator = GeminiEmbeddingProvider()
+    elif provider == "openai":
+        from synsc.embeddings.providers import OpenAIEmbeddingProvider
+        logger.info("Initializing OpenAI embedding provider")
+        _embedding_generator = OpenAIEmbeddingProvider()
+    else:
+        if provider not in ("", "local"):
+            logger.warning("Unknown EMBEDDING_PROVIDER=%r, falling back to local", provider)
         logger.info("Loading sentence-transformers model...")
         _embedding_generator = EmbeddingGenerator()
         logger.info("Embedding model ready")
@@ -224,7 +247,9 @@ def cleanup_embedding_generator() -> None:
     """Clean up global generator to release resources."""
     global _embedding_generator
     if _embedding_generator is not None:
-        del _embedding_generator.model
+        # Only the local sentence-transformers backend holds a .model handle.
+        if hasattr(_embedding_generator, "model"):
+            del _embedding_generator.model
         _embedding_generator = None
 
 
