@@ -23,8 +23,11 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock* README.md ./
 
-RUN uv sync --frozen --no-dev --no-editable 2>/dev/null \
-    || uv sync --no-dev --no-editable
+# Deps-only sync first so the heavy torch/transformers layer caches across
+# source changes. `--no-install-project` skips trying to build the synsc
+# wheel (source isn't here yet).
+RUN uv sync --frozen --no-dev --no-install-project 2>/dev/null \
+    || uv sync --no-dev --no-install-project
 
 # torch ships with `test/` (~150 MB) and `include/` (C++ headers, ~30 MB)
 # baked into the wheel. They're only used for compiling extensions / running
@@ -52,6 +55,13 @@ COPY synsc/ ./synsc/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
+# Now that the source is in place, install the synsc package itself into
+# the venv as a real wheel. Without this the runtime stage has dist-info
+# but no actual `synsc/` package on the import path, and entry-point
+# scripts (`synsc-context`, `uvicorn synsc...`) fail with ModuleNotFoundError.
+RUN uv sync --frozen --no-dev --no-editable 2>/dev/null \
+    || uv sync --no-dev --no-editable
+
 # ---------------------------------------------------------------------------
 # Stage 2: runtime
 # ---------------------------------------------------------------------------
@@ -73,7 +83,8 @@ COPY --from=build --chown=synsc:synsc /app /app
 RUN mkdir -p /tmp/synsc-context /home/synsc/.cache \
  && chown -R synsc:synsc /tmp/synsc-context /home/synsc/.cache
 
-ENV PYTHONUNBUFFERED=1 \
+ENV PATH="/app/.venv/bin:${PATH}" \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TOKENIZERS_PARALLELISM=false \
     SYNSC_API_HOST=0.0.0.0 \
@@ -94,11 +105,11 @@ FROM runtime AS api
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD curl -f http://localhost:8742/health || exit 1
 
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn synsc.api.http_server:create_app --factory --host 0.0.0.0 --port 8742"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn synsc.api.http_server:create_app --factory --host 0.0.0.0 --port 8742"]
 
 # ---------------------------------------------------------------------------
 # Target: worker
 # ---------------------------------------------------------------------------
 FROM runtime AS worker
 
-CMD ["uv", "run", "synsc-context", "worker"]
+CMD ["synsc-context", "worker"]
