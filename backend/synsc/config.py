@@ -177,6 +177,24 @@ class DatasetConfig(BaseModel):
     hf_token: str = Field(default="", description="Optional HuggingFace API token")
 
 
+class ResearchConfig(BaseModel):
+    """Configuration for the /v1/research endpoint."""
+
+    provider: Literal["gemini", "anthropic"] = Field(
+        default="gemini", description="LLM provider for research synthesis"
+    )
+    api_key: str = Field(default="", description="API key for the configured provider")
+    model_quick: str = Field(default="gemini-2.5-flash")
+    model_deep: str = Field(default="gemini-2.5-pro")
+    quick_top_k: int = Field(default=10)
+    deep_top_k: int = Field(default=25)
+    deep_max_hops: int = Field(default=3)
+    oracle_max_iterations: int = Field(default=5)
+    quick_rpm: int = Field(default=10)
+    deep_rpm: int = Field(default=3)
+    oracle_rpm: int = Field(default=1)
+
+
 class SearchConfig(BaseModel):
     """Configuration for search."""
 
@@ -248,6 +266,7 @@ class SynscConfig(BaseModel):
     paper: PaperConfig = Field(default_factory=PaperConfig)
     dataset: DatasetConfig = Field(default_factory=DatasetConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    research: ResearchConfig = Field(default_factory=ResearchConfig)
     api: APIConfig = Field(default_factory=APIConfig)
     features: FeatureFlags = Field(default_factory=FeatureFlags)
 
@@ -324,6 +343,16 @@ class SynscConfig(BaseModel):
             config.search.reranker_model = reranker_model
         if blend_alpha := os.getenv("RERANKER_BLEND_ALPHA"):
             config.search.reranker_blend_alpha = float(blend_alpha)
+
+        # Research
+        if research_provider := os.getenv("SYNSC_RESEARCH_PROVIDER"):
+            config.research.provider = research_provider  # type: ignore
+        if research_key := os.getenv("GEMINI_API_KEY") or os.getenv("SYNSC_RESEARCH_API_KEY"):
+            config.research.api_key = research_key
+        if model_quick := os.getenv("SYNSC_RESEARCH_MODEL_QUICK"):
+            config.research.model_quick = model_quick
+        if model_deep := os.getenv("SYNSC_RESEARCH_MODEL_DEEP"):
+            config.research.model_deep = model_deep
 
         # Feature flags
         if enable_code := os.getenv("ENABLE_CODE_INDEXING"):
