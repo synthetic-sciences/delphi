@@ -1035,6 +1035,57 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
+    @server.tool()
+    def grep_source(
+        source_id: str,
+        pattern: str,
+        source_type: str = "repo",
+        path_prefix: str | None = None,
+        max_matches: int = 100,
+        context_lines: int = 2,
+    ) -> dict[str, Any]:
+        """Regex search within a single indexed source.
+
+        Args:
+            source_id: Repository or paper ID.
+            pattern: Python regex pattern.
+            source_type: 'repo' or 'paper'.
+            path_prefix: Optional path prefix to scope the search.
+            max_matches: Upper bound on matches returned (default 100).
+            context_lines: Lines of context above / below each match (default 2).
+        """
+        from synsc.services.grep_service import GrepService
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        try:
+            matches = GrepService().grep_source(
+                source_id=source_id,
+                source_type=source_type,
+                pattern=pattern,
+                path_prefix=path_prefix,
+                max_matches=max_matches,
+                context_lines=context_lines,
+                user_id=user_id,
+            )
+        except ValueError as e:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(e),
+            }
+        _log_activity(
+            user_id=user_id,
+            action="grep_source",
+            resource_type=source_type,
+            resource_id=source_id,
+            query=pattern,
+            results_count=len(matches),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"source": "mcp"},
+        )
+        return {"success": True, "source_id": source_id, "matches": matches}
+
     return server
 
 
