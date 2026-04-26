@@ -235,14 +235,20 @@ def test_post_v1_research_quick_returns_answer_and_citations(client, monkeypatch
 
 
 def test_post_v1_research_rejects_invalid_mode(client):
-    """Modes outside quick/deep/oracle return 400."""
+    """Modes outside quick/deep/oracle return 400 with a stable error_code."""
     r = client.post("/v1/research", json={"query": "x", "mode": "zoomzoom"})
     assert r.status_code == 400
-    assert "quick" in r.json()["detail"].lower()
+    body = r.json()
+    assert body["success"] is False
+    assert body["error_code"] == "invalid_mode"
+    assert "quick" in body["message"].lower()
 
 
 def test_post_v1_research_503_when_provider_unconfigured(client, monkeypatch):
-    """Without GEMINI_API_KEY, the endpoint must surface 503 rather than crash."""
+    """Without GEMINI_API_KEY, the endpoint surfaces a structured 503 with
+    error_code='provider_not_configured' so MCP / API agents can pattern-match
+    on it and tell the user to configure their key (rather than parsing
+    English error strings)."""
     from synsc.config import get_config
 
     monkeypatch.setattr(get_config().research, "provider", "gemini")
@@ -250,7 +256,12 @@ def test_post_v1_research_503_when_provider_unconfigured(client, monkeypatch):
 
     r = client.post("/v1/research", json={"query": "x", "mode": "quick"})
     assert r.status_code == 503
-    assert "GEMINI_API_KEY" in r.json()["detail"]
+    body = r.json()
+    assert body["success"] is False
+    assert body["error_code"] == "provider_not_configured"
+    assert body["provider"] == "gemini"
+    assert body["action_required"] == "configure_api_key"
+    assert "GEMINI_API_KEY" in body["message"]
 
 
 def test_research_per_mode_rate_check_blocks_after_quota():
@@ -285,15 +296,53 @@ def test_mcp_research_tool_is_registered():
     assert list(params) == ["query", "mode", "source_ids", "source_types", "k"]
 
 
-def test_mcp_research_tool_rejects_invalid_mode(monkeypatch):
-    """Calling the tool function directly with a bad mode returns the
+def test_mcp_research_tool_rejects_invalid_mode():
+    """Calling the tool function directly with a bad mode returns a stable
     structured error rather than raising."""
     from synsc.api.mcp_server import create_server
 
     server = create_server()
     tool = server._tool_manager._tools["research"]
     result = tool.fn(query="x", mode="zoomzoom")
-    assert result == {"success": False, "error": "invalid mode: zoomzoom"}
+    assert result["success"] is False
+    assert result["error_code"] == "invalid_mode"
+    assert "zoomzoom" in result["message"]
+
+
+def test_mcp_research_tool_returns_structured_error_when_provider_unconfigured(
+    monkeypatch,
+):
+    """Without GEMINI_API_KEY, the tool returns
+    error_code='provider_not_configured' so the LLM can pattern-match and
+    tell the user what to fix instead of retrying blindly."""
+    from synsc.api.mcp_server import create_server
+    from synsc.config import get_config
+
+    monkeypatch.setattr(get_config().research, "provider", "gemini")
+    monkeypatch.setattr(get_config().research, "api_key", "")
+
+    server = create_server()
+    tool = server._tool_manager._tools["research"]
+    result = tool.fn(query="x", mode="quick")
+    assert result["success"] is False
+    assert result["error_code"] == "provider_not_configured"
+    assert result["provider"] == "gemini"
+    assert result["action_required"] == "configure_api_key"
+    # The description must mention the env var so the agent can name it.
+    assert "GEMINI_API_KEY" in result["message"]
+
+
+def test_mcp_research_tool_description_mentions_provider_requirement():
+    """The tool docstring (which becomes the MCP description shown to the LLM
+    at tool-list time) must flag the provider-key requirement so the agent
+    knows the tool may be unavailable on a fresh Delphi instance."""
+    from synsc.api.mcp_server import create_server
+
+    server = create_server()
+    tool = server._tool_manager._tools["research"]
+    desc = (tool.fn.__doc__ or "").lower()
+    assert "provider" in desc
+    assert "gemini" in desc or "api key" in desc
 
 
 def test_research_config_defaults():
