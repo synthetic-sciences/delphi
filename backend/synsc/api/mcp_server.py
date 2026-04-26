@@ -6,15 +6,15 @@ Provides tools for code repository, research paper, and HuggingFace dataset inde
 
 import contextvars
 import json
-import logging
 import os
 import time
 from typing import Any
 
+import structlog
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # Context variables for request-scoped auth (set by http_server.py /mcp proxy)
 _current_api_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -1094,6 +1094,229 @@ Provides deep context to AI agents through:
             metadata={"source": "mcp"},
         )
         return {"success": True, "source_id": source_id, "matches": matches}
+
+    # ==========================================================================
+    # UNIFIED SOURCE TOOLS (Nia-parity P1)
+    # ==========================================================================
+
+    @server.tool()
+    def search(
+        query: str,
+        source_ids: list[str] | None = None,
+        source_types: list[str] | None = None,
+        k: int = 10,
+        mode: str = "precise",
+    ) -> dict[str, Any]:
+        """Unified search across indexed code + papers + datasets.
+
+        Modes: 'precise' (fewer, higher quality), 'thorough' (more results),
+        'web' (fallback, returns empty stub). Accepts Nia aliases: 'targeted'
+        maps to 'precise', 'universal' maps to 'thorough'.
+
+        Args:
+            query: Natural language query.
+            source_ids: Optional list of source IDs to scope the search.
+            source_types: Filter: any of 'repo', 'paper', 'dataset'.
+            k: Number of hits (default 10, max 100).
+            mode: 'precise' / 'thorough' / 'web' / 'targeted' / 'universal'.
+        """
+        from synsc.services.source_service import unified_search
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        try:
+            result = unified_search(
+                query=query,
+                source_ids=source_ids,
+                source_types=source_types,
+                k=k,
+                mode=mode,
+                user_id=user_id,
+            )
+        except ValueError as e:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(e),
+            }
+        _log_activity(
+            user_id=user_id,
+            action="unified_search",
+            query=query,
+            results_count=result.get("total", 0),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"mode": mode, "source": "mcp"},
+        )
+        return {"success": True, **result}
+
+    @server.tool()
+    def index_source(
+        source_type: str,
+        url: str,
+        display_name: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Unified indexing dispatch — repo / paper / dataset / docs.
+
+        Args:
+            source_type: 'repo', 'paper', 'dataset', or 'docs' (docs lands later).
+            url: GitHub URL, arXiv URL/ID, HF dataset ID, or docs URL.
+            display_name: Optional friendly label.
+            options: Per-type options (e.g., {'branch': 'main', 'deep_index': false}).
+        """
+        from synsc.services.source_service import index_source as _index_source
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        try:
+            result = _index_source(
+                source_type=source_type,
+                url=url,
+                display_name=display_name,
+                options=options,
+                user_id=user_id,
+            )
+        except NotImplementedError as e:
+            return {
+                "success": False,
+                "error_code": "not_implemented",
+                "message": str(e),
+            }
+        except ValueError as e:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(e),
+            }
+        _log_activity(
+            user_id=user_id,
+            action="index_source",
+            resource_type=source_type,
+            resource_id=result.get("source_id"),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"url": url, "source": "mcp"},
+        )
+        return {"success": True, **result}
+
+    @server.tool()
+    def list_sources(source_type: str | None = None) -> dict[str, Any]:
+        """List indexed sources, optionally filtered by type.
+
+        Args:
+            source_type: Optional filter: 'repo', 'paper', 'dataset'.
+        """
+        from synsc.services.source_service import list_sources as _list_sources
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        sources = _list_sources(source_type=source_type, user_id=user_id)
+        _log_activity(
+            user_id=user_id,
+            action="list_sources",
+            results_count=len(sources),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"type_filter": source_type, "source": "mcp"},
+        )
+        return {"success": True, "sources": sources, "total": len(sources)}
+
+    @server.tool()
+    def read_source(
+        source_id: str,
+        source_type: str = "paper",
+        path: str | None = None,
+        section: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+    ) -> dict[str, Any]:
+        """Read content from an indexed source.
+
+        - paper: supports ``section=`` (canonical token or regex).
+        - repo:  requires ``path=``; optional ``start_line``/``end_line``.
+
+        Args:
+            source_id: Paper or repo ID.
+            source_type: 'paper' (default) or 'repo'.
+            path: Required for repo reads.
+            section: Optional for paper reads — 'abstract', 'introduction',
+                'methods', 'results', 'discussion', 'conclusion', 'references',
+                'related work', or a regex.
+            start_line: Repo read — optional 1-indexed start line.
+            end_line: Repo read — optional end line.
+        """
+        start = time.time()
+        user_id = get_authenticated_user_id()
+
+        if source_type == "paper":
+            from synsc.services.paper_service import get_paper_service
+
+            try:
+                paper = get_paper_service(user_id=user_id).get_paper(
+                    source_id, section=section
+                )
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "error_code": "invalid_input",
+                    "message": str(e),
+                }
+            if paper is None:
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "message": "paper not found",
+                }
+            _log_activity(
+                user_id=user_id,
+                action="read_source",
+                resource_type="paper",
+                resource_id=source_id,
+                duration_ms=int((time.time() - start) * 1000),
+                metadata={"section": section, "source": "mcp"},
+            )
+            return {
+                "success": True,
+                "source_id": source_id,
+                "source_type": "paper",
+                **paper,
+            }
+
+        if source_type == "repo":
+            if not path:
+                return {
+                    "success": False,
+                    "error_code": "invalid_input",
+                    "message": "repo read requires path=",
+                }
+            from synsc.services.search_service import SearchService
+
+            res = SearchService(user_id=user_id).get_file(
+                repo_id=source_id,
+                file_path=path,
+                start_line=start_line,
+                end_line=end_line,
+                user_id=user_id,
+            )
+            if not res.get("success"):
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "message": res.get("error", "not found"),
+                }
+            _log_activity(
+                user_id=user_id,
+                action="read_source",
+                resource_type="repo",
+                resource_id=source_id,
+                duration_ms=int((time.time() - start) * 1000),
+                metadata={"path": path, "source": "mcp"},
+            )
+            return {**res, "source_id": source_id, "source_type": "repo"}
+
+        return {
+            "success": False,
+            "error_code": "invalid_input",
+            "message": f"unsupported source_type: {source_type}",
+        }
 
     return server
 
