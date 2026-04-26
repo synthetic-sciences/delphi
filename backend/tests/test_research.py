@@ -267,6 +267,35 @@ def test_research_per_mode_rate_check_blocks_after_quota():
     assert _research_rate_check(api_key, "deep", rpm=1) is False
 
 
+def test_mcp_research_tool_is_registered():
+    """The MCP server exposes a `research` tool with the expected signature."""
+    from synsc.api.mcp_server import create_server
+
+    server = create_server()
+    tool_mgr = getattr(server, "_tool_manager", None)
+    assert tool_mgr is not None and hasattr(tool_mgr, "_tools")
+
+    research_tool = tool_mgr._tools.get("research")
+    assert research_tool is not None, "research tool not registered"
+
+    # Signature shape: (query, mode, source_ids, source_types, k).
+    import inspect
+
+    params = inspect.signature(research_tool.fn).parameters
+    assert list(params) == ["query", "mode", "source_ids", "source_types", "k"]
+
+
+def test_mcp_research_tool_rejects_invalid_mode(monkeypatch):
+    """Calling the tool function directly with a bad mode returns the
+    structured error rather than raising."""
+    from synsc.api.mcp_server import create_server
+
+    server = create_server()
+    tool = server._tool_manager._tools["research"]
+    result = tool.fn(query="x", mode="zoomzoom")
+    assert result == {"success": False, "error": "invalid mode: zoomzoom"}
+
+
 def test_research_config_defaults():
     """ResearchConfig has sensible defaults that don't require env vars to read."""
     from synsc.config import ResearchConfig

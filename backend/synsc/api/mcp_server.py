@@ -948,6 +948,57 @@ Provides deep context to AI agents through:
 
         return result
 
+    # ==========================================================================
+    # UNIFIED RESEARCH TOOL
+    # ==========================================================================
+
+    @server.tool()
+    def research(
+        query: str,
+        mode: str = "quick",
+        source_ids: list[str] | None = None,
+        source_types: list[str] | None = None,
+        k: int | None = None,
+    ) -> dict[str, Any]:
+        """RAG synthesis across indexed sources. Modes: quick / deep / oracle.
+
+        Args:
+            query: Research question or topic.
+            mode: 'quick' (~30s, top_k=10), 'deep' (~120s, iterative),
+                  'oracle' (~300s, tool-use).
+            source_ids: Optional list of source IDs (repos, papers, datasets)
+                        to scope retrieval to.
+            source_types: Optional filter: any of 'repo', 'paper', 'dataset'.
+            k: Override retrieval top_k.
+        """
+        from synsc.services.research_service import ResearchService
+
+        if mode not in ("quick", "deep", "oracle"):
+            return {"success": False, "error": f"invalid mode: {mode}"}
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        try:
+            result = ResearchService().run(
+                query=query,
+                mode=mode,  # type: ignore[arg-type]
+                source_ids=source_ids,
+                source_types=source_types,
+                k=k,
+                user_id=user_id,
+            )
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        _log_activity(
+            user_id=user_id,
+            action="research",
+            resource_type="research",
+            query=query,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"mode": mode, "source": "mcp"},
+        )
+        return {"success": True, **result}
+
     return server
 
 
