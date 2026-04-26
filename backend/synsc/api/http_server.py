@@ -485,16 +485,23 @@ def create_app() -> FastAPI:
         # Init DB connection for this worker.
         init_db()
 
-        # Load the sentence-transformers model (~500 MB) in this worker
-        # process.  Runs in a thread so the event loop stays alive during
-        # the ~15 s load.
+        # Warm the embedding model in the background. The local provider is a
+        # ~420 MB HuggingFace download on first run; blocking startup on it
+        # means /health doesn't respond, and the npx installer's 4-minute
+        # health probe times out on slow connections. We let the model load
+        # asynchronously — the first /search hit may pay the warmup latency,
+        # but the API is reachable immediately.
         from synsc.embeddings.generator import get_paper_embedding_generator
-        try:
-            gen = await asyncio.to_thread(get_paper_embedding_generator)
-            await asyncio.to_thread(gen.generate_single, "warmup")
-            logger.info("Paper embedding model loaded and warmed up")
-        except Exception as exc:
-            logger.warning("Paper model load/warm-up failed: %s", exc)
+
+        async def _warm_embeddings():
+            try:
+                gen = await asyncio.to_thread(get_paper_embedding_generator)
+                await asyncio.to_thread(gen.generate_single, "warmup")
+                logger.info("Paper embedding model loaded and warmed up")
+            except Exception as exc:
+                logger.warning("Paper model load/warm-up failed: %s", exc)
+
+        warmup_task = asyncio.create_task(_warm_embeddings())
 
         # Start MCP Streamable HTTP session manager (if attached to app)
         if hasattr(app, "_mcp_session_mgr") and app._mcp_session_mgr:
