@@ -116,9 +116,16 @@ export async function runInit({ force = false } = {}) {
   const secrets = await writeEnv({ embeddingChoice, apiKeys });
   log.success(`wrote ~/.synsci/delphi/source/.env`);
 
-  // Spin up
-  log.step("Starting Docker stack (first run pulls images and downloads models — a few minutes)");
-  await composeUp({ build: true });
+  // Spin up. Agent-path users don't need the dashboard, so skip building the
+  // frontend image entirely — saves ~150MB and lets the api/worker images
+  // export without competing for the same Docker VM disk.
+  const profiles = flow === "index" ? ["dashboard"] : [];
+  const startMsg =
+    flow === "index"
+      ? "Starting Docker stack (first run pulls images — a few minutes)"
+      : "Starting Docker stack — postgres, api, worker (skipping dashboard for agent-only setup)";
+  log.step(startMsg);
+  await composeUp({ build: true, profiles });
   log.success("services started");
 
   // Health
@@ -151,6 +158,7 @@ export async function runInit({ force = false } = {}) {
     version: 1,
     installedAt: new Date().toISOString(),
     flow,
+    profiles,
     embeddingChoice,
     apiKeyPreview: minted.key_preview,
     apiUrl: API_BASE,
@@ -159,22 +167,31 @@ export async function runInit({ force = false } = {}) {
   });
 
   // Final report
+  const dashboardOn = profiles.includes("dashboard");
   console.log();
   log.raw(pc.bold(pc.green("All set.")));
   log.dim("───────────────────────────────────────────────");
-  log.raw(`  Dashboard:       ${pc.cyan("http://localhost:3000")}`);
+  if (dashboardOn) {
+    log.raw(`  Dashboard:       ${pc.cyan("http://localhost:3000")}`);
+  }
   log.raw(`  API:             ${pc.cyan(API_BASE)}`);
   log.raw(`  API key:         ${pc.cyan(minted.api_key)}  ${pc.dim("(saved into MCP configs)")}`);
-  log.raw(`  Dashboard login: password ${pc.cyan(secrets.systemPassword)}`);
+  if (dashboardOn) {
+    log.raw(`  Dashboard login: password ${pc.cyan(secrets.systemPassword)}`);
+  }
   log.raw(`  Embeddings:      ${pc.cyan(EMBEDDING_PROFILES[embeddingChoice].label)}`);
   log.dim("───────────────────────────────────────────────");
 
   if (launcher.installed) {
-    log.raw(pc.bold("Next:") + ` type ${pc.cyan("delphi")} in any terminal to open the dashboard.`);
+    if (dashboardOn) {
+      log.raw(pc.bold("Next:") + ` type ${pc.cyan("delphi")} in any terminal to open the dashboard.`);
+    } else {
+      log.raw(pc.bold("Next:") + ` restart your AI tool — Delphi shows up as an MCP server.`);
+      log.dim(`       (Type ${pc.cyan("delphi open")} later if you want the dashboard too.)`);
+    }
     if (launcher.pathHint) log.dim(`  ${launcher.pathHint}`);
-  }
-  if (chosenClients.length) {
-    log.raw(`       Then restart your AI tool — Delphi will appear as an MCP server.`);
+  } else if (chosenClients.length) {
+    log.raw(`       Restart your AI tool — Delphi will appear as an MCP server.`);
   }
   log.dim("Lifecycle: `delphi status | logs | stop | start | open`");
   console.log();
