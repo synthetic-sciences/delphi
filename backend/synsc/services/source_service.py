@@ -7,6 +7,7 @@ P2 surface: adds canonical source_id resolution + docs.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any
 
 import structlog
@@ -168,6 +169,11 @@ def unified_search(
     Aliases: targeted -> precise, universal -> thorough.
     Modes: precise, thorough, web.
 
+    ``source_ids`` may be canonical UUIDs or any of the legacy aliases
+    accepted by ``resolve_source_id`` (arxiv IDs, ``hf:<id>``, ``owner/repo``,
+    ``https://github.com/owner/repo``, docs URLs). Aliases that don't resolve
+    are dropped with a warning rather than failing the whole call.
+
     Deduplicates by SHA-256 of the hit text; returns up to k results sorted
     by score descending.
     """
@@ -176,9 +182,23 @@ def unified_search(
     if normalized == "web":
         return _web_search_stub(query, k)
 
+    resolved_ids: list[str] | None = None
+    if source_ids:
+        resolved_ids = []
+        for raw in source_ids:
+            try:
+                uid, _stype = resolve_source_id(raw, user_id=user_id)
+                resolved_ids.append(uid)
+            except ValueError as exc:
+                logger.warning(
+                    "unified_search: dropping unresolvable source_id",
+                    raw=raw,
+                    error=str(exc),
+                )
+
     hits = unified_retrieve(
         query=query,
-        source_ids=source_ids,
+        source_ids=resolved_ids,
         source_types=source_types,
         k=max(k * 2, 20),
         user_id=user_id,
@@ -434,3 +454,237 @@ def list_sources(
             logger.warning("list_sources: docs branch failed", error=str(exc))
 
     return out
+
+
+# ---------------------------------------------------------------------------
+# Canonical source_id resolver (P2)
+# ---------------------------------------------------------------------------
+
+
+_ARXIV_RE = re.compile(r"^(?:arxiv:)?(\d{4}\.\d{4,5}(?:v\d+)?)$", re.IGNORECASE)
+_GITHUB_URL_RE = re.compile(
+    r"^(?:https?://)?github\.com/([^/\s]+)/([^/\s#?]+)(?:[/?#].*)?$",
+    re.IGNORECASE,
+)
+_OWNER_REPO_RE = re.compile(r"^([^/\s]+)/([^/\s]+)$")
+_HF_PREFIX_RE = re.compile(r"^hf:(.+)$", re.IGNORECASE)
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _is_uuid(s: str) -> bool:
+    return bool(_UUID_RE.match(s or ""))
+
+
+def _lookup_source_type_by_uuid(uid: str) -> str | None:
+    """Detect which table a UUID belongs to via SQLAlchemy lookups."""
+    from synsc.database.connection import get_session
+    from synsc.database.models import (
+        DocumentationSource,
+        Paper,
+        Repository,
+    )
+
+    try:
+        with get_session() as session:
+            if (
+                session.query(Repository)
+                .filter(Repository.repo_id == uid)
+                .first()
+            ):
+                return "repo"
+            if (
+                session.query(Paper)
+                .filter(Paper.paper_id == uid)
+                .first()
+            ):
+                return "paper"
+            # Dataset model lookup via raw SQL — Dataset model not always
+            # imported in service layer; raw SELECT keeps it ORM-agnostic.
+            from sqlalchemy import text as _text
+
+            row = session.execute(
+                _text("SELECT 1 FROM datasets WHERE dataset_id = :did LIMIT 1"),
+                {"did": uid},
+            ).first()
+            if row:
+                return "dataset"
+            if (
+                session.query(DocumentationSource)
+                .filter(DocumentationSource.docs_id == uid)
+                .first()
+            ):
+                return "docs"
+    except Exception as exc:
+        logger.debug("resolver: uuid lookup failed", error=str(exc))
+    return None
+
+
+def _lookup_paper_by_arxiv(arxiv_id: str) -> str | None:
+    from synsc.database.connection import get_session
+    from synsc.database.models import Paper
+
+    try:
+        with get_session() as session:
+            row = (
+                session.query(Paper.paper_id)
+                .filter(Paper.arxiv_id == arxiv_id)
+                .first()
+            )
+            return row[0] if row else None
+    except Exception as exc:
+        logger.debug("resolver: paper arxiv lookup failed", error=str(exc))
+        return None
+
+
+def _lookup_dataset_by_hf_id(hf_id: str) -> str | None:
+    from sqlalchemy import text as _text
+
+    from synsc.database.connection import get_session
+
+    try:
+        with get_session() as session:
+            row = session.execute(
+                _text(
+                    "SELECT dataset_id FROM datasets WHERE hf_id = :hf LIMIT 1"
+                ),
+                {"hf": hf_id},
+            ).first()
+            return row[0] if row else None
+    except Exception as exc:
+        logger.debug("resolver: dataset hf lookup failed", error=str(exc))
+        return None
+
+
+def _lookup_repo_by_owner_name(
+    owner: str, name: str, user_id: str | None = None
+) -> str | None:
+    from synsc.database.connection import get_session
+    from synsc.database.models import Repository, UserRepository
+
+    try:
+        with get_session() as session:
+            if user_id:
+                row = (
+                    session.query(Repository)
+                    .join(
+                        UserRepository,
+                        Repository.repo_id == UserRepository.repo_id,
+                    )
+                    .filter(
+                        Repository.owner == owner,
+                        Repository.name == name,
+                        UserRepository.user_id == user_id,
+                    )
+                    .first()
+                )
+                if row:
+                    return str(row.repo_id)
+            row = (
+                session.query(Repository)
+                .filter(
+                    Repository.owner == owner,
+                    Repository.name == name,
+                    Repository.is_public == True,  # noqa: E712
+                )
+                .first()
+            )
+            return str(row.repo_id) if row else None
+    except Exception as exc:
+        logger.debug("resolver: repo owner/name lookup failed", error=str(exc))
+        return None
+
+
+def _lookup_docs_by_url(url: str) -> str | None:
+    from synsc.database.connection import get_session
+    from synsc.database.models import DocumentationSource
+
+    try:
+        with get_session() as session:
+            row = (
+                session.query(DocumentationSource.docs_id)
+                .filter(DocumentationSource.url == url)
+                .first()
+            )
+            return row[0] if row else None
+    except Exception as exc:
+        logger.debug("resolver: docs url lookup failed", error=str(exc))
+        return None
+
+
+def resolve_source_id(raw: str, user_id: str | None = None) -> tuple[str, str]:
+    """Resolve a raw source reference to ``(canonical_uuid, source_type)``.
+
+    Accepts:
+      - A canonical UUID (type detected via table lookup).
+      - ``arxiv:<id>`` or a bare arxiv-looking ID (e.g. ``2301.12345``).
+      - ``hf:<id>`` (full HuggingFace dataset ID, may contain ``/``).
+      - ``owner/repo`` or ``https://github.com/owner/repo``.
+      - A fully-qualified docs URL previously indexed.
+
+    Raises ``ValueError`` if nothing matches.
+    """
+    if not raw or not isinstance(raw, str):
+        raise ValueError(f"could not resolve source_id: {raw!r}")
+
+    candidate = raw.strip()
+
+    if _is_uuid(candidate):
+        stype = _lookup_source_type_by_uuid(candidate)
+        if stype is None:
+            raise ValueError(
+                f"could not resolve source_id: unknown UUID {candidate}"
+            )
+        return candidate, stype
+
+    m = _ARXIV_RE.match(candidate)
+    if m:
+        arxiv_id = m.group(1)
+        paper_uid = _lookup_paper_by_arxiv(arxiv_id)
+        if paper_uid:
+            return paper_uid, "paper"
+        raise ValueError(
+            f"could not resolve source_id: arxiv:{arxiv_id} not indexed"
+        )
+
+    hf = _HF_PREFIX_RE.match(candidate)
+    if hf:
+        hf_id = hf.group(1).strip()
+        ds_uid = _lookup_dataset_by_hf_id(hf_id)
+        if ds_uid:
+            return ds_uid, "dataset"
+        raise ValueError(
+            f"could not resolve source_id: hf:{hf_id} not indexed"
+        )
+
+    gh = _GITHUB_URL_RE.match(candidate)
+    if gh:
+        owner, name = gh.group(1), gh.group(2).removesuffix(".git")
+        repo_uid = _lookup_repo_by_owner_name(owner, name, user_id)
+        if repo_uid:
+            return repo_uid, "repo"
+        raise ValueError(
+            f"could not resolve source_id: github {owner}/{name} not indexed"
+        )
+
+    if candidate.startswith(("http://", "https://")):
+        docs_uid = _lookup_docs_by_url(candidate)
+        if docs_uid:
+            return docs_uid, "docs"
+        raise ValueError(
+            f"could not resolve source_id: docs url not indexed: {candidate}"
+        )
+
+    or_ = _OWNER_REPO_RE.match(candidate)
+    if or_:
+        owner, name = or_.group(1), or_.group(2)
+        repo_uid = _lookup_repo_by_owner_name(owner, name, user_id)
+        if repo_uid:
+            return repo_uid, "repo"
+        raise ValueError(
+            f"could not resolve source_id: {owner}/{name} not indexed"
+        )
+
+    raise ValueError(f"could not resolve source_id: {candidate}")
