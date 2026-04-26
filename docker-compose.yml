@@ -48,7 +48,11 @@ services:
       SYNSC_LOG_FORMAT: json
       SYNSC_WORKER_THREADS: "4"
 
+  # Dashboard UI. Only needed for the "run my own index" flow; agent-path
+  # users (Claude Code/Cursor/etc.) just talk to the API via the MCP proxy.
+  # Activate with `docker compose --profile dashboard up`.
   frontend:
+    profiles: ["dashboard"]
     build:
       context: ./frontend
     depends_on:
