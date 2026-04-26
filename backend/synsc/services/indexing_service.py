@@ -19,6 +19,7 @@ import numpy as np
 import requests
 import structlog
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from synsc.config import get_config
@@ -73,26 +74,8 @@ def _build_chunk_relationships(session: Session, repo_id: str) -> int:
     relationships: list[ChunkRelationship] = []
     seen: set[tuple[str, str, str]] = set()
 
-    # Pre-load existing relationship keys for this repo so re-runs (e.g. after
-    # a diff-aware reindex that preserved unchanged chunks) don't trip the
-    # unique_chunk_relationship constraint by re-inserting them.
-    existing_rows = session.execute(
-        text(
-            """
-            SELECT cr.source_chunk_id::text,
-                   cr.target_chunk_id::text,
-                   cr.relationship_type
-            FROM chunk_relationships cr
-            JOIN code_chunks cc ON cc.chunk_id = cr.source_chunk_id
-            WHERE cc.repo_id = :rid
-            """
-        ),
-        {"rid": repo_id},
-    ).all()
-    seen.update((src, tgt, rtype) for src, tgt, rtype in existing_rows)
-
     def _add(src: str, tgt: str, rtype: str, weight: float = 1.0) -> None:
-        key = (str(src), str(tgt), rtype)
+        key = (src, tgt, rtype)
         if key not in seen:
             seen.add(key)
             relationships.append(
@@ -138,7 +121,21 @@ def _build_chunk_relationships(session: Session, repo_id: str) -> int:
                 _add(a.chunk_id, b.chunk_id, "same_class")
 
     if relationships:
-        session.add_all(relationships)
+        # Diff-aware reindex preserves unchanged chunks and their edges.
+        # ON CONFLICT DO NOTHING lets us re-issue the full edge set without
+        # rolling back the whole batch when a preserved edge is re-inserted.
+        rows = [
+            {
+                "source_chunk_id": r.source_chunk_id,
+                "target_chunk_id": r.target_chunk_id,
+                "relationship_type": r.relationship_type,
+                "weight": r.weight,
+            }
+            for r in relationships
+        ]
+        stmt = pg_insert(ChunkRelationship.__table__).values(rows)
+        stmt = stmt.on_conflict_do_nothing(constraint="unique_chunk_relationship")
+        session.execute(stmt)
         session.flush()
 
     logger.info(
