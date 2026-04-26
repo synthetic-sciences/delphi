@@ -287,6 +287,31 @@ class GrepSourceRequest(BaseModel):
     context_lines: int = Field(default=2, ge=0, le=20)
 
 
+class UnifiedSearchRequest(BaseModel):
+    """Request to /v1/search."""
+    query: str = Field(..., min_length=1, description="Natural language query")
+    source_ids: list[str] | None = Field(default=None, description="Scope to these source IDs")
+    source_types: list[str] | None = Field(
+        default=None, description="Filter: 'repo' | 'paper' | 'dataset'"
+    )
+    k: int = Field(default=10, ge=1, le=100, description="Top-k hits")
+    mode: str = Field(
+        default="precise",
+        description=(
+            "precise | thorough | web "
+            "(Nia aliases: targeted=precise, universal=thorough)"
+        ),
+    )
+
+
+class IndexSourceRequest(BaseModel):
+    """Request to /v1/sources."""
+    source_type: Literal["repo", "paper", "dataset", "docs"] = Field(...)
+    url: str = Field(..., min_length=1)
+    display_name: str | None = None
+    options: dict | None = None
+
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -1761,6 +1786,97 @@ def create_app() -> FastAPI:
     # ==========================================================================
     # Sources (unified grep + read + tree surface)
     # ==========================================================================
+
+    @app.post("/v1/search", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def unified_search_endpoint(
+        request: Request,
+        body: UnifiedSearchRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Unified search across indexed code + papers + datasets.
+
+        Modes: ``precise``, ``thorough``, ``web`` (web is a stub until a
+        provider lands). Nia compatibility: ``targeted`` aliases to
+        ``precise`` and ``universal`` aliases to ``thorough`` so existing
+        Nia-shaped clients keep working.
+        """
+        from synsc.services.source_service import unified_search
+
+        start = time.time()
+        try:
+            result = unified_search(
+                query=body.query,
+                source_ids=body.source_ids,
+                source_types=body.source_types,
+                k=body.k,
+                mode=body.mode,
+                user_id=auth.user_id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        _log_activity(
+            user_id=auth.user_id,
+            action="unified_search",
+            query=body.query,
+            results_count=result["total"],
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"mode": body.mode},
+        )
+        return SafeJSONResponse(content={"success": True, **result})
+
+    @app.get("/v1/sources", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def list_sources_endpoint(
+        request: Request,
+        type: str | None = None,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Unified listing across all indexed sources (repo / paper / dataset).
+
+        ``type`` query param filters to a single source_type when present.
+        """
+        from synsc.services.source_service import list_sources
+
+        sources = list_sources(source_type=type, user_id=auth.user_id)
+        return SafeJSONResponse(
+            content={"success": True, "sources": sources, "total": len(sources)}
+        )
+
+    @app.post("/v1/sources", tags=["Sources"])
+    @limiter.limit(INDEX_LIMIT)
+    async def index_source_endpoint(
+        request: Request,
+        body: IndexSourceRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Unified indexing dispatch (repo / paper / dataset / docs)."""
+        from synsc.services.source_service import index_source
+
+        start = time.time()
+        try:
+            result = index_source(
+                source_type=body.source_type,
+                url=body.url,
+                display_name=body.display_name,
+                options=body.options,
+                user_id=auth.user_id,
+            )
+        except NotImplementedError as e:
+            raise HTTPException(status_code=501, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        _log_activity(
+            user_id=auth.user_id,
+            action="index_source",
+            resource_type=body.source_type,
+            resource_id=result.get("source_id"),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"url": body.url},
+        )
+        return SafeJSONResponse(content={"success": True, **result})
 
     @app.post("/v1/sources/{source_id}/grep", tags=["Sources"])
     @limiter.limit(SEARCH_LIMIT)
