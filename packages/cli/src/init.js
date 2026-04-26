@@ -1,4 +1,4 @@
-import { select, checkbox, confirm, password } from "@inquirer/prompts";
+import { select, checkbox, confirm, password, input } from "@inquirer/prompts";
 import pc from "picocolors";
 import { log, banner, spinner } from "./log.js";
 import { dockerHealthy, which } from "./system.js";
@@ -18,31 +18,85 @@ const FLOWS = {
   index: "Run my own index — pick a provider, attach an API key, get a dashboard",
 };
 
-async function pickProvider({ apiOnly = false } = {}) {
-  const choices = Object.entries(EMBEDDING_PROFILES).map(([value, p]) => {
-    const disabled = !p.available
-      ? pc.dim("(coming soon)")
-      : apiOnly && p.kind !== "api" && value !== "local_balanced"
-      ? false
-      : false;
-    return { value, name: p.label, disabled };
-  });
+async function pickProvider() {
+  const choices = Object.entries(EMBEDDING_PROFILES).map(([value, p]) => ({
+    value,
+    name: p.label,
+    disabled: p.available ? false : pc.dim("(coming soon)"),
+  }));
 
   return select({
     message: "Which embeddings provider?",
     choices,
-    default: apiOnly ? "gemini" : "local_balanced",
+    default: "local_balanced",
   });
 }
 
-async function maybePromptApiKey(profile) {
-  if (profile.kind !== "api") return {};
-  const key = await password({
-    message: `Paste your ${profile.keyEnvVar}: ${pc.dim("(get one at " + profile.keyHint + ")")}`,
+/**
+ * Collect provider-specific config (API key, optional HF_TOKEN, model name)
+ * via prompts. Returns an env-var object that gets merged into the .env
+ * file. Order of prompts: required key → optional key → model picker.
+ */
+async function collectProviderConfig(profile) {
+  const env = {};
+
+  // Required key (Gemini, OpenAI).
+  if (profile.keyEnvVar) {
+    const key = await password({
+      message: `Paste your ${profile.keyEnvVar}: ${pc.dim("(get one at " + profile.keyHint + ")")}`,
+      mask: "•",
+      validate: (v) => (v && v.trim().length > 8 ? true : "That doesn't look like a real key."),
+    });
+    env[profile.keyEnvVar] = key.trim();
+  }
+
+  // Optional key (HF_TOKEN for the local provider — only needed for gated
+  // models). Empty input skips the var entirely.
+  if (profile.optionalKeyEnvVar) {
+    const key = await password({
+      message:
+        `${profile.optionalKeyEnvVar} ${pc.dim("(optional — " + profile.optionalKeyReason + "; get one at " + profile.optionalKeyHint + ")")}\n  ` +
+        pc.dim("Press enter to skip"),
+      mask: "•",
+    });
+    if (key.trim()) {
+      env[profile.optionalKeyEnvVar] = key.trim();
+    }
+  }
+
+  // Model picker. Confirm-default → either keep the suggestion or type a
+  // custom model id. We split this in two steps (vs a single input with a
+  // pre-filled default) so the choice is explicit and the suggested model
+  // is shown without requiring the user to delete it.
+  if (profile.promptModel) {
+    const useDefault = await confirm({
+      message: `Use the default model? ${pc.dim("(" + profile.defaultModel + ")")}`,
+      default: true,
+    });
+    if (useDefault) {
+      env.EMBEDDING_MODEL = profile.defaultModel;
+    } else {
+      const model = await input({
+        message: `Enter the model id ${pc.dim("(" + profile.modelHint + ")")}`,
+        validate: (v) =>
+          v && v.trim().includes("/")
+            ? true
+            : "Use the form `org/repo` (e.g. BAAI/bge-base-en-v1.5).",
+      });
+      env.EMBEDDING_MODEL = model.trim();
+    }
+  }
+
+  return env;
+}
+
+async function promptSystemPassword() {
+  const pw = await password({
+    message: `Set a dashboard password ${pc.dim("(used to log in at http://localhost:3000 and to bootstrap the API key)")}`,
     mask: "•",
-    validate: (v) => (v && v.trim().length > 8 ? true : "That doesn't look like an API key."),
+    validate: (v) => (v && v.length >= 8 ? true : "At least 8 characters."),
   });
-  return { [profile.keyEnvVar]: key.trim() };
+  return pw;
 }
 
 export async function runInit({ force = false } = {}) {
@@ -68,10 +122,8 @@ export async function runInit({ force = false } = {}) {
     default: "agent",
   });
 
-  // ── AGENT PATH ─────────────────────────────────────────────────────────
+  // ── CLIENT SELECTION (agent path only) ────────────────────────────────
   let chosenClients = [];
-  let embeddingChoice = "local_balanced";
-  let apiKeys = {};
 
   if (flow === "agent") {
     const detected = await detectInstalledClients();
@@ -86,12 +138,20 @@ export async function runInit({ force = false } = {}) {
     if (chosenClients.length === 0) {
       log.warn("No clients selected. Continuing with the dashboard only.");
     }
-  } else {
-    // ── INDEX PATH ────────────────────────────────────────────────────────
-    embeddingChoice = await pickProvider({ apiOnly: true });
-    const profile = EMBEDDING_PROFILES[embeddingChoice];
-    apiKeys = await maybePromptApiKey(profile);
   }
+
+  // ── PROVIDER + MODEL + KEY (both flows) ────────────────────────────────
+  // Both paths need an embedding provider — agent users still want a choice
+  // between local-CPU and a hosted API (faster on small machines, no model
+  // download). Only the index path wires the dashboard.
+  const embeddingChoice = await pickProvider();
+  const profile = EMBEDDING_PROFILES[embeddingChoice];
+  const providerConfig = await collectProviderConfig(profile);
+
+  // ── DASHBOARD PASSWORD ────────────────────────────────────────────────
+  // Always prompt: it's used both as the dashboard login and as the
+  // bootstrap secret that mints the CLI's API key further down.
+  const systemPassword = await promptSystemPassword();
 
   // Pre-flight checks
   log.step("Pre-flight checks");
@@ -113,7 +173,7 @@ export async function runInit({ force = false } = {}) {
   await ensureSource();
 
   log.step("Writing config");
-  const secrets = await writeEnv({ embeddingChoice, apiKeys });
+  const secrets = await writeEnv({ embeddingChoice, providerConfig, systemPassword });
   log.success(`wrote ~/.synsci/delphi/source/.env`);
 
   // Spin up. Agent-path users don't need the dashboard, so skip building the
@@ -177,9 +237,12 @@ export async function runInit({ force = false } = {}) {
   log.raw(`  API:             ${pc.cyan(API_BASE)}`);
   log.raw(`  API key:         ${pc.cyan(minted.api_key)}  ${pc.dim("(saved into MCP configs)")}`);
   if (dashboardOn) {
-    log.raw(`  Dashboard login: password ${pc.cyan(secrets.systemPassword)}`);
+    log.raw(`  Dashboard login: ${pc.dim("the password you just set")}`);
   }
   log.raw(`  Embeddings:      ${pc.cyan(EMBEDDING_PROFILES[embeddingChoice].label)}`);
+  if (providerConfig.EMBEDDING_MODEL) {
+    log.raw(`  Model:           ${pc.cyan(providerConfig.EMBEDDING_MODEL)}`);
+  }
   log.dim("───────────────────────────────────────────────");
 
   if (launcher.installed) {

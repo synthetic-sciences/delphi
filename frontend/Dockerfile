@@ -3,7 +3,13 @@
 # =============================================================================
 FROM node:20-alpine AS build
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1
+# Next.js bakes the rewrite `destination` URLs into routes-manifest.json
+# at build time (not runtime), so anything next.config.mjs reads from
+# process.env must be set HERE, before `npm run build`. INTERNAL_API_URL
+# is the docker-network hostname the Next server will fetch through.
+ARG INTERNAL_API_URL=http://api:8742
+ENV INTERNAL_API_URL=${INTERNAL_API_URL} \
+    NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json* ./
 RUN npm ci
 COPY . .

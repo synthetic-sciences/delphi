@@ -55,9 +55,13 @@ services:
     profiles: ["dashboard"]
     build:
       context: ./frontend
+      args:
+        # Baked into routes-manifest.json by `next build` — see Dockerfile.
+        INTERNAL_API_URL: http://api:8742
     depends_on:
       - api
     environment:
+      # Browser-facing URL (baked into the client bundle for direct fetches).
       NEXT_PUBLIC_API_URL: http://localhost:8742
     ports:
       - "3000:3000"
