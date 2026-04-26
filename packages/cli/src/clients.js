@@ -59,13 +59,16 @@ export async function detectInstalledClients() {
 
 /** Install via Claude Code's CLI command (the CLI manages the file location). */
 async function installClaudeCode({ apiKey, apiUrl }) {
+  // Name must precede `-e` flags: claude's `--env <env...>` is variadic
+  // (Commander.js) and will swallow the server name as an env value if it
+  // appears after the env flags.
   const args = [
     "mcp", "add",
     "--scope", "user",
     "--transport", "stdio",
-    "--env", `SYNSC_API_KEY=${apiKey}`,
-    "--env", `SYNSC_API_URL=${apiUrl}`,
     SERVER_NAME,
+    "-e", `SYNSC_API_KEY=${apiKey}`,
+    "-e", `SYNSC_API_URL=${apiUrl}`,
     "--", "uvx", "synsc-context-proxy",
   ];
   const { code, stderr } = await run("claude", args, { silent: true });
