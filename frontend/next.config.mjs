@@ -15,7 +15,17 @@ const nextConfig = {
     'http://127.0.0.1:3000',
   ],
   async rewrites() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8742';
+    // Rewrites run inside the Next.js server process, so they need an
+    // address that *server* can reach. In docker-compose that's the api
+    // service hostname (`http://api:8742`), not `localhost:8742` which
+    // would resolve back to the frontend container itself and 500.
+    // NEXT_PUBLIC_API_URL stays the browser-facing value (baked into the
+    // client bundle for direct fetch calls in lib/api.ts) and is the
+    // fallback for `next dev` outside docker.
+    const apiUrl =
+      process.env.INTERNAL_API_URL ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      'http://localhost:8742';
     return {
       beforeFiles: [
         { source: '/config', destination: `${apiUrl}/config` },

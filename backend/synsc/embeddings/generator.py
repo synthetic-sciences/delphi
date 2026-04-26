@@ -207,8 +207,9 @@ def get_embedding_generator():
 
     Dispatches based on the `EMBEDDING_PROVIDER` env var (`local` is the
     default). API-based providers require their key in the environment:
-    - `gemini` → GEMINI_API_KEY
-    - `openai` → OPENAI_API_KEY
+    - `gemini`       → GEMINI_API_KEY
+    - `openai`       → OPENAI_API_KEY
+    - `huggingface`  → HF_TOKEN  (model picked via EMBEDDING_MODEL)
     """
     global _embedding_generator
     if _embedding_generator is not None:
@@ -224,6 +225,10 @@ def get_embedding_generator():
         from synsc.embeddings.providers import OpenAIEmbeddingProvider
         logger.info("Initializing OpenAI embedding provider")
         _embedding_generator = OpenAIEmbeddingProvider()
+    elif provider in ("huggingface", "hf"):
+        from synsc.embeddings.providers import HuggingFaceEmbeddingProvider
+        logger.info("Initializing HuggingFace embedding provider")
+        _embedding_generator = HuggingFaceEmbeddingProvider()
     else:
         if provider not in ("", "local"):
             logger.warning("Unknown EMBEDDING_PROVIDER=%r, falling back to local", provider)
