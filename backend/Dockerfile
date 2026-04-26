@@ -26,9 +26,11 @@ COPY pyproject.toml uv.lock* README.md ./
 RUN uv sync --frozen --no-dev --no-editable 2>/dev/null \
     || uv sync --no-dev --no-editable
 
-# Pre-download the sentence-transformers model (~420 MB)
-RUN uv run python -c \
-    "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-mpnet-base-v2')"
+# The sentence-transformers model (~420 MB) is downloaded lazily on first
+# request rather than baked into the image — keeps build smaller and avoids
+# blowing up disk-constrained installs (Docker Desktop default VM is tight).
+# Users on API-based providers (EMBEDDING_PROVIDER=gemini|openai) never pay
+# for it at all.
 
 COPY synsc/ ./synsc/
 COPY alembic/ ./alembic/
@@ -48,11 +50,12 @@ RUN groupadd --gid 1000 synsc && \
 
 WORKDIR /app
 
-COPY --from=build /app /app
-COPY --from=build /root/.cache/huggingface /home/synsc/.cache/huggingface
-RUN chown -R synsc:synsc /home/synsc/.cache
+# `--chown` writes ownership in-place; a separate `RUN chown -R` would
+# duplicate the layer's inodes and was hitting ENOSPC on tight Docker VMs.
+COPY --from=build --chown=synsc:synsc /app /app
 
-RUN mkdir -p /tmp/synsc-context && chown synsc:synsc /tmp/synsc-context
+RUN mkdir -p /tmp/synsc-context /home/synsc/.cache \
+ && chown -R synsc:synsc /tmp/synsc-context /home/synsc/.cache
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
