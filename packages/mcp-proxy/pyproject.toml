@@ -1,6 +1,6 @@
 [project]
 name = "synsc-context-proxy"
-version = "1.2.1"
+version = "1.2.4"
 description = "Lightweight MCP proxy for Delphi — gives AI agents deep code, research paper, and dataset context."
 readme = {text = "Lightweight MCP proxy for Delphi (synsc-context). Gives AI agents deep code, research paper, and HuggingFace dataset context via 25 tools.", content-type = "text/markdown"}
 license = "MIT"

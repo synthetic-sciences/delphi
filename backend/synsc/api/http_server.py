@@ -380,7 +380,9 @@ def _get_or_create_admin_user() -> str:
             text("SELECT id FROM users WHERE is_admin = true ORDER BY created_at LIMIT 1")
         ).mappings().first()
         if row:
-            return row["id"]
+            # psycopg2 returns native uuid.UUID; JSONResponse doesn't serialize
+            # those, so coerce here. The new-row branch already calls str().
+            return str(row["id"])
 
         # Create an admin user for SYSTEM_PASSWORD access
         import uuid
