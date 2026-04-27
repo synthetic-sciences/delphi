@@ -1,0 +1,35 @@
+# GPU override file. Apply with:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+#
+# Reserves all visible NVIDIA GPUs for the api and worker containers.
+# Both need the device because they each instantiate a SentenceTransformer
+# at runtime — the api for query embeddings, the worker for batch
+# indexing — and CUDA contexts don't share across processes.
+#
+# Requires the host to have:
+#   - NVIDIA driver installed (nvidia-smi works)
+#   - nvidia-container-toolkit configured in Docker
+#     (`docker info --format '{{.Runtimes}}'` should list `nvidia`)
+#
+# Generated/picked by `delphi init` when GPU is detected and the user
+# selects "GPU (CUDA)". Persisted in state.json.useGpu so subsequent
+# `delphi start` / `open` / `reload` commands re-apply this override.
+
+services:
+  api:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  worker:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

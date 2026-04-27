@@ -1,7 +1,7 @@
 import { select, checkbox, confirm } from "@inquirer/prompts";
 import pc from "picocolors";
 import { log, banner, spinner } from "./log.js";
-import { dockerHealthy, which } from "./system.js";
+import { dockerHealthy, which, detectGpu } from "./system.js";
 import { ensureSource } from "./source.js";
 import { writeEnv, saveState, loadState, EMBEDDING_PROFILES } from "./env.js";
 import { composePull, composeBuild, composeUp } from "./docker.js";
@@ -12,7 +12,7 @@ import {
   CLIENT_LABELS,
 } from "./clients.js";
 import { installLauncher } from "./launcher.js";
-import { pickProvider, collectProviderConfig } from "./prompts.js";
+import { pickProvider, collectProviderConfig, pickDevice } from "./prompts.js";
 
 const FLOWS = {
   agent: "Add to my coding agent (Claude Code, Cursor, Windsurf, Claude Desktop)",
@@ -68,6 +68,34 @@ export async function runInit({ force = false } = {}) {
   const profile = EMBEDDING_PROFILES[embeddingChoice];
   const providerConfig = await collectProviderConfig(profile);
 
+  // ── GPU DETECTION ─────────────────────────────────────────────────────
+  // Only relevant for the Local provider (Gemini / OpenAI run remote).
+  // Detection touches `nvidia-smi` and `docker info` — both fast — so we
+  // always probe but only surface a prompt when GPU is usable AND the
+  // user picked Local. Result is persisted in state.json so subsequent
+  // lifecycle commands re-apply the docker-compose.gpu.yml override.
+  let useGpu = false;
+  if (profile.kind === "local") {
+    const gpu = await detectGpu();
+    if (gpu.available) {
+      const device = await pickDevice({ gpuName: gpu.gpu });
+      useGpu = device === "cuda";
+      providerConfig.EMBEDDING_DEVICE = device;
+    } else if (gpu.hostGpu) {
+      // Linux host has a GPU but Docker can't pass it. Surface the exact
+      // install command for the user's distro so they don't have to
+      // hunt — falling back to CPU otherwise.
+      log.warn(`detected ${gpu.hostGpu} but Docker isn't configured to pass GPUs to containers.`);
+      log.dim(`  Run:  ${gpu.installHint}`);
+      log.dim("        then re-run init to enable GPU acceleration. Continuing on CPU.");
+    } else if (gpu.platform === "darwin") {
+      // Docker on macOS can't pass GPUs at all — flag once so users
+      // don't expect MPS acceleration that the dockerized api can't
+      // deliver. docs/gpu.md has the native-mode workaround.
+      log.dim("  Note: Docker on macOS runs the api on CPU only. See docs/gpu.md for native MPS instructions.");
+    }
+  }
+
   // SYSTEM_PASSWORD is auto-generated. Magic-link auth signs the user
   // into the dashboard transparently via `delphi open`, and the CLI
   // mints API keys via /api/bootstrap on its own — the user never has
@@ -110,13 +138,14 @@ export async function runInit({ force = false } = {}) {
   // on failure the helper surfaces stderr in the thrown error.
   log.step("Starting services");
   await spinner("pulling base images (~200MB on first run)", () =>
-    composePull({ profiles, silent: true }),
+    composePull({ profiles, silent: true, withGpu: useGpu }),
   );
   await spinner("building images (api · worker" + (flow === "index" ? " · frontend" : "") + ")", () =>
-    composeBuild({ profiles, silent: true }),
+    composeBuild({ profiles, silent: true, withGpu: useGpu }),
   );
-  await spinner("starting containers", () =>
-    composeUp({ build: false, profiles, silent: true }),
+  await spinner(
+    useGpu ? "starting containers (with GPU reservation)" : "starting containers",
+    () => composeUp({ build: false, profiles, silent: true, withGpu: useGpu }),
   );
 
   // Health
@@ -150,6 +179,7 @@ export async function runInit({ force = false } = {}) {
     installedAt: new Date().toISOString(),
     flow,
     profiles,
+    useGpu,
     embeddingChoice,
     apiKeyPreview: minted.key_preview,
     apiUrl: API_BASE,
