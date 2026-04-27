@@ -81,7 +81,7 @@ Once you have an API key (from the dashboard at `/api-keys` or via `npx @synsci/
   "mcpServers": {
     "synsci-delphi": {
       "command": "uvx",
-      "args": ["synsc-context-proxy"],
+      "args": ["synsci-delphi-proxy"],
       "env": {
         "SYNSC_API_KEY": "your-api-key",
         "SYNSC_API_URL": "http://localhost:8742"
@@ -91,7 +91,7 @@ Once you have an API key (from the dashboard at `/api-keys` or via `npx @synsci/
 }
 ```
 
-**Config file paths:** Cursor `~/.cursor/mcp.json` · Windsurf `~/.codeium/windsurf/mcp_config.json` · Claude Desktop `~/Library/Application Support/Claude/claude_desktop_config.json` · Claude Code use `claude mcp add --scope user synsci-delphi -- uvx synsc-context-proxy`.
+**Config file paths:** Cursor `~/.cursor/mcp.json` · Windsurf `~/.codeium/windsurf/mcp_config.json` · Claude Desktop `~/Library/Application Support/Claude/claude_desktop_config.json` · Claude Code use `claude mcp add --scope user synsci-delphi -- uvx synsci-delphi-proxy`.
 </details>
 
 <details>

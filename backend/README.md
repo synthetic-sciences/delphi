@@ -23,5 +23,4 @@ uv run mypy synsc/                    # type-check
 | `synsc-context` | `synsc.cli:main` |
 | `synsc-context-http` | `synsc.api.http_server:run_http_server` |
 | `synsc-context-mcp` | `synsc.api.mcp_server:run_server` |
-| `synsc-context-proxy` | `synsc.mcp_stdio_proxy:main` |
 | `synsc-context-worker` | `synsc.workers.indexing_worker:run_worker` |

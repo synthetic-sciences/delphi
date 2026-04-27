@@ -133,9 +133,6 @@ synsc-context = "synsc.cli:main"
 synsc-context-mcp = "synsc.api.mcp_server:run_server"
 synsc-context-http = "synsc.api.http_server:run_http_server"
 
-# Lightweight stdio proxy for uvx usage
-synsc-context-proxy = "synsc.mcp_stdio_proxy:main"
-
 # Worker
 synsc-context-worker = "synsc.workers.indexing_worker:run_worker"
 
