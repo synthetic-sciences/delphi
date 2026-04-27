@@ -26,7 +26,7 @@ export async function runReload({ quiet = false } = {}) {
   }
 
   await spinner("restarting services", () =>
-    composeRestart({ services: ["api", "worker"], silent: true }),
+    composeRestart({ services: ["api", "worker"], silent: true, withGpu: !!state.useGpu }),
   );
   // restart returns immediately once the containers stop+start; the api
   // takes a few seconds to come back online. Wait for /health before

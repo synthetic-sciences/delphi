@@ -76,7 +76,7 @@ async function ensureInstalled() {
 export async function runStart() {
   const state = await ensureInstalled();
   await spinner("starting Delphi", () =>
-    composeUp({ build: false, profiles: state.profiles || [], silent: true }),
+    composeUp({ build: false, profiles: state.profiles || [], silent: true, withGpu: !!state.useGpu }),
   );
   await spinner("waiting for API", () => waitForHealth());
   log.success(`up at ${pc.cyan(API_BASE)}`);
@@ -87,7 +87,7 @@ export async function runStop() {
   // `down` with the saved profiles removes everything we started; without
   // them, profile-gated containers (e.g. frontend) are left orphaned.
   await spinner("stopping Delphi", () =>
-    composeDown({ profiles: state.profiles || [], silent: true }),
+    composeDown({ profiles: state.profiles || [], silent: true, withGpu: !!state.useGpu }),
   );
 }
 
@@ -103,7 +103,7 @@ export async function runStatus() {
     healthOk = false;
   }
 
-  const services = await composeStatus({ profiles: state.profiles || [] });
+  const services = await composeStatus({ profiles: state.profiles || [], withGpu: !!state.useGpu });
 
   log.raw(`  Status:    ${healthOk ? pc.green("healthy") : pc.red("not responding")}`);
   log.raw(`  API:       ${pc.cyan(API_BASE)}`);
@@ -126,7 +126,7 @@ export async function runStatus() {
 
 export async function runLogs({ follow = false, services = [] } = {}) {
   const state = await ensureInstalled();
-  await composeLogs({ follow, services, profiles: state.profiles || [] });
+  await composeLogs({ follow, services, profiles: state.profiles || [], withGpu: !!state.useGpu });
 }
 
 /** Whether all containers we need are running AND the api reports
@@ -141,9 +141,9 @@ export async function runLogs({ follow = false, services = [] } = {}) {
  *       from opening a dashboard whose every click 500s.
  *
  *  Either failing → fall through to the cold-path docker rebuild. */
-async function dashboardFullyUp(profiles) {
+async function dashboardFullyUp(profiles, { withGpu = false } = {}) {
   try {
-    const services = await composeStatus({ profiles });
+    const services = await composeStatus({ profiles, withGpu });
     if (!services.length) return false;
     const required = ["postgres", "api", "frontend"];
     const byService = new Map(services.map((s) => [s.Service, s]));
@@ -179,7 +179,7 @@ export async function runOpen() {
   // 5–10s just evaluating the compose file, recreating the api on any
   // config drift, etc. The whole point of `delphi open` on a running
   // install should be a near-instant browser launch.
-  const fullyUp = await dashboardFullyUp(profiles);
+  const fullyUp = await dashboardFullyUp(profiles, { withGpu: !!state.useGpu });
 
   if (!fullyUp) {
     // Cold or partial start. Phase the docker calls so the user sees
@@ -194,11 +194,11 @@ export async function runOpen() {
     }
     if (!healthy) {
       await spinner("pulling base images", () =>
-        composePull({ profiles, silent: true }),
+        composePull({ profiles, silent: true, withGpu: !!state.useGpu }),
       );
     }
     await spinner("building dashboard image", () =>
-      composeBuild({ profiles, silent: true }),
+      composeBuild({ profiles, silent: true, withGpu: !!state.useGpu }),
     );
     await spinner("starting containers", () =>
       composeUp({ build: false, profiles, silent: true }),
@@ -240,7 +240,7 @@ export async function runUninstall() {
   const ok = await confirm({ message: "Continue?", default: false });
   if (!ok) return;
   await spinner("removing Delphi", () =>
-    composeDown({ removeVolumes: true, profiles: state.profiles || [], silent: true }),
+    composeDown({ removeVolumes: true, profiles: state.profiles || [], silent: true, withGpu: !!state.useGpu }),
   );
   log.dim("source dir kept at ~/.synsci/delphi/source");
 }
