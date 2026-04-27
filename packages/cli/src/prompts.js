@@ -148,6 +148,40 @@ export async function collectProviderConfig(profile, { existing = {} } = {}) {
 }
 
 /**
+ * Ask whether to use the detected GPU. Only relevant for the Local
+ * (sentence-transformers) provider — Gemini / OpenAI run remote.
+ *
+ * @param {object} opts
+ * @param {string} [opts.gpuName]  Display name of the detected GPU.
+ * @param {string} [opts.current]  Current EMBEDDING_DEVICE in .env
+ *        ("cuda", "cpu", "auto"). Used as the default when re-running
+ *        from `delphi config`.
+ *
+ * Returns "cuda" or "cpu". Caller is responsible for translating that
+ * into both EMBEDDING_DEVICE in .env and the docker-compose.gpu.yml
+ * include flag (api container needs the GPU reservation to actually
+ * see the device — without it sentence-transformers silently falls
+ * back to CPU even when EMBEDDING_DEVICE=cuda).
+ */
+export async function pickDevice({ gpuName, current } = {}) {
+  const choices = [
+    {
+      value: "cuda",
+      name: `GPU (CUDA) ${pc.dim("— " + (gpuName || "detected NVIDIA GPU"))}${current === "cuda" ? pc.dim(" (current)") : ""}`,
+    },
+    {
+      value: "cpu",
+      name: `CPU only${current === "cpu" ? pc.dim(" (current)") : ""}`,
+    },
+  ];
+  return select({
+    message: "Run embeddings on:",
+    choices,
+    default: current === "cpu" ? "cpu" : "cuda",
+  });
+}
+
+/**
  * Prompt for SYSTEM_PASSWORD. On install (`existing=null`) it's required.
  * On reconfig (`existing` truthy) it's gated by a `Change password?` confirm
  * so users don't have to retype on every `delphi config`.

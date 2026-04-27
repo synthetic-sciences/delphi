@@ -96,5 +96,6 @@ sql/
 docs/*
 # …but keep the curated public references tracked.
 !docs/env-advanced.md
+!docs/gpu.md
 !frontend/src/app/docs/
 CLAUDE.md

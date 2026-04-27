@@ -43,9 +43,17 @@ class EmbeddingGenerator:
         self.dimension = config.embeddings.dimension
         self.device = device or config.embeddings.device
 
-        # Auto-detect GPU only when no explicit device was configured
+        # Auto-detect GPU when device is unset OR set to the sentinel "auto".
+        # torch ≥ 2.5 stopped accepting "auto" as a device string ("Expected
+        # one of cpu, cuda, mps, ... at start of device string: auto"), so
+        # we have to resolve it ourselves here.
         explicit_device = device or os.getenv("EMBEDDING_DEVICE")
-        if not explicit_device:
+        is_auto = (
+            not explicit_device
+            or str(explicit_device).strip().lower() == "auto"
+        )
+        if is_auto:
+            self.device = "cpu"
             try:
                 import torch
                 if torch.cuda.is_available():
@@ -77,9 +85,20 @@ class EmbeddingGenerator:
             self.model_name,
             self.device,
         )
-        # trust_remote_code needed for models like jina-embeddings-v2-base-code
+        # trust_remote_code needed for models like jina-embeddings-v2-base-code.
+        # truncate_dim applies Matryoshka-style slicing: when a model's native
+        # dim exceeds our pgvector schema (768) — Qwen3-Embedding (1024),
+        # mxbai-embed-large (1024), jina-v3 (1024) — sentence-transformers
+        # slices the pooled output before normalize, yielding a unit vector at
+        # the schema dim. For native-768 models this is a no-op.
+        # Models without MRL training will still slice cleanly but lose
+        # representation quality; the model picker hint already steers users
+        # toward MRL-aware or 768-native models.
         self.model = SentenceTransformer(
-            self.model_name, device=self.device, trust_remote_code=True
+            self.model_name,
+            device=self.device,
+            trust_remote_code=True,
+            truncate_dim=self.dimension,
         )
 
         # Verify dimension matches DB schema (vector(768) in setup_local.sql)

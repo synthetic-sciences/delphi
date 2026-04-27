@@ -1,6 +1,17 @@
 import { run, dockerComposeCmd } from "./system.js";
 import { SOURCE_DIR } from "./paths.js";
 
+/** Pre-flag args added before any compose subcommand. We use this to thread
+ *  the optional GPU override file (`-f docker-compose.yml -f docker-compose.gpu.yml`)
+ *  so every compose call (up / pull / build / restart / down / ps / logs)
+ *  applies the GPU reservation when it's enabled. Files are positional and
+ *  order matters: docker-compose.yml first, then overrides. */
+function fileFlags(withGpu = false) {
+  const out = ["-f", "docker-compose.yml"];
+  if (withGpu) out.push("-f", "docker-compose.gpu.yml");
+  return out;
+}
+
 async function compose(args, opts = {}) {
   const tool = await dockerComposeCmd();
   if (!tool) throw new Error("Docker Compose not found. Install Docker Desktop or `docker compose` plugin.");
@@ -14,8 +25,8 @@ function profileFlags(profiles = []) {
   return out;
 }
 
-export async function composeUp({ services = [], build = false, profiles = [], silent = false } = {}) {
-  const args = [...profileFlags(profiles), "up", "-d"];
+export async function composeUp({ services = [], build = false, profiles = [], silent = false, withGpu = false } = {}) {
+  const args = [...fileFlags(withGpu), ...profileFlags(profiles), "up", "-d"];
   if (build) args.push("--build");
   args.push(...services);
   // When silent, swallow the BuildKit / progress noise so the launcher can
@@ -30,8 +41,8 @@ export async function composeUp({ services = [], build = false, profiles = [], s
 
 /** Pull base images for the selected profiles. Phase 1 of a fresh start —
  *  the network-bound step that's slow on first run. */
-export async function composePull({ profiles = [], silent = false } = {}) {
-  const args = [...profileFlags(profiles), "pull"];
+export async function composePull({ profiles = [], silent = false, withGpu = false } = {}) {
+  const args = [...fileFlags(withGpu), ...profileFlags(profiles), "pull"];
   const { code, stderr } = await compose(args, { silent });
   if (code !== 0) {
     const detail = silent && stderr ? `\n${stderr.trim()}` : "";
@@ -40,8 +51,8 @@ export async function composePull({ profiles = [], silent = false } = {}) {
 }
 
 /** Build local images. Phase 2 — CPU-bound, mostly cached after first run. */
-export async function composeBuild({ profiles = [], silent = false } = {}) {
-  const args = [...profileFlags(profiles), "build"];
+export async function composeBuild({ profiles = [], silent = false, withGpu = false } = {}) {
+  const args = [...fileFlags(withGpu), ...profileFlags(profiles), "build"];
   const { code, stderr } = await compose(args, { silent });
   if (code !== 0) {
     const detail = silent && stderr ? `\n${stderr.trim()}` : "";
@@ -53,8 +64,8 @@ export async function composeBuild({ profiles = [], silent = false } = {}) {
  *  Used by `delphi reload` and `delphi config` to pick up .env changes
  *  without doing a full down → up cycle (which would also drop volumes
  *  if you forgot the right flags). */
-export async function composeRestart({ services = [], profiles = [], silent = false } = {}) {
-  const args = [...profileFlags(profiles), "restart", ...services];
+export async function composeRestart({ services = [], profiles = [], silent = false, withGpu = false } = {}) {
+  const args = [...fileFlags(withGpu), ...profileFlags(profiles), "restart", ...services];
   const { code, stderr } = await compose(args, { silent });
   if (code !== 0) {
     const detail = silent && stderr ? `\n${stderr.trim()}` : "";
@@ -62,8 +73,8 @@ export async function composeRestart({ services = [], profiles = [], silent = fa
   }
 }
 
-export async function composeDown({ removeVolumes = false, profiles = [], silent = false } = {}) {
-  const args = [...profileFlags(profiles), "down"];
+export async function composeDown({ removeVolumes = false, profiles = [], silent = false, withGpu = false } = {}) {
+  const args = [...fileFlags(withGpu), ...profileFlags(profiles), "down"];
   if (removeVolumes) args.push("-v");
   const { code, stderr } = await compose(args, { silent });
   if (code !== 0) {
@@ -72,9 +83,9 @@ export async function composeDown({ removeVolumes = false, profiles = [], silent
   }
 }
 
-export async function composeStatus({ profiles = [] } = {}) {
+export async function composeStatus({ profiles = [], withGpu = false } = {}) {
   const { code, stdout } = await compose(
-    [...profileFlags(profiles), "ps", "--format", "json"],
+    [...fileFlags(withGpu), ...profileFlags(profiles), "ps", "--format", "json"],
     { silent: true }
   );
   if (code !== 0) return [];
@@ -92,8 +103,8 @@ export async function composeStatus({ profiles = [] } = {}) {
     .filter(Boolean);
 }
 
-export async function composeLogs({ follow = false, services = [], profiles = [] } = {}) {
-  const args = [...profileFlags(profiles), "logs"];
+export async function composeLogs({ follow = false, services = [], profiles = [], withGpu = false } = {}) {
+  const args = [...fileFlags(withGpu), ...profileFlags(profiles), "logs"];
   if (follow) args.push("-f");
   args.push("--tail", "200", ...services);
   await compose(args);

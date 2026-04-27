@@ -70,3 +70,87 @@ export async function dockerComposeCmd() {
   if (await which("docker-compose")) return ["docker-compose", []];
   return null;
 }
+
+/**
+ * Best-effort install command for nvidia-container-toolkit on the
+ * current Linux distro. Falls back to the upstream NVIDIA URL when we
+ * can't recognize /etc/os-release. Used to give the user a copy-pasteable
+ * fix when their host has a GPU but Docker isn't configured to pass it.
+ */
+async function linuxToolkitInstallHint() {
+  const fs = await import("node:fs/promises");
+  const text = await fs.readFile("/etc/os-release", "utf8").catch(() => "");
+  if (/\bID=arch\b|\bID_LIKE=.*arch/i.test(text)) {
+    return "yay -S nvidia-container-toolkit && sudo systemctl restart docker";
+  }
+  if (/\bID=(ubuntu|debian)\b|\bID_LIKE=.*debian/i.test(text)) {
+    return "sudo apt install -y nvidia-container-toolkit && sudo systemctl restart docker";
+  }
+  if (/\bID=(fedora|rhel|centos|rocky|almalinux)\b/i.test(text)) {
+    return "sudo dnf install -y nvidia-container-toolkit && sudo systemctl restart docker";
+  }
+  return "see https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html";
+}
+
+/**
+ * Detect whether GPU acceleration is usable from inside a Docker
+ * container on this host. Result shape:
+ *
+ *   { available: true,  gpu }                                  ← good to go
+ *   { available: false, reason, hostGpu? }                     ← short-circuit
+ *   { available: false, reason, hostGpu, installHint }         ← Linux-with-GPU,
+ *       missing nvidia-container-toolkit; CLI surfaces the exact install
+ *       command in the "we noticed your GPU, here's how to use it" warning.
+ *
+ * Platform-aware:
+ *   - macOS:        Docker Desktop can't pass GPU to Linux containers
+ *                   regardless of Apple Silicon / Intel. Bail immediately
+ *                   so we don't waste time probing nvidia-smi (which won't
+ *                   exist). Documented in docs/gpu.md.
+ *   - Windows:      Same — Docker Desktop on Windows requires WSL2 + the
+ *                   NVIDIA WSL toolkit. We treat it like Linux and let
+ *                   the nvidia-smi / runtime probes decide.
+ *   - Linux:        Run the full probe.
+ */
+export async function detectGpu() {
+  if (process.platform === "darwin") {
+    return {
+      available: false,
+      reason: "Docker on macOS can't pass GPU to containers (MPS unsupported)",
+      platform: "darwin",
+    };
+  }
+
+  // 1. Host-side: does the NVIDIA driver respond?
+  if (!(await which("nvidia-smi"))) {
+    return { available: false, reason: "nvidia-smi not on PATH" };
+  }
+  const { code: smiCode, stdout: smiOut } = await run("nvidia-smi", ["-L"], { silent: true });
+  if (smiCode !== 0 || !smiOut.trim()) {
+    return { available: false, reason: "nvidia-smi failed" };
+  }
+  const gpuName = (smiOut.split("\n")[0] || "").trim();
+
+  // 2. Docker-side: can the runtime attach GPUs? `docker info` lists
+  // configured runtimes — if `nvidia` is present the toolkit is in
+  // place and the daemon is configured for pass-through.
+  const { code: infoCode, stdout: info } = await run(
+    "docker", ["info", "--format", "{{.Runtimes}}"], { silent: true },
+  );
+  if (infoCode !== 0) {
+    return { available: false, reason: "docker info failed" };
+  }
+  if (!/\bnvidia\b/.test(info)) {
+    const installHint = process.platform === "linux"
+      ? await linuxToolkitInstallHint()
+      : "see https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html";
+    return {
+      available: false,
+      reason: "nvidia-container-toolkit not configured in Docker",
+      hostGpu: gpuName,
+      installHint,
+    };
+  }
+
+  return { available: true, gpu: gpuName };
+}
