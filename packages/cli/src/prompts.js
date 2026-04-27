@@ -109,9 +109,19 @@ export async function collectProviderConfig(profile, { existing = {} } = {}) {
     }
   }
 
-  // Model picker (Local only).
+  // Model picker (Local only). We only treat the .env's existing
+  // EMBEDDING_MODEL as "current" when the provider is unchanged — a
+  // gemini-embedding-001 left over from a previous Gemini install is
+  // meaningless to Local (which expects a HF org/repo id) and would
+  // confuse the prompt's default suggestion.
   if (profile.promptModel) {
-    const currentModel = get("EMBEDDING_MODEL") || profile.defaultModel;
+    const existingProvider = get("EMBEDDING_PROVIDER");
+    const newProvider = profile.env?.EMBEDDING_PROVIDER;
+    const providerUnchanged = existingProvider && existingProvider === newProvider;
+    const currentModel = providerUnchanged
+      ? get("EMBEDDING_MODEL") || profile.defaultModel
+      : profile.defaultModel;
+
     const useCurrent = await confirm({
       message: `Use the current model? ${pc.dim("(" + currentModel + ")")}`,
       default: true,

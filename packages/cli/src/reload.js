@@ -12,8 +12,13 @@ import { waitForHealth } from "./health.js";
  * Frontend isn't restarted — its build-time env (NEXT_PUBLIC_API_URL,
  * INTERNAL_API_URL) is baked into the image. Frontend changes require a
  * full re-init.
+ *
+ * @param {object} opts
+ * @param {boolean} [opts.quiet]  Suppress the trailing "services reloaded"
+ *   success line. Set when calling from another command (`delphi config`)
+ *   that prints its own final status.
  */
-export async function runReload() {
+export async function runReload({ quiet = false } = {}) {
   const state = await loadState();
   if (!state) {
     log.error("Delphi isn't installed yet. Run `npx @synsci/delphi init` first.");
@@ -24,9 +29,9 @@ export async function runReload() {
     composeRestart({ services: ["api", "worker"], silent: true }),
   );
   // restart returns immediately once the containers stop+start; the api
-  // takes a few seconds to come back online. Wait for /health (shallow)
-  // before declaring success — saves a confusing "config saved but
-  // nothing happened" if the user runs another command right after.
+  // takes a few seconds to come back online. Wait for /health before
+  // declaring success — saves a confusing "config saved but nothing
+  // happened" if the user runs another command right after.
   await spinner("waiting for API", () => waitForHealth());
-  log.success("services reloaded");
+  if (!quiet) log.success("services reloaded");
 }
