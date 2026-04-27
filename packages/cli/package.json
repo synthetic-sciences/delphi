@@ -1,6 +1,6 @@
 {
   "name": "@synsci/delphi",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "description": "One-command installer for Delphi — semantic context for AI coding agents.",
   "license": "Apache-2.0",
   "type": "module",
