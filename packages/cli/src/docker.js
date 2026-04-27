@@ -49,6 +49,19 @@ export async function composeBuild({ profiles = [], silent = false } = {}) {
   }
 }
 
+/** Restart specific services (or all of them when `services` is empty).
+ *  Used by `delphi reload` and `delphi config` to pick up .env changes
+ *  without doing a full down → up cycle (which would also drop volumes
+ *  if you forgot the right flags). */
+export async function composeRestart({ services = [], profiles = [], silent = false } = {}) {
+  const args = [...profileFlags(profiles), "restart", ...services];
+  const { code, stderr } = await compose(args, { silent });
+  if (code !== 0) {
+    const detail = silent && stderr ? `\n${stderr.trim()}` : "";
+    throw new Error(`docker compose restart failed (exit ${code})${detail}`);
+  }
+}
+
 export async function composeDown({ removeVolumes = false, profiles = [], silent = false } = {}) {
   const args = [...profileFlags(profiles), "down"];
   if (removeVolumes) args.push("-v");

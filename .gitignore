@@ -92,6 +92,9 @@ frontend/brand/
 *.tmp
 *.orig
 sql/
-docs/
+# Ignore everything inside docs/ by default (private notes, scratch specs)…
+docs/*
+# …but keep the curated public references tracked.
+!docs/env-advanced.md
 !frontend/src/app/docs/
 CLAUDE.md

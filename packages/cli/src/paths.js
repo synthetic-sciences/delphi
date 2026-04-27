@@ -12,6 +12,11 @@ export const SOURCE_DIR = path.join(ROOT, "source");
 /** Generated .env file consumed by docker compose. */
 export const ENV_FILE = path.join(SOURCE_DIR, ".env");
 
+/** Template file shipped in the source clone. The installer copies this to
+ *  ENV_FILE on first run and patches only the install-time keys, so user
+ *  edits + comments survive `delphi config` round-trips. */
+export const ENV_TEMPLATE_FILE = path.join(SOURCE_DIR, "env.example");
+
 /** Persisted state JSON written by `init` and read by other commands. */
 export const STATE_FILE = path.join(ROOT, "state.json");
 
