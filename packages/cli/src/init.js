@@ -1,4 +1,4 @@
-import { select, checkbox, confirm, password, input } from "@inquirer/prompts";
+import { select, checkbox, confirm } from "@inquirer/prompts";
 import pc from "picocolors";
 import { log, banner, spinner } from "./log.js";
 import { dockerHealthy, which } from "./system.js";
@@ -12,92 +12,12 @@ import {
   CLIENT_LABELS,
 } from "./clients.js";
 import { installLauncher } from "./launcher.js";
+import { pickProvider, collectProviderConfig, promptSystemPassword } from "./prompts.js";
 
 const FLOWS = {
   agent: "Add to my coding agent (Claude Code, Cursor, Windsurf, Claude Desktop)",
   index: "Run my own index — pick a provider, attach an API key, get a dashboard",
 };
-
-async function pickProvider() {
-  const choices = Object.entries(EMBEDDING_PROFILES).map(([value, p]) => ({
-    value,
-    name: p.label,
-    disabled: p.available ? false : pc.dim("(coming soon)"),
-  }));
-
-  return select({
-    message: "Which embeddings provider?",
-    choices,
-    default: "local_balanced",
-  });
-}
-
-/**
- * Collect provider-specific config (API key, optional HF_TOKEN, model name)
- * via prompts. Returns an env-var object that gets merged into the .env
- * file. Order of prompts: required key → optional key → model picker.
- */
-async function collectProviderConfig(profile) {
-  const env = {};
-
-  // Required key (Gemini, OpenAI).
-  if (profile.keyEnvVar) {
-    const key = await password({
-      message: `Paste your ${profile.keyEnvVar}: ${pc.dim("(get one at " + profile.keyHint + ")")}`,
-      mask: "•",
-      validate: (v) => (v && v.trim().length > 8 ? true : "That doesn't look like a real key."),
-    });
-    env[profile.keyEnvVar] = key.trim();
-  }
-
-  // Optional key (HF_TOKEN for the local provider — only needed for gated
-  // models). Empty input skips the var entirely.
-  if (profile.optionalKeyEnvVar) {
-    const key = await password({
-      message:
-        `${profile.optionalKeyEnvVar} ${pc.dim("(optional — " + profile.optionalKeyReason + "; get one at " + profile.optionalKeyHint + ")")}\n  ` +
-        pc.dim("Press enter to skip"),
-      mask: "•",
-    });
-    if (key.trim()) {
-      env[profile.optionalKeyEnvVar] = key.trim();
-    }
-  }
-
-  // Model picker. Confirm-default → either keep the suggestion or type a
-  // custom model id. We split this in two steps (vs a single input with a
-  // pre-filled default) so the choice is explicit and the suggested model
-  // is shown without requiring the user to delete it.
-  if (profile.promptModel) {
-    const useDefault = await confirm({
-      message: `Use the default model? ${pc.dim("(" + profile.defaultModel + ")")}`,
-      default: true,
-    });
-    if (useDefault) {
-      env.EMBEDDING_MODEL = profile.defaultModel;
-    } else {
-      const model = await input({
-        message: `Enter the model id ${pc.dim("(" + profile.modelHint + ")")}`,
-        validate: (v) =>
-          v && v.trim().includes("/")
-            ? true
-            : "Use the form `org/repo` (e.g. BAAI/bge-base-en-v1.5).",
-      });
-      env.EMBEDDING_MODEL = model.trim();
-    }
-  }
-
-  return env;
-}
-
-async function promptSystemPassword() {
-  const pw = await password({
-    message: `Set a dashboard password ${pc.dim("(used to log in at http://localhost:3000 and to bootstrap the API key)")}`,
-    mask: "•",
-    validate: (v) => (v && v.length >= 8 ? true : "At least 8 characters."),
-  });
-  return pw;
-}
 
 export async function runInit({ force = false } = {}) {
   banner();

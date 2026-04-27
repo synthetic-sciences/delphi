@@ -1,5 +1,7 @@
 import pc from "picocolors";
 import { runInit } from "./init.js";
+import { runConfig } from "./config.js";
+import { runReload } from "./reload.js";
 import { runStart, runStop, runStatus, runLogs, runOpen, runUninstall } from "./lifecycle.js";
 import { loadState } from "./env.js";
 
@@ -12,6 +14,8 @@ Usage
 Commands
   (none)         Open the dashboard if installed; otherwise run init
   init           Set up Delphi: pick path, embeddings, configure clients
+  config         Edit provider, model, keys, or dashboard password
+  reload         Restart api + worker so they pick up .env changes
   open           Open the dashboard (starts the stack if it's not running)
   start          Start the Docker stack
   stop           Stop the Docker stack
@@ -58,6 +62,10 @@ export async function main(argv) {
   switch (cmd) {
     case "init":
       return runInit({ force: !!flags.force });
+    case "config":
+      return runConfig();
+    case "reload":
+      return runReload();
     case "open":
       return runOpen();
     case "start":
