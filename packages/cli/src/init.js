@@ -4,7 +4,7 @@ import { log, banner, spinner } from "./log.js";
 import { dockerHealthy, which } from "./system.js";
 import { ensureSource } from "./source.js";
 import { writeEnv, saveState, loadState, EMBEDDING_PROFILES } from "./env.js";
-import { composeUp } from "./docker.js";
+import { composePull, composeBuild, composeUp } from "./docker.js";
 import { waitForHealth, bootstrap, API_BASE } from "./health.js";
 import {
   detectInstalledClients,
@@ -169,24 +169,33 @@ export async function runInit({ force = false } = {}) {
   log.success("git is available");
 
   // Source + .env
-  log.step("Fetching source");
-  await ensureSource();
+  const sourceInfo = await spinner("fetching source", () => ensureSource());
+  if (sourceInfo.sha) {
+    log.dim(`  source @ ${sourceInfo.sha}${sourceInfo.stale ? " (offline — using cached checkout)" : ""}`);
+  }
 
-  log.step("Writing config");
-  const secrets = await writeEnv({ embeddingChoice, providerConfig, systemPassword });
-  log.success(`wrote ~/.synsci/delphi/source/.env`);
+  const secrets = await spinner("writing config", () =>
+    writeEnv({ embeddingChoice, providerConfig, systemPassword }),
+  );
 
   // Spin up. Agent-path users don't need the dashboard, so skip building the
   // frontend image entirely — saves ~150MB and lets the api/worker images
   // export without competing for the same Docker VM disk.
   const profiles = flow === "index" ? ["dashboard"] : [];
-  const startMsg =
-    flow === "index"
-      ? "Starting Docker stack (first run pulls images — a few minutes)"
-      : "Starting Docker stack — postgres, api, worker (skipping dashboard for agent-only setup)";
-  log.step(startMsg);
-  await composeUp({ build: true, profiles });
-  log.success("services started");
+
+  // Split the docker startup into named phases so the user can see exactly
+  // which step is slow. Each `compose` invocation is silent under a spinner;
+  // on failure the helper surfaces stderr in the thrown error.
+  log.step("Starting services");
+  await spinner("pulling base images (~200MB on first run)", () =>
+    composePull({ profiles, silent: true }),
+  );
+  await spinner("building images (api · worker" + (flow === "index" ? " · frontend" : "") + ")", () =>
+    composeBuild({ profiles, silent: true }),
+  );
+  await spinner("starting containers", () =>
+    composeUp({ build: false, profiles, silent: true }),
+  );
 
   // Health
   await spinner("waiting for the API to come online", () => waitForHealth());

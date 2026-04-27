@@ -1,11 +1,3 @@
 {
-  "mcpServers": {
-    "synsc-delphi": {
-      "type": "http",
-      "url": "http://localhost:8742/mcp",
-      "headers": {
-        "Authorization": "Bearer synsc_c7d7332ad220dbe61b0a2e9b004284b2e1925cf1d8910aa0"
-      }
-    }
-  }
+  "mcpServers": {}
 }

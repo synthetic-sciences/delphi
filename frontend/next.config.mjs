@@ -37,6 +37,8 @@ const nextConfig = {
         { source: '/auth/check', destination: `${apiUrl}/auth/check` },
         { source: '/auth/logout', destination: `${apiUrl}/auth/logout` },
         { source: '/auth/me', destination: `${apiUrl}/auth/me` },
+        // Magic-link auth (CLI `delphi open` lands here to set session cookie).
+        { source: '/auth/magic/:path*', destination: `${apiUrl}/auth/magic/:path*` },
         { source: '/v1/:path*', destination: `${apiUrl}/v1/:path*` },
       ],
     };
