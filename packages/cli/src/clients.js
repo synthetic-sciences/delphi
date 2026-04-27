@@ -10,7 +10,7 @@ const SERVER_NAME = "synsci-delphi";
 export function buildServerEntry(apiKey, apiUrl) {
   return {
     command: "uvx",
-    args: ["synsc-context-proxy"],
+    args: ["synsci-delphi-proxy"],
     env: {
       SYNSC_API_KEY: apiKey,
       SYNSC_API_URL: apiUrl,
@@ -69,7 +69,7 @@ async function installClaudeCode({ apiKey, apiUrl }) {
     SERVER_NAME,
     "-e", `SYNSC_API_KEY=${apiKey}`,
     "-e", `SYNSC_API_URL=${apiUrl}`,
-    "--", "uvx", "synsc-context-proxy",
+    "--", "uvx", "synsci-delphi-proxy",
   ];
   const { code, stderr } = await run("claude", args, { silent: true });
   if (code !== 0) {
