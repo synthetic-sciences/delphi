@@ -644,7 +644,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse, tags=["Info"])
     def health() -> HealthResponse:
-        """Health check endpoint."""
+        """Liveness probe — confirms the api process is responsive.
+
+        Intentionally shallow so docker's container healthcheck stays
+        cheap (it pings every 30s). Use /backend-health for the deep
+        readiness probe that validates DB / embeddings / MCP.
+        """
         return HealthResponse(
             status="healthy",
             version=__version__,
@@ -653,6 +658,78 @@ def create_app() -> FastAPI:
             database_backend="postgresql",
             vector_backend="pgvector",
             auth_backend="github_oauth+jwt",
+        )
+
+    @app.get("/backend-health", tags=["Info"])
+    def backend_health() -> JSONResponse:
+        """Deep readiness probe — validates every subsystem the dashboard
+        and MCP path actually depend on.
+
+        Returns 200 when all checks pass, 503 otherwise. Designed as a
+        cheap (~30–80ms) one-shot the CLI can call before launching the
+        browser, so a "warm path" decision doesn't end up opening a
+        dashboard whose api is fronting a dead database.
+
+        The shape is deliberately granular so callers can tell *what*
+        broke without parsing strings:
+            {
+              "ready": false,
+              "checks": {
+                "database":           {"ok": true},
+                "embedding_generator":{"ok": true, "loaded": false},
+                "mcp_session":        {"ok": true}
+              }
+            }
+        """
+        checks: dict[str, dict] = {}
+        ok = True
+
+        # 1. Database — single trivial query confirms the pool is alive
+        # and pgvector responses come from a real connection rather than
+        # SQLAlchemy's cached metadata.
+        try:
+            with get_session() as session:
+                session.execute(text("SELECT 1"))
+            checks["database"] = {"ok": True}
+        except Exception as e:
+            checks["database"] = {"ok": False, "error": str(e)[:200]}
+            ok = False
+
+        # 2. Embedding generator — lazy-loaded, so "not yet loaded" is
+        # not a failure. We only flag it down if the module import or
+        # accessor itself raises (which would mean the API can't even
+        # decide when to load it).
+        try:
+            from synsc.embeddings import generator as _gen_mod
+            checks["embedding_generator"] = {
+                "ok": True,
+                "loaded": _gen_mod._embedding_generator is not None,
+            }
+        except Exception as e:
+            checks["embedding_generator"] = {"ok": False, "error": str(e)[:200]}
+            ok = False
+
+        # 3. MCP streamable-HTTP session manager — set by the lifespan
+        # startup hook. If the api answered /health but never finished
+        # lifespan startup (rare), this stays False and the /mcp route
+        # will hang or 500 on first call.
+        try:
+            mgr = getattr(app, "_mcp_session_mgr", None)
+            if mgr is None:
+                checks["mcp_session"] = {"ok": False, "error": "session manager not attached"}
+                ok = False
+            else:
+                started = bool(getattr(mgr, "_has_started", False))
+                checks["mcp_session"] = {"ok": started}
+                if not started:
+                    ok = False
+        except Exception as e:
+            checks["mcp_session"] = {"ok": False, "error": str(e)[:200]}
+            ok = False
+
+        return JSONResponse(
+            content={"ready": ok, "checks": checks},
+            status_code=200 if ok else 503,
         )
 
     @app.get("/config", tags=["Info"])
@@ -829,6 +906,87 @@ def create_app() -> FastAPI:
             if user_id:
                 return {"authenticated": True, "user_id": user_id}
         return {"authenticated": False}
+
+    # ──────────────────────────────────────────────────────────────────
+    # Magic-link auth (backs `delphi open` zero-prompt dashboard launch).
+    #
+    # The CLI has SYSTEM_PASSWORD (it wrote .env at install time and can
+    # re-read it). To avoid leaking that password through the URL bar,
+    # browser history, terminal scrollback, screen recordings, etc., the
+    # CLI trades it for a short-lived single-use magic id, then opens
+    # `/auth/magic/<id>` in the user's browser. The id is consumed on
+    # first hit and cannot be replayed.
+    #
+    # In-memory storage is intentional: a magic link surviving an api
+    # restart is a longer-lived credential than we want, and the CLI
+    # always mints a fresh one on `delphi open` anyway.
+    _magic_links: dict[str, float] = {}
+    _MAGIC_TTL_SECONDS = 60.0
+
+    def _gc_magic_links() -> None:
+        now = time.time()
+        for mid, exp in list(_magic_links.items()):
+            if exp <= now:
+                _magic_links.pop(mid, None)
+
+    @app.post("/auth/magic/create", tags=["Auth"])
+    @limiter.limit(AUTH_LIMIT)
+    async def magic_create(request: Request, body: LoginRequest) -> dict:
+        """Issue a single-use magic link backed by SYSTEM_PASSWORD.
+
+        The CLI calls this with the dashboard password; the browser then
+        navigates to `/auth/magic/<id>`, which sets the session cookie
+        and redirects. The password never crosses the URL.
+        """
+        system_pw = os.getenv("SYSTEM_PASSWORD", "")
+        if not system_pw:
+            raise HTTPException(
+                status_code=501,
+                detail="SYSTEM_PASSWORD not configured.",
+            )
+        if not hmac.compare_digest(body.password, system_pw):
+            raise HTTPException(status_code=401, detail="Invalid password.")
+
+        _gc_magic_links()
+        # Cap the in-memory pool so a runaway caller can't OOM the api.
+        if len(_magic_links) > 100:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many pending magic links; try again in a minute.",
+            )
+
+        import secrets as _secrets
+
+        magic_id = _secrets.token_urlsafe(32)
+        _magic_links[magic_id] = time.time() + _MAGIC_TTL_SECONDS
+        return {"magic_id": magic_id, "ttl_seconds": int(_MAGIC_TTL_SECONDS)}
+
+    @app.get("/auth/magic/{magic_id}", tags=["Auth"])
+    async def magic_consume(magic_id: str) -> JSONResponse:
+        """Consume a magic link → session cookie → redirect to /overview.
+
+        The redirect target lives on the dashboard (port 3000). We send
+        an absolute `Location` header so the browser doesn't try to
+        resolve `/overview` against the api host (8742).
+        """
+        _gc_magic_links()
+        exp = _magic_links.pop(magic_id, None)
+        if exp is None or time.time() > exp:
+            raise HTTPException(
+                status_code=401,
+                detail="Magic link expired or already used.",
+            )
+
+        admin_id = _get_or_create_admin_user()
+        token = create_session_token(
+            user_id=str(admin_id), email="admin@localhost",
+        )
+        # Frontend host comes from FRONTEND_URL (set in .env to
+        # http://localhost:3000 by the installer).
+        frontend = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        response = RedirectResponse(url=f"{frontend}/overview", status_code=303)
+        _set_session_cookie(response, token)
+        return response
 
     class BootstrapRequest(BaseModel):
         password: str = Field(description="SYSTEM_PASSWORD value, used as a one-time bootstrap token")

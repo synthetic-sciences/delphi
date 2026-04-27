@@ -14,8 +14,12 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  // Show both auth methods immediately; config fetch can hide irrelevant ones
-  const [config, setConfig] = useState<ServerConfig>({ github_oauth_enabled: true, system_password_enabled: true });
+  // Default to OAuth-off until /config confirms it's wired up. Showing the
+  // GitHub button before the backend reports `github_oauth_enabled: true`
+  // means a self-hosted install without GITHUB_CLIENT_ID/SECRET briefly
+  // renders a button that 500s on click — confusing for the common
+  // password-only deployment.
+  const [config, setConfig] = useState<ServerConfig>({ github_oauth_enabled: false, system_password_enabled: true });
 
   // If already authenticated, redirect to overview
   useEffect(() => {

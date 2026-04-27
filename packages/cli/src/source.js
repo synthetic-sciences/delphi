@@ -18,40 +18,61 @@ async function exists(p) {
   }
 }
 
+/** Whether the configured REPO_URL points at a local checkout (file path or
+ *  `file://` URL). Local clones don't benefit from `--depth 1` and git emits
+ *  a noisy "warning: --depth is ignored in local clones" — skip the flag. */
+function isLocalRepo(url) {
+  return url.startsWith("file://") || url.startsWith("/") || url.startsWith("./") || url.startsWith("../");
+}
+
 /** Clone the Delphi repo into ~/.synsci/delphi/source, or hard-sync to the
  *  remote tip if it already exists. We use fetch + reset --hard rather than
  *  `pull --ff-only` because shallow clones can silently report "Already up
  *  to date" when in fact the local ref is just lagging — leaving the user
- *  on an older Dockerfile/source than they expect. */
+ *  on an older Dockerfile/source than they expect.
+ *
+ *  Returns `{ fresh, sha }` so callers can decide whether to surface the
+ *  resolved commit to the user. All git invocations are silent — wrap this
+ *  function in a spinner at the call site. */
 export async function ensureSource() {
   await fs.mkdir(ROOT, { recursive: true });
   const isClone = await exists(path.join(SOURCE_DIR, ".git"));
+  const local = isLocalRepo(REPO_URL);
 
   if (!isClone) {
-    log.info(`cloning ${REPO_URL} → ${SOURCE_DIR}`);
-    const args = ["clone", "--depth", "1"];
+    const args = ["clone"];
+    if (!local) args.push("--depth", "1");
     if (REPO_REF) args.push("--branch", REPO_REF);
     args.push(REPO_URL, SOURCE_DIR);
-    const { code } = await run("git", args);
-    if (code !== 0) throw new Error(`git clone failed (exit ${code})`);
-  } else {
-    log.info(`updating source in ${SOURCE_DIR}`);
-    const ref = REPO_REF || "HEAD";
-    const fetchArgs = ["fetch", "--depth", "1", "origin", ref];
-    let { code } = await run("git", fetchArgs, { cwd: SOURCE_DIR });
+    const { code, stderr } = await run("git", args, { silent: true });
     if (code !== 0) {
-      log.warn("git fetch failed — continuing with existing checkout");
-      return { fresh: false };
+      throw new Error(`git clone failed (exit ${code})\n${stderr.trim()}`);
     }
-    ({ code } = await run("git", ["reset", "--hard", "FETCH_HEAD"], { cwd: SOURCE_DIR }));
-    if (code !== 0) log.warn("git reset failed — continuing with existing checkout");
+  } else {
+    const ref = REPO_REF || "HEAD";
+    const fetchArgs = ["fetch"];
+    if (!local) fetchArgs.push("--depth", "1");
+    fetchArgs.push("origin", ref);
+    let { code } = await run("git", fetchArgs, { cwd: SOURCE_DIR, silent: true });
+    if (code !== 0) {
+      // Network unavailable or remote went away — keep the existing checkout
+      // rather than aborting the whole install.
+      const { stdout: existingSha } = await run(
+        "git", ["rev-parse", "--short", "HEAD"], { cwd: SOURCE_DIR, silent: true },
+      );
+      return { fresh: false, sha: existingSha.trim(), stale: true };
+    }
+    ({ code } = await run("git", ["reset", "--hard", "FETCH_HEAD"], { cwd: SOURCE_DIR, silent: true }));
+    if (code !== 0) {
+      const { stdout: existingSha } = await run(
+        "git", ["rev-parse", "--short", "HEAD"], { cwd: SOURCE_DIR, silent: true },
+      );
+      return { fresh: false, sha: existingSha.trim(), stale: true };
+    }
   }
 
-  // Surface the resolved commit so users (and bug reports) can confirm what
-  // was actually built, especially when a pull silently no-ops.
-  const { stdout } = await run("git", ["rev-parse", "--short", "HEAD"], { cwd: SOURCE_DIR, silent: true });
-  const sha = stdout.trim();
-  if (sha) log.dim(`  source @ ${sha}`);
-
-  return { fresh: !isClone };
+  const { stdout } = await run(
+    "git", ["rev-parse", "--short", "HEAD"], { cwd: SOURCE_DIR, silent: true },
+  );
+  return { fresh: !isClone, sha: stdout.trim(), stale: false };
 }
