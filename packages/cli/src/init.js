@@ -12,7 +12,7 @@ import {
   CLIENT_LABELS,
 } from "./clients.js";
 import { installLauncher } from "./launcher.js";
-import { pickProvider, collectProviderConfig, promptSystemPassword } from "./prompts.js";
+import { pickProvider, collectProviderConfig } from "./prompts.js";
 
 const FLOWS = {
   agent: "Add to my coding agent (Claude Code, Cursor, Windsurf, Claude Desktop)",
@@ -68,10 +68,12 @@ export async function runInit({ force = false } = {}) {
   const profile = EMBEDDING_PROFILES[embeddingChoice];
   const providerConfig = await collectProviderConfig(profile);
 
-  // ── DASHBOARD PASSWORD ────────────────────────────────────────────────
-  // Always prompt: it's used both as the dashboard login and as the
-  // bootstrap secret that mints the CLI's API key further down.
-  const systemPassword = await promptSystemPassword();
+  // SYSTEM_PASSWORD is auto-generated. Magic-link auth signs the user
+  // into the dashboard transparently via `delphi open`, and the CLI
+  // mints API keys via /api/bootstrap on its own — the user never has
+  // to type or remember a password. The auto-generated value still
+  // lands in .env so power users can grab it for cross-device login or
+  // change it later via `delphi config`.
 
   // Pre-flight checks
   log.step("Pre-flight checks");
@@ -95,7 +97,7 @@ export async function runInit({ force = false } = {}) {
   }
 
   const secrets = await spinner("writing config", () =>
-    writeEnv({ embeddingChoice, providerConfig, systemPassword }),
+    writeEnv({ embeddingChoice, providerConfig }),
   );
 
   // Spin up. Agent-path users don't need the dashboard, so skip building the
@@ -161,12 +163,12 @@ export async function runInit({ force = false } = {}) {
   log.raw(pc.bold(pc.green("All set.")));
   log.dim("───────────────────────────────────────────────");
   if (dashboardOn) {
-    log.raw(`  Dashboard:       ${pc.cyan("http://localhost:3000")}`);
+    log.raw(`  Dashboard:       ${pc.cyan("http://localhost:3000")}  ${pc.dim("(auto-signs you in via `delphi open`)")}`);
   }
   log.raw(`  API:             ${pc.cyan(API_BASE)}`);
   log.raw(`  API key:         ${pc.cyan(minted.api_key)}  ${pc.dim("(saved into MCP configs)")}`);
   if (dashboardOn) {
-    log.raw(`  Dashboard login: ${pc.dim("the password you just set")}`);
+    log.raw(`  Password:        ${pc.cyan(secrets.systemPassword)}  ${pc.dim("(only needed for cross-device login)")}`);
   }
   log.raw(`  Embeddings:      ${pc.cyan(EMBEDDING_PROFILES[embeddingChoice].label)}`);
   if (providerConfig.EMBEDDING_MODEL) {

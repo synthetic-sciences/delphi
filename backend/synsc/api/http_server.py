@@ -661,7 +661,7 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/backend-health", tags=["Info"])
-    def backend_health() -> JSONResponse:
+    def backend_health(probe: str | None = None) -> JSONResponse:
         """Deep readiness probe — validates every subsystem the dashboard
         and MCP path actually depend on.
 
@@ -680,6 +680,13 @@ def create_app() -> FastAPI:
                 "mcp_session":        {"ok": true}
               }
             }
+
+        Pass `?probe=embeddings` to force a real embed_query("ping")
+        round-trip — much slower (cold model load can take 30s+) but
+        catches bad model ids, bad API keys, dimension mismatches that
+        only surface on the first actual inference. Used by `delphi
+        config` to validate a new provider/model/key combo *before*
+        committing the .env change.
         """
         checks: dict[str, dict] = {}
         ok = True
@@ -726,6 +733,32 @@ def create_app() -> FastAPI:
         except Exception as e:
             checks["mcp_session"] = {"ok": False, "error": str(e)[:200]}
             ok = False
+
+        # 4. (Opt-in) End-to-end embedding probe. Slow on cold load but
+        # the only check that catches "bad model id", "bad API key",
+        # "dimension mismatch" — failures that don't surface until the
+        # first real embed call.
+        if probe == "embeddings":
+            try:
+                from synsc.embeddings.generator import get_embedding_generator
+                gen = get_embedding_generator()
+                vec = gen.embed_query("ping")
+                # Both numpy arrays and lists expose len(). Cast for safety.
+                dim = int(getattr(vec, "shape", [None])[0] or len(vec))
+                checks["embedding_call"] = {
+                    "ok": True,
+                    "dimension": dim,
+                    "provider": os.getenv("EMBEDDING_PROVIDER", "local"),
+                    "model": os.getenv("EMBEDDING_MODEL", ""),
+                }
+            except Exception as e:
+                checks["embedding_call"] = {
+                    "ok": False,
+                    "error": str(e)[:500],
+                    "provider": os.getenv("EMBEDDING_PROVIDER", "local"),
+                    "model": os.getenv("EMBEDDING_MODEL", ""),
+                }
+                ok = False
 
         return JSONResponse(
             content={"ready": ok, "checks": checks},

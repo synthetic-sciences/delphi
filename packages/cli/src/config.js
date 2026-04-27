@@ -1,11 +1,30 @@
+import fs from "node:fs/promises";
 import { confirm } from "@inquirer/prompts";
 import pc from "picocolors";
 import { log, banner, spinner } from "./log.js";
 import { loadDotenv } from "./dotenv.js";
 import { applyConfig, EMBEDDING_PROFILES, loadState } from "./env.js";
-import { composeRestart } from "./docker.js";
-import { waitForHealth } from "./health.js";
+import { ENV_FILE } from "./paths.js";
+import { runReload } from "./reload.js";
+import { API_BASE } from "./health.js";
 import { pickProvider, collectProviderConfig, promptSystemPassword } from "./prompts.js";
+
+const ENV_BACKUP = `${ENV_FILE}.bak`;
+// Cold model loads (a fresh HF download, sentence-transformers init) can
+// take a while. Bound the probe so a hung restart doesn't lock the CLI
+// forever; treat anything over this as a failed config and roll back.
+const PROBE_TIMEOUT_MS = 90_000;
+
+/** GET /backend-health?probe=embeddings — runs a real embed_query("ping")
+ *  end-to-end. Returns the parsed JSON or throws on network/timeout. */
+async function probeEmbeddings() {
+  const resp = await fetch(`${API_BASE}/backend-health?probe=embeddings`, {
+    signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+  });
+  // We accept both 200 (ready) and 503 (not ready, payload still has the
+  // failing check) — the JSON body is what we care about.
+  return resp.json();
+}
 
 const SECRET_KEYS = new Set([
   "SERVER_SECRET",
@@ -113,11 +132,49 @@ export async function runConfig() {
     return;
   }
 
-  // ── WRITE + RESTART ─────────────────────────────────────────────────
-  await spinner("writing config", () => applyConfig(updates));
-  await spinner("restarting services", () =>
-    composeRestart({ services: ["api", "worker"], silent: true }),
+  // ── TRANSACTIONAL APPLY ─────────────────────────────────────────────
+  // 1. Snapshot the current .env so we can roll back if the new config
+  //    fails an end-to-end embed probe.
+  // 2. Write the new .env.
+  // 3. Restart api+worker (delegates to runReload).
+  // 4. Run /backend-health?probe=embeddings — actual embed_query call.
+  // 5. On success: drop the backup, declare success.
+  //    On failure: restore .env from backup, restart again, surface
+  //    the provider's error so the user can fix and retry.
+  await spinner("backing up current config", () =>
+    fs.copyFile(ENV_FILE, ENV_BACKUP),
   );
-  await spinner("waiting for API", () => waitForHealth());
+  await spinner("writing config", () => applyConfig(updates));
+  await runReload({ quiet: true });
+
+  let probeResult;
+  try {
+    probeResult = await spinner("validating new config (cold model load can take ~30s)", () =>
+      probeEmbeddings(),
+    );
+  } catch (e) {
+    probeResult = { ready: false, checks: { embedding_call: { ok: false, error: e.message } } };
+  }
+
+  const probeFailed =
+    !probeResult ||
+    probeResult.ready === false ||
+    !probeResult.checks?.embedding_call?.ok;
+
+  if (probeFailed) {
+    const detail = probeResult?.checks?.embedding_call?.error || "unknown error";
+    log.error(`new config failed validation: ${detail}`);
+    log.warn("rolling back to previous config…");
+    await spinner("restoring previous .env", () =>
+      fs.rename(ENV_BACKUP, ENV_FILE),
+    );
+    await runReload({ quiet: true });
+    log.error("rollback complete. .env unchanged from before this run.");
+    log.dim("  Re-run `delphi config` after fixing the issue (bad key, model id, network, …).");
+    process.exit(1);
+  }
+
+  // Probe succeeded — keep the new .env, drop the backup.
+  await fs.rm(ENV_BACKUP, { force: true });
   log.success("config updated");
 }
