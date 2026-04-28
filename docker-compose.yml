@@ -32,7 +32,7 @@ services:
       SYNSC_LOG_FORMAT: json
       FRONTEND_URL: http://localhost:3000
     ports:
-      - "8742:8742"
+      - "${SYNSC_API_HOST_PORT:-8742}:8742"
     volumes:
       # Shared HuggingFace Hub cache. Without it, api and worker each
       # download Qwen3-Embedding-0.6B (~1.2 GB) on first boot, and
@@ -73,7 +73,7 @@ services:
       # Browser-facing URL (baked into the client bundle for direct fetches).
       NEXT_PUBLIC_API_URL: http://localhost:8742
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
 
 volumes:
   pgdata:

@@ -63,6 +63,58 @@ export async function dockerHealthy() {
   return { ok: false, reason: cleaned || "docker daemon not responding" };
 }
 
+/**
+ * Find the path Docker uses for image / volume storage so we can
+ * `df` against the right filesystem. Falls back to common defaults
+ * if `docker info` doesn't surface it.
+ */
+async function dockerDataRoot() {
+  const { code, stdout } = await run(
+    "docker", ["info", "--format", "{{.DockerRootDir}}"], { silent: true },
+  );
+  if (code === 0 && stdout.trim()) return stdout.trim();
+  return process.platform === "darwin" ? "/" : "/var/lib/docker";
+}
+
+/**
+ * Pre-flight disk-space check. Image build needs ~12 GB (api ≈ 5 GB,
+ * worker ≈ 5 GB, frontend ≈ 1 GB, base layers ≈ 1 GB) plus overhead
+ * for the model cache and pgdata growth. We require 15 GB free as a
+ * comfortable margin; warn at 25 GB free; below 8 GB we hard-fail
+ * because the build will partway-OOM ENOSPC with a cryptic error.
+ *
+ * Returns `{ availGb, recommendedGb, ok, warn }`.
+ */
+export async function checkDiskSpace({
+  recommendedGb = 25,
+  hardFloorGb = 8,
+} = {}) {
+  const root = await dockerDataRoot();
+  // -P forces POSIX format (consistent across mac BSD df + GNU df).
+  // -k forces 1024-byte blocks so the parse is unambiguous.
+  const { code, stdout } = await run("df", ["-Pk", root], { silent: true });
+  if (code !== 0) {
+    // df itself failed — don't block the install on a missing tool.
+    return { availGb: null, recommendedGb, ok: true, warn: false };
+  }
+  const lines = stdout.trim().split("\n").filter(Boolean);
+  const last = lines[lines.length - 1];
+  const fields = last.split(/\s+/);
+  // POSIX df row: Filesystem 1024-blocks Used Available Capacity Mounted
+  const availKb = parseInt(fields[3], 10);
+  if (!Number.isFinite(availKb)) {
+    return { availGb: null, recommendedGb, ok: true, warn: false };
+  }
+  const availGb = availKb / (1024 * 1024);
+  return {
+    availGb,
+    recommendedGb,
+    ok: availGb >= hardFloorGb,
+    warn: availGb < recommendedGb,
+    root,
+  };
+}
+
 /** Probe `docker compose` (v2) and fall back to `docker-compose` (v1). */
 export async function dockerComposeCmd() {
   const { code: v2 } = await run("docker", ["compose", "version"], { silent: true });
