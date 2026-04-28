@@ -1,7 +1,7 @@
 import { select, checkbox, confirm } from "@inquirer/prompts";
 import pc from "picocolors";
 import { log, banner, spinner } from "./log.js";
-import { dockerHealthy, which, detectGpu } from "./system.js";
+import { dockerHealthy, which, detectGpu, checkDiskSpace } from "./system.js";
 import { ensureSource } from "./source.js";
 import { writeEnv, saveState, loadState, EMBEDDING_PROFILES } from "./env.js";
 import { composePull, composeBuild, composeUp } from "./docker.js";
@@ -13,6 +13,7 @@ import {
 } from "./clients.js";
 import { installLauncher } from "./launcher.js";
 import { pickProvider, collectProviderConfig, pickDevice } from "./prompts.js";
+import { discoverPorts } from "./ports.js";
 
 const FLOWS = {
   agent: "Add to my coding agent (Claude Code, Cursor, Windsurf, Claude Desktop)",
@@ -117,6 +118,69 @@ export async function runInit({ force = false } = {}) {
     process.exit(1);
   }
   log.success("git is available");
+
+  // Disk space — image build is ~12 GB plus model cache + pgdata
+  // headroom. Catching ENOSPC here is much friendlier than letting
+  // BuildKit fail mid-layer-export with a ~3-line cryptic error.
+  const disk = await checkDiskSpace();
+  if (disk.availGb !== null) {
+    if (!disk.ok) {
+      log.error(
+        `Only ${disk.availGb.toFixed(1)} GB free at ${disk.root || "docker root"}. ` +
+        `Image build needs at least 8 GB to complete; ${disk.recommendedGb} GB recommended.`,
+      );
+      log.dim("  Reclaim space and retry:");
+      log.dim("    docker system prune -a --volumes");
+      process.exit(1);
+    } else if (disk.warn) {
+      log.warn(
+        `Only ${disk.availGb.toFixed(1)} GB free at ${disk.root || "docker root"} ` +
+        `(${disk.recommendedGb} GB recommended). Build may complete but leave ` +
+        `little headroom for the model cache.`,
+      );
+    } else {
+      log.success(`disk: ${disk.availGb.toFixed(1)} GB free`);
+    }
+  }
+
+  // Port collisions — scan 3000 (frontend), 5432 (postgres), 8742 (api).
+  // Frontend + postgres can fall back to a higher port (we write the
+  // chosen value to .env so docker-compose picks it up via env-var).
+  // API is special: NEXT_PUBLIC_API_URL is build-time baked into the
+  // frontend bundle, so shifting the api host port would silently
+  // break browser-side direct fetches. If 8742 is taken we error out
+  // with the lsof-style hint instead of guessing.
+  const ports = await discoverPorts();
+  for (const p of [ports.frontend, ports.api, ports.postgres]) {
+    if (p.requested === p.chosen) {
+      log.success(`port ${p.requested} (${p.name}) free`);
+    } else if (p.chosen) {
+      log.warn(
+        `port ${p.requested} held by ${p.holder || "another process"}; ` +
+        `using ${pc.cyan(p.chosen)} for ${p.name} instead.`,
+      );
+    } else {
+      log.error(
+        `port ${p.requested} held by ${p.holder || "another process"} and ` +
+        `no fallback available.`,
+      );
+      log.dim(`  Free up port ${p.requested} (e.g. 'lsof -i :${p.requested}' to find PID, then kill) and retry.`);
+      process.exit(1);
+    }
+  }
+  // Hard-fail on api port shift — see comment above.
+  if (ports.api.chosen !== ports.api.requested) {
+    log.error(
+      `Port 8742 is held by ${ports.api.holder || "another process"}. ` +
+      `The frontend's browser bundle is built with localhost:8742 baked in, ` +
+      `so we can't auto-fall-back to a different port without rebuilding.`,
+    );
+    log.dim("  Free up 8742 (lsof -i :8742) and retry.");
+    process.exit(1);
+  }
+  // Stash the discovered ports so writeEnv can persist them in .env.
+  providerConfig.FRONTEND_PORT = String(ports.frontend.chosen);
+  providerConfig.POSTGRES_PORT = String(ports.postgres.chosen);
 
   // Source + .env
   const sourceInfo = await spinner("fetching source", () => ensureSource());
@@ -225,13 +289,18 @@ export async function runInit({ force = false } = {}) {
   log.raw(pc.bold(pc.green("All set.")));
   log.dim("───────────────────────────────────────────────");
   if (dashboardOn) {
-    log.raw(`  Dashboard:       ${pc.cyan("http://localhost:3000")}  ${pc.dim("(auto-signs you in via `delphi open`)")}`);
+    const dashUrl = `http://localhost:${ports.frontend.chosen}`;
+    log.raw(`  Dashboard:       ${pc.cyan(dashUrl)}  ${pc.dim("(auto-signs you in via `delphi open`)")}`);
   }
   log.raw(`  API:             ${pc.cyan(API_BASE)}`);
   log.raw(`  API key:         ${pc.cyan(minted.api_key)}  ${pc.dim("(saved into MCP configs)")}`);
-  if (dashboardOn) {
-    log.raw(`  Password:        ${pc.cyan(secrets.systemPassword)}  ${pc.dim("(only needed for cross-device login)")}`);
-  }
+  // Always show. Even agent-flow users may run `delphi open` later;
+  // they'll need the password if they ever log in from a different
+  // device (phone, second laptop, no CLI to mint a magic link).
+  const passwordHint = dashboardOn
+    ? "(only needed for cross-device login; `delphi open` auto-signs you in here)"
+    : "(stored in .env; only needed if you log into the dashboard from another device)";
+  log.raw(`  Password:        ${pc.cyan(secrets.systemPassword)}  ${pc.dim(passwordHint)}`);
   log.raw(`  Embeddings:      ${pc.cyan(EMBEDDING_PROFILES[embeddingChoice].label)}`);
   if (providerConfig.EMBEDDING_MODEL) {
     log.raw(`  Model:           ${pc.cyan(providerConfig.EMBEDDING_MODEL)}`);

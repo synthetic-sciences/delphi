@@ -11,7 +11,19 @@ import { ENV_FILE, ROOT } from "./paths.js";
 import { run } from "./system.js";
 import { waitForHealth, API_BASE } from "./health.js";
 
-const DASHBOARD_URL = "http://localhost:3000";
+/** Read the frontend host port out of .env. Defaults to 3000 when
+ *  unset (older installs predating port-discovery; existing user
+ *  hand-edits). */
+async function dashboardUrl() {
+  try {
+    const text = await fs.readFile(ENV_FILE, "utf-8");
+    const m = text.match(/^FRONTEND_PORT=(.+)$/m);
+    const port = m ? m[1].trim() : "3000";
+    return `http://localhost:${port}`;
+  } catch {
+    return "http://localhost:3000";
+  }
+}
 
 async function readSystemPassword() {
   const text = await fs.readFile(ENV_FILE, "utf-8");
@@ -39,7 +51,7 @@ async function mintMagicLink() {
     throw new Error(`magic-link mint failed (${resp.status}): ${detail.slice(0, 200)}`);
   }
   const data = await resp.json();
-  return `${DASHBOARD_URL}/auth/magic/${data.magic_id}`;
+  return `${await dashboardUrl()}/auth/magic/${data.magic_id}`;
 }
 
 function browserOpener() {
@@ -221,7 +233,7 @@ export async function runOpen() {
     magicUrl = await mintMagicLink();
   } catch (e) {
     log.warn(`auto-sign-in unavailable: ${e.message}`);
-    log.dim(`  open ${pc.cyan(DASHBOARD_URL)} manually and use the password you set at install time.`);
+    log.dim(`  open ${pc.cyan(await dashboardUrl())} manually and use the password you set at install time.`);
     return;
   }
   openInBrowser(magicUrl);
