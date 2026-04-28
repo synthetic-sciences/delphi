@@ -38,9 +38,10 @@ export async function runInit({ force = false } = {}) {
 
   // Pre-flight runs BEFORE any setup prompt so a bad environment doesn't
   // wipe out provider/key/GPU input on retry. Reuse-path above returns
-  // early without touching Docker, so it remains exempt. Disk + port
-  // discovery rely on `docker info` / lsof — both cheap, both safe to
-  // run upfront here.
+  // early without touching Docker, so it remains exempt. Docker health
+  // uses `docker info`; port discovery uses a cheap TCP bind probe
+  // (`lsof`/`ss` are best-effort holder lookup only, ENOENT falls back
+  // silently — minimal distros without those tools still work).
   log.step("Pre-flight checks");
   const docker = await dockerHealthy();
   if (!docker.ok) {
