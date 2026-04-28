@@ -5,7 +5,10 @@ import { spawn } from "node:child_process";
 import { log, banner, spinner } from "./log.js";
 import { composePull, composeBuild, composeUp, composeDown, composeStatus, composeLogs } from "./docker.js";
 import { loadState } from "./env.js";
-import { ENV_FILE } from "./paths.js";
+import path from "node:path";
+import os from "node:os";
+import { ENV_FILE, ROOT } from "./paths.js";
+import { run } from "./system.js";
 import { waitForHealth, API_BASE } from "./health.js";
 
 const DASHBOARD_URL = "http://localhost:3000";
@@ -233,14 +236,111 @@ export async function runOpen() {
   });
 }
 
+/** Best-effort `rm -rf` that swallows ENOENT — uninstall should be
+ *  idempotent even if a previous partial uninstall already removed the
+ *  target. Anything else (perms, EBUSY) re-raises so the user sees it. */
+async function rmIfExists(p) {
+  try {
+    await fs.rm(p, { recursive: true, force: true });
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
+  }
+}
+
 export async function runUninstall() {
-  const state = await ensureInstalled();
-  log.warn("This will tear down containers AND delete the local Delphi data volume.");
+  // Don't gate on ensureInstalled. Half-finished installs (compose
+  // failed mid-way, no state.json was ever written) leave behind
+  // orphan containers + volumes that uninstall must still clean up.
+  // We treat anything we can find — source dir, named volumes,
+  // built images, MCP entries — as a target.
+  const state = (await loadState()) || {};
+
+  const launcherCandidates = [
+    path.join(os.homedir(), ".local", "bin", "delphi"),
+    "/usr/local/bin/delphi",
+  ];
+  const installDir = ROOT;
+  const sourceExists = await fs
+    .access(path.join(installDir, "source", "docker-compose.yml"))
+    .then(() => true)
+    .catch(() => false);
+
+  console.log();
+  log.warn(pc.bold("This permanently removes ALL Delphi state on this machine."));
+  log.dim("  Containers + volumes (pgdata + hf-cache) + network");
+  log.dim("  Built images: source-api, source-worker, source-frontend");
+  log.dim(`  Install dir: ${installDir}`);
+  log.dim(`  Launcher symlink: ${launcherCandidates.join(" or ")}`);
+  log.dim("  Claude Code MCP registration (synsci-delphi)");
+  console.log();
+
   const { confirm } = await import("@inquirer/prompts");
   const ok = await confirm({ message: "Continue?", default: false });
-  if (!ok) return;
-  await spinner("removing Delphi", () =>
-    composeDown({ removeVolumes: true, profiles: state.profiles || [], silent: true, withGpu: !!state.useGpu }),
-  );
-  log.dim("source dir kept at ~/.synsci/delphi/source");
+  if (!ok) {
+    log.info("Cancelled. Nothing removed.");
+    return;
+  }
+
+  // 1. Containers + volumes + network. compose down -v needs the source
+  // dir's docker-compose.yml to know what to clean up. If the user
+  // half-completed an install (Aayam's case — pgdata volume created,
+  // install bailed at composeUp before writing state.json) we still
+  // want to run this. If the source dir is gone too, fall through to
+  // the explicit `docker volume rm` / `docker rm` step below.
+  if (sourceExists) {
+    await spinner("tearing down containers + volumes", () =>
+      composeDown({
+        removeVolumes: true,
+        profiles: ["dashboard"],     // catch frontend even if state.profiles dropped it
+        silent: true,
+        withGpu: !!state.useGpu,
+      }),
+    );
+  }
+
+  // 1b. Belt + suspenders for orphan resources that compose can miss
+  // (e.g. half-created project from a prior failed install whose
+  // compose file disappeared, leaving named resources behind). All
+  // best-effort — `docker rm` errors when the target's already gone.
+  await spinner("removing orphan containers + volumes", async () => {
+    await run("docker", [
+      "rm", "-f",
+      "source-api-1", "source-worker-1", "source-frontend-1", "source-postgres-1",
+    ], { silent: true });
+    await run("docker", [
+      "volume", "rm", "source_pgdata", "source_hf-cache",
+    ], { silent: true });
+    await run("docker", ["network", "rm", "source_default"], { silent: true });
+  });
+
+  // 2. Built images. Skipping these would leave ~12 GB of stale image
+  // data on the user's disk after they thought they uninstalled.
+  // Failures are non-fatal — image may already be gone, name may not
+  // match if compose project was named differently.
+  await spinner("removing built images", async () => {
+    const images = ["source-api", "source-worker", "source-frontend"];
+    await run("docker", ["rmi", "-f", ...images], { silent: true });
+  });
+
+  // 3. Install dir (source clone + state.json + bin/delphi script).
+  await spinner("removing install dir", () => rmIfExists(installDir));
+
+  // 4. Launcher symlinks. Both candidates if present.
+  await spinner("removing launcher", async () => {
+    for (const launcher of launcherCandidates) {
+      await rmIfExists(launcher);
+    }
+  });
+
+  // 5. Claude Code MCP entry. Best-effort — `claude` may not be on
+  // PATH (user uninstalled CC) or the entry may already be gone.
+  await spinner("removing Claude Code MCP entry", async () => {
+    await run("claude", ["mcp", "remove", "synsci-delphi", "--scope", "user"], { silent: true });
+    await run("claude", ["mcp", "remove", "synsci-delphi", "--scope", "project"], { silent: true });
+  });
+
+  console.log();
+  log.success("Delphi removed.");
+  log.dim("  HuggingFace model cache and pgvector data are gone.");
+  log.dim("  Run `npx @synsci/delphi` to install fresh.");
 }
