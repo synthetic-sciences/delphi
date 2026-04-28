@@ -151,6 +151,38 @@ export async function runInit({ force = false } = {}) {
   // Health
   await spinner("waiting for the API to come online", () => waitForHealth());
 
+  // Pre-warm the embedding model. Without this, the user's first
+  // index_repository or search call blocks for ~1-2 minutes while
+  // sentence-transformers pulls Qwen3 (1.2 GB) or jina (440 MB) from
+  // the Hub. Doing the download here means the container is fully
+  // ready by the time the user triggers anything from Claude Code.
+  // For hosted providers (Gemini / OpenAI) the probe validates the
+  // API key end-to-end — failure surfaces immediately, not on first
+  // search.
+  try {
+    const probeLabel =
+      profile.kind === "local"
+        ? "warming embedding model (downloads weights on first run, ~1-2 min)"
+        : "verifying provider credentials";
+    await spinner(probeLabel, async () => {
+      const resp = await fetch(`${API_BASE}/backend-health?probe=embeddings`, {
+        signal: AbortSignal.timeout(300_000),
+      });
+      const data = await resp.json();
+      const callOk = data?.checks?.embedding_call?.ok;
+      if (!callOk) {
+        const err = data?.checks?.embedding_call?.error || "embedding probe failed";
+        throw new Error(err);
+      }
+    });
+  } catch (e) {
+    // Non-fatal — install can continue; user can fix via `delphi config`.
+    // The MCP wiring + dashboard are independent of the model being
+    // ready, so we don't want a probe miss to roll back the whole install.
+    log.warn(`embedding probe failed: ${e.message.slice(0, 200)}`);
+    log.dim("  Install will continue. Run `delphi config` after fixing the underlying issue (bad API key, network, etc.).");
+  }
+
   // Bootstrap
   log.step("Minting an API key");
   const minted = await bootstrap({ password: secrets.systemPassword });

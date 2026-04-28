@@ -25,9 +25,15 @@ function profileFlags(profiles = []) {
   return out;
 }
 
-export async function composeUp({ services = [], build = false, profiles = [], silent = false, withGpu = false } = {}) {
+export async function composeUp({ services = [], build = false, profiles = [], silent = false, withGpu = false, forceRecreate = false } = {}) {
   const args = [...fileFlags(withGpu), ...profileFlags(profiles), "up", "-d"];
   if (build) args.push("--build");
+  // `--force-recreate` makes compose tear down + bring up the named
+  // services even when only docker-compose-level config (e.g. resource
+  // reservations) changed. Plain `restart` keeps the existing container
+  // image so a new GPU reservation wouldn't take effect — we use this
+  // path when `delphi config` flips useGpu.
+  if (forceRecreate) args.push("--force-recreate");
   args.push(...services);
   // When silent, swallow the BuildKit / progress noise so the launcher can
   // wrap the call in a spinner. On failure, surface stderr so the user has
