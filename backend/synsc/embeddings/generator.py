@@ -80,10 +80,28 @@ class EmbeddingGenerator:
             except Exception:
                 pass
 
+        # Pick a load-time dtype.
+        # CUDA: float16 by default — halves model VRAM (Qwen3-0.6B drops
+        # from ~2.2 GB FP32 to ~1.2 GB FP16, leaving room for activations
+        # on a 4 GB card alongside the worker container's own copy).
+        # Quality loss is negligible for retrieval embeddings; the
+        # downstream cosine similarity is robust to fp16 noise.
+        # CPU/MPS: stay at fp32 — fp16 on CPU is slower (no native
+        # half-precision intrinsics on x86), and MPS fp16 still has
+        # correctness gaps on some operators.
+        # Override via EMBEDDING_DTYPE=fp32|fp16|bf16 for users with
+        # different VRAM/quality trade-offs.
+        dtype_name = (os.getenv("EMBEDDING_DTYPE") or "").strip().lower()
+        if not dtype_name:
+            dtype_name = "fp16" if self.device == "cuda" else "fp32"
+        dtype_map = {"fp32": "float32", "fp16": "float16", "bf16": "bfloat16"}
+        torch_dtype = dtype_map.get(dtype_name, "float32")
+
         logger.info(
-            "Loading sentence-transformers model: %s on %s",
+            "Loading sentence-transformers model: %s on %s (dtype=%s)",
             self.model_name,
             self.device,
+            torch_dtype,
         )
         # trust_remote_code needed for models like jina-embeddings-v2-base-code.
         # truncate_dim applies Matryoshka-style slicing: when a model's native
@@ -94,11 +112,13 @@ class EmbeddingGenerator:
         # Models without MRL training will still slice cleanly but lose
         # representation quality; the model picker hint already steers users
         # toward MRL-aware or 768-native models.
+        model_kwargs = {"torch_dtype": torch_dtype} if torch_dtype != "float32" else {}
         self.model = SentenceTransformer(
             self.model_name,
             device=self.device,
             trust_remote_code=True,
             truncate_dim=self.dimension,
+            model_kwargs=model_kwargs,
         )
 
         # Verify dimension matches DB schema (vector(768) in setup_local.sql)

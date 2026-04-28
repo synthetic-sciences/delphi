@@ -33,6 +33,13 @@ services:
       FRONTEND_URL: http://localhost:3000
     ports:
       - "8742:8742"
+    volumes:
+      # Shared HuggingFace Hub cache. Without it, api and worker each
+      # download Qwen3-Embedding-0.6B (~1.2 GB) on first boot, and
+      # `delphi config` force-recreates re-download the lot. The named
+      # volume survives `compose restart` and `compose down`; only
+      # `compose down -v` (`delphi uninstall`) clears it.
+      - hf-cache:/home/synsc/.cache/huggingface
 
   worker:
     build:
@@ -47,6 +54,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-synsc}:${POSTGRES_PASSWORD:-synsc}@postgres:5432/${POSTGRES_DB:-synsc}
       SYNSC_LOG_FORMAT: json
       SYNSC_WORKER_THREADS: "4"
+    volumes:
+      - hf-cache:/home/synsc/.cache/huggingface
 
   # Dashboard UI. Only needed for the "run my own index" flow; agent-path
   # users (Claude Code/Cursor/etc.) just talk to the API via the MCP proxy.
@@ -68,3 +77,4 @@ services:
 
 volumes:
   pgdata:
+  hf-cache:

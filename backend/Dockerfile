@@ -80,7 +80,7 @@ WORKDIR /app
 # duplicate the layer's inodes and was hitting ENOSPC on tight Docker VMs.
 COPY --from=build --chown=synsc:synsc /app /app
 
-RUN mkdir -p /tmp/synsc-context /home/synsc/.cache \
+RUN mkdir -p /tmp/synsc-context /home/synsc/.cache/huggingface \
  && chown -R synsc:synsc /tmp/synsc-context /home/synsc/.cache
 
 ENV PATH="/app/.venv/bin:${PATH}" \
