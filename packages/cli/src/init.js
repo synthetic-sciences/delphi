@@ -36,75 +36,12 @@ export async function runInit({ force = false } = {}) {
     }
   }
 
-  // Path selection
-  const flow = await select({
-    message: "How would you like to use Delphi?",
-    choices: Object.entries(FLOWS).map(([value, name]) => ({ value, name })),
-    default: "agent",
-  });
-
-  // ── CLIENT SELECTION (agent path only) ────────────────────────────────
-  let chosenClients = [];
-
-  if (flow === "agent") {
-    const detected = await detectInstalledClients();
-    chosenClients = await checkbox({
-      message: "Which AI tools should I configure?",
-      choices: Object.entries(CLIENT_LABELS).map(([value, label]) => ({
-        value,
-        name: detected[value] ? `${label} ${pc.green("(detected)")}` : label,
-        checked: !!detected[value],
-      })),
-    });
-    if (chosenClients.length === 0) {
-      log.warn("No clients selected. Continuing with the dashboard only.");
-    }
-  }
-
-  // ── PROVIDER + MODEL + KEY (both flows) ────────────────────────────────
-  // Both paths need an embedding provider — agent users still want a choice
-  // between local-CPU and a hosted API (faster on small machines, no model
-  // download). Only the index path wires the dashboard.
-  const embeddingChoice = await pickProvider();
-  const profile = EMBEDDING_PROFILES[embeddingChoice];
-  const providerConfig = await collectProviderConfig(profile);
-
-  // ── GPU DETECTION ─────────────────────────────────────────────────────
-  // Only relevant for the Local provider (Gemini / OpenAI run remote).
-  // Detection touches `nvidia-smi` and `docker info` — both fast — so we
-  // always probe but only surface a prompt when GPU is usable AND the
-  // user picked Local. Result is persisted in state.json so subsequent
-  // lifecycle commands re-apply the docker-compose.gpu.yml override.
-  let useGpu = false;
-  if (profile.kind === "local") {
-    const gpu = await detectGpu();
-    if (gpu.available) {
-      const device = await pickDevice({ gpuName: gpu.gpu });
-      useGpu = device === "cuda";
-      providerConfig.EMBEDDING_DEVICE = device;
-    } else if (gpu.hostGpu) {
-      // Linux host has a GPU but Docker can't pass it. Surface the exact
-      // install command for the user's distro so they don't have to
-      // hunt — falling back to CPU otherwise.
-      log.warn(`detected ${gpu.hostGpu} but Docker isn't configured to pass GPUs to containers.`);
-      log.dim(`  Run:  ${gpu.installHint}`);
-      log.dim("        then re-run init to enable GPU acceleration. Continuing on CPU.");
-    } else if (gpu.platform === "darwin") {
-      // Docker on macOS can't pass GPUs at all — flag once so users
-      // don't expect MPS acceleration that the dockerized api can't
-      // deliver. docs/gpu.md has the native-mode workaround.
-      log.dim("  Note: Docker on macOS runs the api on CPU only. See docs/gpu.md for native MPS instructions.");
-    }
-  }
-
-  // SYSTEM_PASSWORD is auto-generated. Magic-link auth signs the user
-  // into the dashboard transparently via `delphi open`, and the CLI
-  // mints API keys via /api/bootstrap on its own — the user never has
-  // to type or remember a password. The auto-generated value still
-  // lands in .env so power users can grab it for cross-device login or
-  // change it later via `delphi config`.
-
-  // Pre-flight checks
+  // Pre-flight runs BEFORE any setup prompt so a bad environment doesn't
+  // wipe out provider/key/GPU input on retry. Reuse-path above returns
+  // early without touching Docker, so it remains exempt. Docker health
+  // uses `docker info`; port discovery uses a cheap TCP bind probe
+  // (`lsof`/`ss` are best-effort holder lookup only, ENOENT falls back
+  // silently — minimal distros without those tools still work).
   log.step("Pre-flight checks");
   const docker = await dockerHealthy();
   if (!docker.ok) {
@@ -173,7 +110,77 @@ export async function runInit({ force = false } = {}) {
       process.exit(1);
     }
   }
-  // Stash the discovered ports so writeEnv persists them in .env.
+
+  // Path selection
+  const flow = await select({
+    message: "How would you like to use Delphi?",
+    choices: Object.entries(FLOWS).map(([value, name]) => ({ value, name })),
+    default: "agent",
+  });
+
+  // ── CLIENT SELECTION (agent path only) ────────────────────────────────
+  let chosenClients = [];
+
+  if (flow === "agent") {
+    const detected = await detectInstalledClients();
+    chosenClients = await checkbox({
+      message: "Which AI tools should I configure?",
+      choices: Object.entries(CLIENT_LABELS).map(([value, label]) => ({
+        value,
+        name: detected[value] ? `${label} ${pc.green("(detected)")}` : label,
+        checked: !!detected[value],
+      })),
+    });
+    if (chosenClients.length === 0) {
+      log.warn("No clients selected. Continuing with the dashboard only.");
+    }
+  }
+
+  // ── PROVIDER + MODEL + KEY (both flows) ────────────────────────────────
+  // Both paths need an embedding provider — agent users still want a choice
+  // between local-CPU and a hosted API (faster on small machines, no model
+  // download). Only the index path wires the dashboard.
+  const embeddingChoice = await pickProvider();
+  const profile = EMBEDDING_PROFILES[embeddingChoice];
+  const providerConfig = await collectProviderConfig(profile);
+
+  // ── GPU DETECTION ─────────────────────────────────────────────────────
+  // Only relevant for the Local provider (Gemini / OpenAI run remote).
+  // Detection touches `nvidia-smi` and `docker info` — both fast — so we
+  // always probe but only surface a prompt when GPU is usable AND the
+  // user picked Local. Result is persisted in state.json so subsequent
+  // lifecycle commands re-apply the docker-compose.gpu.yml override.
+  let useGpu = false;
+  if (profile.kind === "local") {
+    const gpu = await detectGpu();
+    if (gpu.available) {
+      const device = await pickDevice({ gpuName: gpu.gpu });
+      useGpu = device === "cuda";
+      providerConfig.EMBEDDING_DEVICE = device;
+    } else if (gpu.hostGpu) {
+      // Linux host has a GPU but Docker can't pass it. Surface the exact
+      // install command for the user's distro so they don't have to
+      // hunt — falling back to CPU otherwise.
+      log.warn(`detected ${gpu.hostGpu} but Docker isn't configured to pass GPUs to containers.`);
+      log.dim(`  Run:  ${gpu.installHint}`);
+      log.dim("        then re-run init to enable GPU acceleration. Continuing on CPU.");
+    } else if (gpu.platform === "darwin") {
+      // Docker on macOS can't pass GPUs at all — flag once so users
+      // don't expect MPS acceleration that the dockerized api can't
+      // deliver. docs/gpu.md has the native-mode workaround.
+      log.dim("  Note: Docker on macOS runs the api on CPU only. See docs/gpu.md for native MPS instructions.");
+    }
+  }
+
+  // SYSTEM_PASSWORD is auto-generated. Magic-link auth signs the user
+  // into the dashboard transparently via `delphi open`, and the CLI
+  // mints API keys via /api/bootstrap on its own — the user never has
+  // to type or remember a password. The auto-generated value still
+  // lands in .env so power users can grab it for cross-device login or
+  // change it later via `delphi config`.
+
+  // Stash the discovered ports (scanned upfront in pre-flight) so writeEnv
+  // persists them in .env.
   providerConfig.FRONTEND_PORT = String(ports.frontend.chosen);
   providerConfig.POSTGRES_PORT = String(ports.postgres.chosen);
   providerConfig.SYNSC_API_HOST_PORT = String(ports.api.chosen);
