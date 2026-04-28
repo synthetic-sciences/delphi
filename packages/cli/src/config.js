@@ -6,7 +6,7 @@ import { loadDotenv } from "./dotenv.js";
 import { applyConfig, saveState, EMBEDDING_PROFILES, loadState } from "./env.js";
 import { ENV_FILE } from "./paths.js";
 import { runReload } from "./reload.js";
-import { API_BASE } from "./health.js";
+import { apiBase } from "./health.js";
 import { detectGpu } from "./system.js";
 import { pickProvider, collectProviderConfig, promptSystemPassword, pickDevice } from "./prompts.js";
 
@@ -21,7 +21,7 @@ const PROBE_TIMEOUT_MS = 300_000;  // 5 minutes
 /** GET /backend-health?probe=embeddings — runs a real embed_query("ping")
  *  end-to-end. Returns the parsed JSON or throws on network/timeout. */
 async function probeEmbeddings() {
-  const resp = await fetch(`${API_BASE}/backend-health?probe=embeddings`, {
+  const resp = await fetch(`${apiBase()}/backend-health?probe=embeddings`, {
     signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
   });
   // We accept both 200 (ready) and 503 (not ready, payload still has the

@@ -1,9 +1,40 @@
+import fs from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "./log.js";
 import { run } from "./system.js";
-import { SOURCE_DIR } from "./paths.js";
+import { SOURCE_DIR, ENV_FILE } from "./paths.js";
 
-const API_BASE = process.env.SYNSCI_DELPHI_API_URL || "http://localhost:8742";
+/** Resolve the host-side API URL the CLI uses to talk to the api
+ *  container. Order of precedence:
+ *    1. SYNSCI_DELPHI_API_URL env var (manual override).
+ *    2. SYNSC_API_HOST_PORT in .env (set by the install's port
+ *       discovery when 8742 was taken).
+ *    3. Default localhost:8742.
+ *
+ *  We re-read on each call rather than caching at module load — the
+ *  install writes .env after this module first imports, and other
+ *  commands need to see the value the install settled on. Synchronous
+ *  read is fine; the file is small and on local disk. */
+function resolveApiBase() {
+  if (process.env.SYNSCI_DELPHI_API_URL) return process.env.SYNSCI_DELPHI_API_URL;
+  try {
+    const text = fs.readFileSync(ENV_FILE, "utf8");
+    const m = text.match(/^SYNSC_API_HOST_PORT=(\d+)$/m);
+    if (m) return `http://localhost:${m[1]}`;
+  } catch {
+    // .env not yet written, or doesn't exist — fall through to default.
+  }
+  return "http://localhost:8742";
+}
+
+// Always read .env on call so we pick up port-discovery's writes.
+// Callers must invoke as `apiBase()` rather than `API_BASE` — this
+// matters because `.env` lands AFTER module load on a fresh install,
+// so a constant captured at import time would point at the default
+// localhost:8742 even after the install settled on a different port.
+export function apiBase() {
+  return resolveApiBase();
+}
 
 // 10 minutes. The original 4-min budget worked fine on Linux but was
 // genuinely tight on Mac Docker Desktop's first cold boot — the api's
@@ -39,7 +70,7 @@ export async function waitForHealth({ timeoutMs = DEFAULT_HEALTH_TIMEOUT_MS, int
   let lastErr = null;
   while (Date.now() - start < timeoutMs) {
     try {
-      const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(3_000) });
+      const res = await fetch(`${apiBase()}/health`, { signal: AbortSignal.timeout(3_000) });
       if (res.ok) return true;
       lastErr = `status ${res.status}`;
     } catch (e) {
@@ -62,7 +93,7 @@ export async function waitForHealth({ timeoutMs = DEFAULT_HEALTH_TIMEOUT_MS, int
 
 /** Call /api/bootstrap to mint an admin API key for the CLI. */
 export async function bootstrap({ password, clientName = "cli-bootstrap" }) {
-  const res = await fetch(`${API_BASE}/api/bootstrap`, {
+  const res = await fetch(`${apiBase()}/api/bootstrap`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password, client_name: clientName }),
@@ -78,4 +109,3 @@ export async function bootstrap({ password, clientName = "cli-bootstrap" }) {
   return data;
 }
 
-export { API_BASE };

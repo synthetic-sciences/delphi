@@ -5,7 +5,7 @@ import { dockerHealthy, which, detectGpu, checkDiskSpace } from "./system.js";
 import { ensureSource } from "./source.js";
 import { writeEnv, saveState, loadState, EMBEDDING_PROFILES } from "./env.js";
 import { composePull, composeBuild, composeUp } from "./docker.js";
-import { waitForHealth, bootstrap, API_BASE } from "./health.js";
+import { waitForHealth, bootstrap, apiBase } from "./health.js";
 import {
   detectInstalledClients,
   installToClients,
@@ -143,13 +143,18 @@ export async function runInit({ force = false } = {}) {
     }
   }
 
-  // Port collisions — scan 3000 (frontend), 5432 (postgres), 8742 (api).
-  // Frontend + postgres can fall back to a higher port (we write the
-  // chosen value to .env so docker-compose picks it up via env-var).
-  // API is special: NEXT_PUBLIC_API_URL is build-time baked into the
-  // frontend bundle, so shifting the api host port would silently
-  // break browser-side direct fetches. If 8742 is taken we error out
-  // with the lsof-style hint instead of guessing.
+  // Port collisions — scan all three host-side ports the install needs.
+  // Frontend (3000) / postgres (5432) / api host port (8742) all fall
+  // back to a higher port if their default is taken. We write the
+  // chosen values to `.env` so:
+  //   - docker-compose maps them via `${PORT:-default}` syntax
+  //   - the frontend's `NEXT_PUBLIC_API_URL` build arg interpolates
+  //     SYNSC_API_HOST_PORT, baking the correct localhost:port into
+  //     the browser bundle for direct fetches that bypass server-side
+  //     rewrites (file uploads, streaming endpoints).
+  // The API port shift is the rare case (~1% of users), but when it
+  // does fire the frontend rebuild that compose triggers picks up
+  // the new URL automatically — no manual override needed.
   const ports = await discoverPorts();
   for (const p of [ports.frontend, ports.api, ports.postgres]) {
     if (p.requested === p.chosen) {
@@ -168,19 +173,10 @@ export async function runInit({ force = false } = {}) {
       process.exit(1);
     }
   }
-  // Hard-fail on api port shift — see comment above.
-  if (ports.api.chosen !== ports.api.requested) {
-    log.error(
-      `Port 8742 is held by ${ports.api.holder || "another process"}. ` +
-      `The frontend's browser bundle is built with localhost:8742 baked in, ` +
-      `so we can't auto-fall-back to a different port without rebuilding.`,
-    );
-    log.dim("  Free up 8742 (lsof -i :8742) and retry.");
-    process.exit(1);
-  }
-  // Stash the discovered ports so writeEnv can persist them in .env.
+  // Stash the discovered ports so writeEnv persists them in .env.
   providerConfig.FRONTEND_PORT = String(ports.frontend.chosen);
   providerConfig.POSTGRES_PORT = String(ports.postgres.chosen);
+  providerConfig.SYNSC_API_HOST_PORT = String(ports.api.chosen);
 
   // Source + .env
   const sourceInfo = await spinner("fetching source", () => ensureSource());
@@ -229,7 +225,7 @@ export async function runInit({ force = false } = {}) {
         ? "warming embedding model (downloads weights on first run, ~1-2 min)"
         : "verifying provider credentials";
     await spinner(probeLabel, async () => {
-      const resp = await fetch(`${API_BASE}/backend-health?probe=embeddings`, {
+      const resp = await fetch(`${apiBase()}/backend-health?probe=embeddings`, {
         signal: AbortSignal.timeout(300_000),
       });
       const data = await resp.json();
@@ -258,7 +254,7 @@ export async function runInit({ force = false } = {}) {
     log.step("Configuring AI tools");
     installResults = await installToClients(chosenClients, {
       apiKey: minted.api_key,
-      apiUrl: API_BASE,
+      apiUrl: apiBase(),
     });
     for (const [id, r] of Object.entries(installResults)) {
       if (r.ok) log.success(`${CLIENT_LABELS[id]} ${pc.dim("←")} ${pc.dim(r.path)}`);
@@ -278,7 +274,7 @@ export async function runInit({ force = false } = {}) {
     useGpu,
     embeddingChoice,
     apiKeyPreview: minted.key_preview,
-    apiUrl: API_BASE,
+    apiUrl: apiBase(),
     clients: Object.keys(installResults),
     launcher,
   });
@@ -292,7 +288,7 @@ export async function runInit({ force = false } = {}) {
     const dashUrl = `http://localhost:${ports.frontend.chosen}`;
     log.raw(`  Dashboard:       ${pc.cyan(dashUrl)}  ${pc.dim("(auto-signs you in via `delphi open`)")}`);
   }
-  log.raw(`  API:             ${pc.cyan(API_BASE)}`);
+  log.raw(`  API:             ${pc.cyan(apiBase())}`);
   log.raw(`  API key:         ${pc.cyan(minted.api_key)}  ${pc.dim("(saved into MCP configs)")}`);
   // Always show. Even agent-flow users may run `delphi open` later;
   // they'll need the password if they ever log in from a different

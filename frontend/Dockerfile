@@ -8,7 +8,13 @@ WORKDIR /app
 # process.env must be set HERE, before `npm run build`. INTERNAL_API_URL
 # is the docker-network hostname the Next server will fetch through.
 ARG INTERNAL_API_URL=http://api:8742
+# NEXT_PUBLIC_API_URL is what `lib/api.ts` reads as DIRECT_API_URL,
+# inlined into the BROWSER bundle at build time. The default
+# (localhost:8742) is correct for the common case; CLI-driven installs
+# pass through a different host port when 8742 was busy.
+ARG NEXT_PUBLIC_API_URL=http://localhost:8742
 ENV INTERNAL_API_URL=${INTERNAL_API_URL} \
+    NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL} \
     NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json* ./
 RUN npm ci
