@@ -30,7 +30,7 @@ For interactive editing of the install-time choices (provider, model, keys, dash
 | Var | Default | Description |
 |---|---|---|
 | `EMBEDDING_PROVIDER` | `local` | One of `local` / `gemini` / `openai` / `huggingface`. The CLI's `delphi config` covers the first three; `huggingface` (HF Inference API) is set manually. |
-| `EMBEDDING_MODEL` | `jinaai/jina-embeddings-v2-base-code` | Model id. For `local` and `huggingface` this is any HF repo id. For `gemini` and `openai` it's overridden to a fixed model. |
+| `EMBEDDING_MODEL` | `BAAI/bge-base-en-v1.5` | Model id. For `local` and `huggingface` this is any HF repo id. For `gemini` and `openai` it's overridden to a fixed model. |
 | `EMBEDDING_DIMENSION` | `768` | Vector size. **Do not change without migrating the pgvector schema** — the column is `vector(768)`. |
 | `EMBEDDING_DEVICE` | `auto` | Local provider only. `cpu`, `cuda`, `mps`, or `auto`. |
 | `EMBEDDING_BATCH_SIZE` | `64` | Local + remote batch size. Bigger batches → faster indexing on GPU, more memory pressure. |

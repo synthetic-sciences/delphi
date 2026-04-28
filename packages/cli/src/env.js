@@ -31,8 +31,18 @@ export const EMBEDDING_PROFILES = {
     kind: "local",
     available: true,
     promptModel: true,
-    defaultModel: "jinaai/jina-embeddings-v2-base-code",
-    modelHint: "any HF model id; pick a 768-dim one (jinaai/jina-embeddings-v2-base-code, BAAI/bge-base-en-v1.5, sentence-transformers/all-mpnet-base-v2)",
+    // BAAI/bge-base-en-v1.5 is the default because:
+    //   1) it's standard-BERT (works cleanly on transformers 5.x),
+    //   2) jinaai/jina-embeddings-v2-base-code is upstream-broken on
+    //      transformers 5.x (its custom modeling_bert.py imports a
+    //      `find_pruneable_heads_and_indices` symbol that was removed
+    //      in tx 5.0; full traceback at install pre-warm),
+    //   3) bge-base is 768 native — no Matryoshka truncation needed.
+    // Power users can pick jina-v2-base-code (when jina ships an
+    // updated modeling file) or any other HF embedding model via the
+    // "Use the current model? No" branch of the prompt.
+    defaultModel: "BAAI/bge-base-en-v1.5",
+    modelHint: "any HF model id; pick a 768-dim one (BAAI/bge-base-en-v1.5, sentence-transformers/all-mpnet-base-v2, intfloat/e5-base-v2)",
     optionalKeyEnvVar: "HF_TOKEN",
     optionalKeyHint: "https://huggingface.co/settings/tokens",
     optionalKeyReason: "only needed for gated/private models or higher Hub download rate limits",
@@ -83,12 +93,23 @@ function buildProviderEnv(embeddingChoice, providerConfig) {
   return { ...profile.env, ...providerConfig };
 }
 
-/** Auto-generated secrets the backend needs but the user never sees. */
-function freshSecrets({ systemPassword } = {}) {
+/** Auto-generated secrets the backend needs but the user never sees.
+ *  Preserves any matching values already present in `existing` (loaded
+ *  from a prior `.env`). Critical for postgresPassword: if a previous
+ *  install left a `pgdata` volume initialized under password A but
+ *  writeEnv generates a new password B on re-install, the api will
+ *  fail authentication and the install hangs at `waitForHealth`. By
+ *  reusing the existing password whenever possible, repeat installs
+ *  stay aligned with the on-disk volume's credentials. */
+function freshSecrets({ systemPassword, existing } = {}) {
+  const get = (key) =>
+    existing instanceof Map ? existing.get(key) : existing?.[key];
   return {
-    serverSecret: randomHex(32),
-    systemPassword: systemPassword || randomHex(16),
-    postgresPassword: randomHex(16),
+    serverSecret: get("SERVER_SECRET") || randomHex(32),
+    // User-supplied password (from `delphi config`) wins; otherwise
+    // reuse what's in .env; otherwise generate fresh.
+    systemPassword: systemPassword || get("SYSTEM_PASSWORD") || randomHex(16),
+    postgresPassword: get("POSTGRES_PASSWORD") || randomHex(16),
   };
 }
 
@@ -115,7 +136,12 @@ function dbEnv(postgresPassword) {
  * @param {string} [opts.systemPassword]
  */
 export async function writeEnv({ embeddingChoice, providerConfig = {}, systemPassword }) {
-  const secrets = freshSecrets({ systemPassword });
+  // If an existing `.env` is present (re-install, repair flow, etc.),
+  // load it first so freshSecrets can preserve still-valid credentials.
+  // Without this, every re-install regenerated POSTGRES_PASSWORD and
+  // broke auth against an already-initialized pgdata volume.
+  const existing = (await loadDotenv(ENV_FILE))?.map;
+  const secrets = freshSecrets({ systemPassword, existing });
   const updates = {
     SERVER_SECRET: secrets.serverSecret,
     SYSTEM_PASSWORD: secrets.systemPassword,

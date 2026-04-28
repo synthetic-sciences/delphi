@@ -75,7 +75,7 @@ cd backend
 uv sync
 EMBEDDING_PROVIDER=local \
 EMBEDDING_DEVICE=mps \
-EMBEDDING_MODEL=jinaai/jina-embeddings-v2-base-code \
+EMBEDDING_MODEL=BAAI/bge-base-en-v1.5 \
 DATABASE_URL=postgresql://synsc:<password-from-env>@localhost:5432/synsc \
 SYSTEM_PASSWORD=<password-from-env> \
 SERVER_SECRET=<from-env> \

@@ -15,7 +15,7 @@ class EmbeddingConfig(BaseModel):
     """Configuration for embeddings (all local via sentence-transformers)."""
 
     model_name: str = Field(
-        default="jinaai/jina-embeddings-v2-base-code",
+        default="BAAI/bge-base-en-v1.5",
         description="Sentence-transformers model for all embeddings",
     )
     device: str = Field(
