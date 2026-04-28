@@ -9,7 +9,7 @@ import path from "node:path";
 import os from "node:os";
 import { ENV_FILE, ROOT } from "./paths.js";
 import { run } from "./system.js";
-import { waitForHealth, API_BASE } from "./health.js";
+import { waitForHealth, apiBase } from "./health.js";
 
 /** Read the frontend host port out of .env. Defaults to 3000 when
  *  unset (older installs predating port-discovery; existing user
@@ -41,7 +41,7 @@ async function readSystemPassword() {
  *  /overview — no password ever appears in URL bar / history / scrollback. */
 async function mintMagicLink() {
   const password = await readSystemPassword();
-  const resp = await fetch(`${API_BASE}/auth/magic/create`, {
+  const resp = await fetch(`${apiBase()}/auth/magic/create`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ password }),
@@ -94,7 +94,7 @@ export async function runStart() {
     composeUp({ build: false, profiles: state.profiles || [], silent: true, withGpu: !!state.useGpu }),
   );
   await spinner("waiting for API", () => waitForHealth());
-  log.success(`up at ${pc.cyan(API_BASE)}`);
+  log.success(`up at ${pc.cyan(apiBase())}`);
 }
 
 export async function runStop() {
@@ -112,7 +112,7 @@ export async function runStatus() {
 
   let healthOk = false;
   try {
-    const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(2_000) });
+    const res = await fetch(`${apiBase()}/health`, { signal: AbortSignal.timeout(2_000) });
     healthOk = res.ok;
   } catch {
     healthOk = false;
@@ -121,7 +121,7 @@ export async function runStatus() {
   const services = await composeStatus({ profiles: state.profiles || [], withGpu: !!state.useGpu });
 
   log.raw(`  Status:    ${healthOk ? pc.green("healthy") : pc.red("not responding")}`);
-  log.raw(`  API:       ${pc.cyan(API_BASE)}`);
+  log.raw(`  API:       ${pc.cyan(apiBase())}`);
   log.raw(`  API key:   ${pc.dim(state.apiKeyPreview ? state.apiKeyPreview + "…" : "(not set)")}`);
   log.raw(`  Embedding: ${pc.dim(state.embeddingChoice || "(unknown)")}`);
   log.raw(`  Clients:   ${pc.dim((state.clients || []).join(", ") || "(none)")}`);
@@ -168,7 +168,7 @@ async function dashboardFullyUp(profiles, { withGpu = false } = {}) {
       const state = (s.State || "").toLowerCase();
       if (state !== "running") return false;
     }
-    const res = await fetch(`${API_BASE}/backend-health`, {
+    const res = await fetch(`${apiBase()}/backend-health`, {
       signal: AbortSignal.timeout(3_000),
     });
     return res.ok;
@@ -202,7 +202,7 @@ export async function runOpen() {
     // images (CPU), starting containers, waiting for /health.
     let healthy = false;
     try {
-      const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(2_000) });
+      const res = await fetch(`${apiBase()}/health`, { signal: AbortSignal.timeout(2_000) });
       healthy = res.ok;
     } catch {
       healthy = false;

@@ -66,12 +66,18 @@ services:
       context: ./frontend
       args:
         # Baked into routes-manifest.json by `next build` — see Dockerfile.
+        # INTERNAL_API_URL stays at the docker-network hostname (api:8742)
+        # since the api container always listens on 8742 internally; only
+        # the *host-side* port can shift if 8742 was taken at install.
         INTERNAL_API_URL: http://api:8742
+        # NEXT_PUBLIC_API_URL is also baked at build time but must point
+        # at whatever host port the user actually maps. The CLI writes
+        # SYNSC_API_HOST_PORT to .env after pre-flight port discovery;
+        # we interpolate that here so a fresh frontend bundle ships with
+        # the correct localhost:port for browser-side direct fetches.
+        NEXT_PUBLIC_API_URL: http://localhost:${SYNSC_API_HOST_PORT:-8742}
     depends_on:
       - api
-    environment:
-      # Browser-facing URL (baked into the client bundle for direct fetches).
-      NEXT_PUBLIC_API_URL: http://localhost:8742
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
 
