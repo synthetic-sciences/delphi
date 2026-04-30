@@ -117,7 +117,14 @@ class GitClient:
 
         Args:
             url: GitHub URL or shorthand
-            branch: Branch to clone (default: main)
+            branch: Branch to clone. If not specified — or if the requested
+                branch isn't found on the remote — the repo's default branch
+                is used when it can be determined via the GitHub API. If that
+                lookup fails (rate limit, network error, or non-200 response),
+                falls back to the configured ``git.default_branch``. This
+                handles repos whose default isn't the configured
+                ``git.default_branch`` (e.g. ``master``) when the API lookup
+                succeeds.
             github_token: GitHub PAT for authenticated cloning of private repos.
                           If provided, injected as x-access-token in the clone URL.
                           NEVER logged or persisted — used only for this clone operation.
@@ -131,6 +138,74 @@ class GitClient:
         if not branch:
             branch = self._get_default_branch(owner, name, github_token)
 
+        try:
+            # Suppress the error-level log on the first attempt: a
+            # branch-not-found here is an expected/recoverable case and
+            # we'll log it ourselves below if the fallback also fails.
+            return self._clone_branch(
+                full_url, owner, name, branch, github_token,
+                log_errors=False,
+            )
+        except Exception as e:
+            # On "branch not found" style errors, retry once against the
+            # repo's GitHub-reported default branch. Dulwich surfaces these
+            # as a generic Exception with the message
+            # "b'<branch>' is not a valid branch or tag".
+            err_msg_lower = str(e).lower()
+            looks_like_bad_branch = (
+                "is not a valid branch or tag" in err_msg_lower
+                or "ref refs/heads/" in err_msg_lower
+                or "remote ref" in err_msg_lower
+            )
+            if not looks_like_bad_branch:
+                # Real failure on the first attempt — surface it now since
+                # _clone_branch swallowed the error log.
+                logger.error(
+                    "Failed to clone repository",
+                    url=full_url,
+                    error=str(e),
+                )
+                raise
+
+            fallback = self._get_default_branch(owner, name, github_token)
+            if not fallback or fallback == branch:
+                logger.error(
+                    "Failed to clone repository (no usable fallback branch)",
+                    url=full_url,
+                    requested=branch,
+                    fallback=fallback,
+                    error=str(e),
+                )
+                raise
+
+            logger.info(
+                "Requested branch not found, retrying with default branch",
+                owner=owner,
+                name=name,
+                requested=branch,
+                fallback=fallback,
+            )
+            return self._clone_branch(
+                full_url, owner, name, fallback, github_token,
+            )
+
+    def _clone_branch(
+        self,
+        full_url: str,
+        owner: str,
+        name: str,
+        branch: str,
+        github_token: str | None,
+        log_errors: bool = True,
+    ) -> tuple[Path, str, str, str]:
+        """Clone a specific branch. Extracted from ``clone`` so the outer
+        method can retry against the default branch on a "branch not found"
+        error without duplicating dedup/auth logic.
+
+        ``log_errors=False`` lets the outer ``clone`` suppress the error log
+        on the first attempt of a fallback-eligible call; it logs once,
+        with full context, after deciding whether to retry.
+        """
         repo_dir = self.get_repo_dir(owner, name, branch)
 
         # If already cloned, pull latest
@@ -188,11 +263,12 @@ class GitClient:
             return repo_dir, owner, name, commit_sha
 
         except Exception as e:
-            logger.error(
-                "Failed to clone repository",
-                url=full_url,
-                error=str(e),
-            )
+            if log_errors:
+                logger.error(
+                    "Failed to clone repository",
+                    url=full_url,
+                    error=str(e),
+                )
             # Clean up partial clone
             if repo_dir.exists():
                 shutil.rmtree(repo_dir)
