@@ -117,7 +117,10 @@ class GitClient:
 
         Args:
             url: GitHub URL or shorthand
-            branch: Branch to clone (default: main)
+            branch: Branch to clone. If not specified — or if the requested
+                branch isn't found on the remote — the repo's GitHub-reported
+                default branch is used. This handles repos whose default is
+                not the configured ``git.default_branch`` (e.g. ``master``).
             github_token: GitHub PAT for authenticated cloning of private repos.
                           If provided, injected as x-access-token in the clone URL.
                           NEVER logged or persisted — used only for this clone operation.
@@ -131,6 +134,51 @@ class GitClient:
         if not branch:
             branch = self._get_default_branch(owner, name, github_token)
 
+        try:
+            return self._clone_branch(
+                full_url, owner, name, branch, github_token
+            )
+        except Exception as e:
+            # On "branch not found" style errors, retry once against the
+            # repo's GitHub-reported default branch. Dulwich surfaces these
+            # as a generic Exception with the message
+            # "b'<branch>' is not a valid branch or tag".
+            err_msg = str(e)
+            looks_like_bad_branch = (
+                "is not a valid branch or tag" in err_msg
+                or "Ref refs/heads/" in err_msg
+                or "remote ref" in err_msg.lower()
+            )
+            if not looks_like_bad_branch:
+                raise
+
+            fallback = self._get_default_branch(owner, name, github_token)
+            if not fallback or fallback == branch:
+                raise
+
+            logger.debug(
+                "Branch not found, falling back to default branch",
+                owner=owner,
+                name=name,
+                requested=branch,
+                fallback=fallback,
+            )
+            return self._clone_branch(
+                full_url, owner, name, fallback, github_token
+            )
+
+    def _clone_branch(
+        self,
+        full_url: str,
+        owner: str,
+        name: str,
+        branch: str,
+        github_token: str | None,
+    ) -> tuple[Path, str, str, str]:
+        """Clone a specific branch. Extracted from ``clone`` so the outer
+        method can retry against the default branch on a "branch not found"
+        error without duplicating dedup/auth logic.
+        """
         repo_dir = self.get_repo_dir(owner, name, branch)
 
         # If already cloned, pull latest
