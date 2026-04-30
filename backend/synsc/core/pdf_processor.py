@@ -9,11 +9,14 @@ Extracts:
 """
 
 import hashlib
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 import fitz  # PyMuPDF
+
+logger = logging.getLogger(__name__)
 
 
 class PDFProcessingError(Exception):
@@ -93,16 +96,41 @@ def calculate_pdf_hash(pdf_path: Path | str) -> str:
     return sha256_hash.hexdigest()
 
 
+def _strip_nul_chars(text: str) -> str:
+    """Remove NUL (0x00) bytes from a string.
+
+    Postgres rejects NUL in ``text`` columns ("A string literal cannot
+    contain NUL (0x00) characters."), and PyMuPDF text extraction does
+    occasionally emit them on malformed PDFs. Strip them at the boundary
+    so downstream chunkers, normalizers, and DB writers all see clean
+    text. Logs a warning when any were removed so the truncation isn't
+    silent.
+    """
+    if not text or "\x00" not in text:
+        return text
+    cleaned = text.replace("\x00", "")
+    removed = len(text) - len(cleaned)
+    logger.warning(
+        "Stripped %d NUL byte(s) from extracted PDF text", removed,
+    )
+    return cleaned
+
+
 def normalize_pdf_text(text: str) -> str:
     """Normalize text extracted from PDF.
-    
+
+    - Strip NUL (0x00) bytes (Postgres text columns reject these)
     - Fix hyphenation at line breaks
     - Normalize whitespace
     - Fix common PDF extraction artifacts
     """
     if not text:
         return ""
-    
+
+    # Strip NUL bytes first so the rest of the pipeline (and any DB
+    # insert downstream) doesn't have to worry about them.
+    text = _strip_nul_chars(text)
+
     # Fix hyphenation at line breaks (word- \n continuation)
     text = re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", text)
     
@@ -334,7 +362,12 @@ def process_pdf(
         
         doc.close()
 
-        full_text = "\n\n".join(pages)
+        # Strip NUL bytes once at the extraction boundary — keeps
+        # extracted.full_text safe for direct DB inserts (Postgres text
+        # columns reject 0x00) and lets every downstream consumer trust
+        # the field. normalize_pdf_text() also strips defensively for
+        # callers who go straight from raw page text to the normalizer.
+        full_text = _strip_nul_chars("\n\n".join(pages))
         extracted.full_text = full_text
 
         # Normalize text
