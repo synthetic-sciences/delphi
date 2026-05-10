@@ -356,20 +356,33 @@ class SymbolService:
                 "message": f"Browse symbols failed: {e}",
             }
     
-    def get_symbol(self, symbol_id: str, user_id: str | None = None) -> dict:
-        """Get full symbol details by ID.
-        
+    def get_symbol(
+        self,
+        symbol_id: str,
+        user_id: str | None = None,
+        include_source: bool = True,
+    ) -> dict:
+        """Get full symbol details by ID, including the symbol's source body.
+
+        Previously this returned metadata only; agents had to make a separate
+        ``get_file`` call (and guess at the right line range) to actually
+        read the function. We now stitch together every code chunk whose
+        line range overlaps the symbol's body and return that as ``source``.
+
         OPTIMIZED: Uses eager loading to avoid N+1 queries.
-        
+
         Args:
             symbol_id: Symbol identifier (UUID)
             user_id: User ID for authorization (required in multi-tenant mode)
-            
+            include_source: When True (default), include the reconstructed
+                source body for the symbol.
+
         Returns:
-            Dict with success status and full symbol details
+            Dict with success status, full symbol details, and ``source``
+            containing the symbol's body text.
         """
         effective_user_id = user_id or self.user_id
-        
+
         try:
             with get_session() as session:
                 # OPTIMIZED: Eager load relationships in single query
@@ -382,7 +395,7 @@ class SymbolService:
                     .filter(Symbol.symbol_id == symbol_id)
                     .first()
                 )
-                
+
                 if not symbol:
                     # Log for debugging
                     logger.warning(
@@ -395,7 +408,7 @@ class SymbolService:
                         "error": "Symbol not found",
                         "message": f"Symbol with ID '{symbol_id}' not found",
                     }
-                
+
                 # Access control check
                 repo = symbol.repository
                 if not repo.can_user_access(effective_user_id):
@@ -404,7 +417,39 @@ class SymbolService:
                         "error": "Access denied",
                         "message": "You don't have access to this private repository",
                     }
-                
+
+                source: str | None = None
+                source_chunks: list[dict] = []
+                if include_source:
+                    rows = session.execute(
+                        text(
+                            """
+                            SELECT chunk_id, content, start_line, end_line,
+                                   chunk_index
+                            FROM code_chunks
+                            WHERE file_id = :fid
+                              AND start_line <= :el
+                              AND end_line >= :sl
+                            ORDER BY start_line
+                            """
+                        ),
+                        {
+                            "fid": str(symbol.file.file_id),
+                            "sl": symbol.start_line,
+                            "el": symbol.end_line,
+                        },
+                    ).mappings().all()
+                    if rows:
+                        source = "\n".join(r["content"] for r in rows)
+                        source_chunks = [
+                            {
+                                "chunk_id": str(r["chunk_id"]),
+                                "start_line": r["start_line"],
+                                "end_line": r["end_line"],
+                            }
+                            for r in rows
+                        ]
+
                 return {
                     "success": True,
                     "symbol_id": str(symbol.symbol_id),
@@ -418,14 +463,17 @@ class SymbolService:
                     "end_line": symbol.end_line,
                     "repo_id": str(symbol.repo_id),
                     "repo_name": f"{symbol.repository.owner}/{symbol.repository.name}",
+                    "commit_sha": symbol.repository.commit_sha,
                     "language": symbol.language,
                     "is_async": symbol.is_async,
                     "is_exported": symbol.is_exported,
                     "parameters": symbol.get_parameters(),
                     "return_type": symbol.return_type,
                     "decorators": symbol.get_decorators(),
+                    "source": source,
+                    "source_chunks": source_chunks,
                 }
-                
+
         except Exception as e:
             logger.error("Get symbol failed", error=str(e))
             return {

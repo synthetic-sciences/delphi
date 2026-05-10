@@ -171,7 +171,13 @@ def _research_rate_check(api_key: str, mode: str, rpm: int) -> bool:
 class IndexRepositoryRequest(BaseModel):
     """Request to index a repository."""
     url: str = Field(..., description="GitHub repository URL or shorthand (owner/repo)")
-    branch: str = Field(default="main", description="Branch to index")
+    branch: str | None = Field(
+        default=None,
+        description=(
+            "Branch to index. None means auto-detect the repo's default branch "
+            "(no longer hard-coded to 'main')."
+        ),
+    )
     deep_index: bool = Field(
         default=False,
         description="Deep indexing: full AST chunking per function/class (slower, higher quality)",
@@ -179,6 +185,26 @@ class IndexRepositoryRequest(BaseModel):
     force_reindex: bool = Field(
         default=False,
         description="Skip diff detection and fully re-index from scratch",
+    )
+    quality_mode: str | None = Field(
+        default=None,
+        description=(
+            "'fast', 'balanced', or 'agent'. Agent mode includes tests/docs/"
+            "examples/configs/manifests, runs AST chunking, and enables hybrid "
+            "retrieval. Defaults to the server's configured quality_mode."
+        ),
+    )
+    include_tests: bool | None = Field(
+        default=None,
+        description="Override category-level inclusion of tests/specs.",
+    )
+    include_docs: bool | None = Field(
+        default=None,
+        description="Override category-level inclusion of docs/markdown.",
+    )
+    include_examples: bool | None = Field(
+        default=None,
+        description="Override category-level inclusion of examples/fixtures.",
     )
 
 
@@ -1125,6 +1151,10 @@ def create_app() -> FastAPI:
                 body.url, body.branch, user_id=auth.user_id,
                 deep_index=body.deep_index,
                 force_reindex=body.force_reindex,
+                quality_mode=body.quality_mode,
+                include_tests=body.include_tests,
+                include_docs=body.include_docs,
+                include_examples=body.include_examples,
             )
             _cache_invalidate_user(auth.user_id)
             _log_activity(auth.user_id, "index_repository", "repository", metadata={"url": body.url, "branch": body.branch})
@@ -1180,6 +1210,10 @@ def create_app() -> FastAPI:
                                 progress_callback=progress_callback,
                                 deep_index=body.deep_index,
                                 force_reindex=body.force_reindex,
+                                quality_mode=body.quality_mode,
+                                include_tests=body.include_tests,
+                                include_docs=body.include_docs,
+                                include_examples=body.include_examples,
                             )
                         )
                         return result

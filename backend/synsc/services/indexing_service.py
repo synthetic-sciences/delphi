@@ -8,6 +8,7 @@ This saves massive storage when multiple users index popular repos like react/ne
 """
 
 import contextlib
+import os
 import queue as _queue
 import threading as _threading
 import time
@@ -299,26 +300,65 @@ class IndexingService:
         progress_callback: Callable | None = None,
         deep_index: bool = False,
         force_reindex: bool = False,
+        quality_mode: str | None = None,
+        include_tests: bool | None = None,
+        include_docs: bool | None = None,
+        include_examples: bool | None = None,
     ) -> dict:
         """Index a GitHub repository with smart deduplication.
-        
+
         DEDUPLICATION FLOW:
         1. Check if repo already exists globally (by url+branch)
         2. If exists AND public: Just add to user's collection (instant!)
         3. If exists AND private: Error (can't access another user's private repo)
         4. If new: Index it and add to user's collection
-        
+
         Args:
             url: GitHub URL or shorthand (owner/repo)
-            branch: Branch to index (default: main)
+            branch: Branch to index. None auto-detects via the GitHub API.
             user_id: User ID for multi-tenant isolation
             is_public: Override visibility detection (None = auto-detect)
-            
+            deep_index: Force AST chunking even when turbo is on globally.
+                Implied by quality_mode='agent'.
+            force_reindex: Skip diff detection and fully re-index.
+            quality_mode: 'fast', 'balanced', or 'agent'. Controls inclusion
+                of tests/docs/examples/configs and embedding/rerank behavior.
+                None falls back to config.quality.quality_mode.
+            include_tests/docs/examples: Per-category overrides on top of
+                quality_mode. None means "let quality_mode decide".
+
         Returns:
             Dict with indexing results
         """
         start_time = time.time()
-        branch = branch or self.config.git.default_branch
+
+        # Resolve effective quality mode early — affects clone (branch
+        # detection), file inclusion, chunking thresholds, and downstream
+        # rerank/AST decisions.
+        effective_mode = quality_mode or self.config.quality.quality_mode
+
+        # Agent mode implies deep_index. Callers can still pass
+        # quality_mode='balanced' + deep_index=False to opt out.
+        if effective_mode == "agent":
+            deep_index = True
+
+        # Apply per-call category overrides by toggling fast_mode_skip for
+        # this client only. We do this by passing a quality_mode override
+        # to the GitClient and inspecting it inside _should_exclude.
+        self.git_client.set_quality_mode(effective_mode)
+        # Use a chunker matching the effective quality mode (lower min-chunk
+        # threshold in agent mode so manifests/dotfiles aren't dropped).
+        self.chunker = CodeChunker(quality_mode=effective_mode)
+        self._effective_quality_mode = effective_mode
+        self._include_tests = include_tests
+        self._include_docs = include_docs
+        self._include_examples = include_examples
+
+        # Branch is now optional — None means "ask GitHub for default_branch".
+        # Old behavior (default to "main") is preserved only when the env
+        # demands it via SYNSC_FORCE_DEFAULT_BRANCH.
+        if not branch and os.getenv("SYNSC_FORCE_DEFAULT_BRANCH"):
+            branch = self.config.git.default_branch
         
         # Use provided user_id or fall back to instance user_id
         effective_user_id = user_id or self.user_id
@@ -347,7 +387,25 @@ class IndexingService:
             # Parse URL
             report_progress("parsing", "Parsing repository URL...", 5)
             full_url, owner, name = self.git_client.parse_github_url(url)
-            
+
+            # Resolve default branch via GitHub API when caller didn't specify
+            # one. This avoids the old hard-coded 'main' that silently failed
+            # against repos using 'master', 'develop', or 'trunk'.
+            if not branch:
+                # Best-effort token lookup for private repos. We may not yet
+                # know visibility, so token is optional here.
+                token = None
+                if effective_user_id:
+                    with contextlib.suppress(Exception):
+                        token = self._get_user_github_token(effective_user_id)
+                branch = self.git_client._get_default_branch(owner, name, token)
+                logger.info(
+                    "Resolved default branch",
+                    owner=owner,
+                    name=name,
+                    branch=branch,
+                )
+
             # Check if repo already exists globally (DEDUPLICATION CHECK)
             report_progress("checking", f"Checking if {owner}/{name} is already indexed...", 10)
             with get_session() as session:
@@ -421,6 +479,7 @@ class IndexingService:
                                     diff_result = self._diff_reindex(
                                         session, existing, temp_path, diff_files,
                                         current_sha, progress_callback, deep_index,
+                                        quality_mode=effective_mode,
                                     )
                                     if diff_result is not None:
                                         # Diff reindex succeeded
@@ -578,12 +637,43 @@ class IndexingService:
             files = self.git_client.list_files(repo_path, include_content=True)
             report_progress("listed", f"Found {len(files)} files to process", 35, files_count=len(files))
 
+            # Observability: record what got filtered so users can debug
+            # "but Delphi missed file X". We aggregate by reason rather than
+            # logging per file — 30k-file repos would explode the log
+            # otherwise.
+            skip_reasons = getattr(self.git_client, "last_skip_reasons", {})
+            total_seen = getattr(self.git_client, "last_total_seen", 0)
+            with contextlib.suppress(Exception):
+                from synsc.services.observability import log_skipped_files
+                log_skipped_files(
+                    # repo_id not yet known — use empty marker, we'll write
+                    # again post-index with the real id. But the user-facing
+                    # diagnostic value is the reasons dict.
+                    repo_id="",
+                    user_id=effective_user_id,
+                    skip_reasons=skip_reasons,
+                    total_seen=total_seen,
+                    total_kept=len(files),
+                )
+            if skip_reasons:
+                logger.info(
+                    "File inclusion summary",
+                    total_seen=total_seen,
+                    total_kept=len(files),
+                    skip_reasons=skip_reasons,
+                    quality_mode=effective_mode,
+                )
+
             if not files:
                 return {
                     "success": False,
                     "status": "error",
                     "error": "No indexable files found",
-                    "message": "Repository has no files matching include patterns",
+                    "message": (
+                        "Repository has no files matching include patterns. "
+                        f"Total seen={total_seen}, skip reasons={skip_reasons}. "
+                        "Try quality_mode='agent' or set SYNSC_INCLUDE_PATTERNS."
+                    ),
                 }
 
             # For private repos, disambiguate the stored URL so the
@@ -609,6 +699,7 @@ class IndexingService:
                     is_public=is_public,
                     progress_callback=progress_callback,
                     deep_index=deep_index,
+                    quality_mode=effective_mode,
                 )
                 
                 # Add to user's collection
@@ -746,6 +837,7 @@ class IndexingService:
         new_commit_sha: str,
         progress_callback: Callable | None = None,
         deep_index: bool = False,
+        quality_mode: str | None = None,
     ) -> dict | None:
         """Perform diff-aware re-indexing on an existing repository.
 
@@ -930,7 +1022,14 @@ class IndexingService:
                 continue
 
             # Code files — symbol extraction + chunking
-            turbo_mode = False if deep_index else self.config.git.turbo_mode
+            # In agent mode, AST chunking is on by default; turbo only kicks in
+            # when the caller is explicit about wanting fast indexing.
+            agent_mode = quality_mode == "agent"
+            turbo_mode = (
+                False
+                if (deep_index or agent_mode)
+                else self.config.git.turbo_mode
+            )
             parser = parser_registry.get_parser(language) if language else None
             use_ast_chunking = False
             symbol_boundaries: list[tuple[int, int]] = []
@@ -1146,6 +1245,7 @@ class IndexingService:
         is_public: bool = True,
         progress_callback: Callable | None = None,
         deep_index: bool = False,
+        quality_mode: str | None = None,
     ) -> dict:
         """Index files from a repository.
 
@@ -1414,8 +1514,15 @@ class IndexingService:
                             chunks_to_embed.append((db_chunk, enriched))
                         continue
 
-                    # Deep index disables turbo mode for full AST chunking
-                    turbo_mode = False if deep_index else self.config.git.turbo_mode
+                    # Deep index disables turbo mode for full AST chunking.
+                    # Agent quality mode also implies AST chunking — agents get
+                    # symbol-anchored chunks that survive code edits cleanly.
+                    agent_mode = quality_mode == "agent"
+                    turbo_mode = (
+                        False
+                        if (deep_index or agent_mode)
+                        else self.config.git.turbo_mode
+                    )
                     parser = parser_registry.get_parser(language) if language else None
 
                     use_ast_chunking = False

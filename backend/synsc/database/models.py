@@ -809,6 +809,251 @@ class UserDocumentationSource(Base):
 
 
 # ==============================================================================
+# THESIS CONNECTOR MODELS
+# ==============================================================================
+
+
+class ThesisWorkspace(Base):
+    """A Thesis workspace — a project / experiment campaign of nodes.
+
+    Indexed via the Thesis connector (ports nodes, artifacts, executions,
+    tool contracts into Delphi for graph-aware retrieval). The connector
+    is push-based: callers register a workspace and stream entities in.
+    """
+
+    __tablename__ = "thesis_workspaces"
+    __table_args__ = (
+        UniqueConstraint("external_id", name="uq_thesis_workspaces_external"),
+        Index("idx_thesis_workspaces_indexed_by", "indexed_by"),
+    )
+
+    workspace_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    indexed_by: Mapped[str | None] = mapped_column(String(36))
+    is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    nodes_count: Mapped[int] = mapped_column(Integer, default=0)
+    artifacts_count: Mapped[int] = mapped_column(Integer, default=0)
+    tags: Mapped[list | None] = mapped_column(JSONB)
+    indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+
+class ThesisNode(Base):
+    """A node in the Thesis graph — claim/hypothesis/plan/decision/insight."""
+
+    __tablename__ = "thesis_nodes"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "external_id",
+            name="uq_thesis_nodes_workspace_external",
+        ),
+        Index("idx_thesis_nodes_workspace", "workspace_id"),
+        Index("idx_thesis_nodes_type", "node_type"),
+        Index("idx_thesis_nodes_status", "status"),
+        Index("idx_thesis_nodes_outcome", "outcome"),
+    )
+
+    node_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    node_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(String(32))
+    outcome: Mapped[str | None] = mapped_column(String(32))
+    tags: Mapped[list | None] = mapped_column(JSONB)
+    decision_rationale: Mapped[str | None] = mapped_column(Text)
+    commit_sha: Mapped[str | None] = mapped_column(String(40))
+    is_committed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+
+class ThesisNodeChunk(Base):
+    """Chunked content of a Thesis node (summary / content / rationale / outcome)."""
+
+    __tablename__ = "thesis_node_chunks"
+    __table_args__ = (
+        Index("idx_thesis_node_chunks_node", "node_id"),
+    )
+
+    chunk_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    node_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    token_count: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class ThesisEdge(Base):
+    """Directed edge between nodes in the Thesis graph."""
+
+    __tablename__ = "thesis_edges"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_node_id", "target_node_id", "edge_type",
+            name="uq_thesis_edges_triple",
+        ),
+        Index("idx_thesis_edges_source", "source_node_id", "edge_type"),
+        Index("idx_thesis_edges_target", "target_node_id", "edge_type"),
+    )
+
+    edge_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_node_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    target_node_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    edge_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    edge_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class ThesisArtifact(Base):
+    """An artifact (table/plot/log/diff/metric) attached to a node."""
+
+    __tablename__ = "thesis_artifacts"
+    __table_args__ = (
+        Index("idx_thesis_artifacts_workspace", "workspace_id"),
+        Index("idx_thesis_artifacts_node", "node_id"),
+        Index("idx_thesis_artifacts_kind", "kind"),
+    )
+
+    artifact_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    node_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+    )
+    external_id: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    name: Mapped[str | None] = mapped_column(Text)
+    preview: Mapped[str | None] = mapped_column(Text)
+    uri: Mapped[str | None] = mapped_column(Text)
+    artifact_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class ThesisExecution(Base):
+    """An execution / run log for a node."""
+
+    __tablename__ = "thesis_executions"
+    __table_args__ = (
+        Index("idx_thesis_executions_node", "node_id"),
+        Index("idx_thesis_executions_status", "status"),
+    )
+
+    execution_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    node_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+    )
+    external_id: Mapped[str | None] = mapped_column(Text)
+    tool: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(String(24))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    inputs: Mapped[dict | None] = mapped_column(JSONB)
+    output_summary: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class ThesisToolContract(Base):
+    """Per-tool docs: signature + when_to_use + examples."""
+
+    __tablename__ = "thesis_tool_contracts"
+    __table_args__ = (
+        Index("idx_thesis_tool_contracts_tool", "tool_name"),
+    )
+
+    contract_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    workspace_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+    )
+    tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    when_to_use: Mapped[str | None] = mapped_column(Text)
+    avoid_when: Mapped[str | None] = mapped_column(Text)
+    signature: Mapped[dict | None] = mapped_column(JSONB)
+    examples: Mapped[list | None] = mapped_column(JSONB)
+    tags: Mapped[list | None] = mapped_column(JSONB)
+    indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class UserThesisWorkspace(Base):
+    """User access link for Thesis workspaces."""
+
+    __tablename__ = "user_thesis_workspaces"
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+# ==============================================================================
 # JOB QUEUE MODEL
 # ==============================================================================
 

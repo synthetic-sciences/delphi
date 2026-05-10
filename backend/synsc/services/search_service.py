@@ -437,11 +437,18 @@ class SearchService:
         file_pattern: str | None = None,
         top_k: int = 10,
         user_id: str | None = None,
+        quality_mode: str | None = None,
     ) -> dict:
-        """Search code using semantic search.
-        
+        """Search code using semantic + hybrid retrieval.
+
         ACCESS CONTROL: Only searches repos in user's collection.
-        
+
+        In agent quality mode (default for MCP), runs five retrieval branches
+        — vector, BM25, exact symbol, exact path, trigram — and fuses them
+        before reranking. Pure-vector search used to lose the identifier
+        battle on queries like ``handleAuthCallback`` or ``go.mod``; hybrid
+        recovers them.
+
         Args:
             query: Search query (natural language or keywords)
             repo_ids: Optional list of repository IDs to search (must be in collection)
@@ -449,13 +456,16 @@ class SearchService:
             file_pattern: Filter by file path pattern
             top_k: Number of results to return
             user_id: User ID for access control (overrides constructor user_id)
-            
+            quality_mode: 'fast', 'balanced', or 'agent'. None falls back to
+                the global default. Agent mode forces hybrid + rerank.
+
         Returns:
-            Dict with search results
+            Dict with search results, including ``candidate_sources`` per
+            result so agents (and humans) can see why something matched.
         """
         start_time = time.time()
         effective_user_id = user_id or self.user_id
-        
+
         # Require user_id
         if not effective_user_id:
             return {
@@ -464,36 +474,80 @@ class SearchService:
                 "error": "Authentication required",
                 "message": "You must be authenticated to search",
             }
-        
+
+        # Resolve effective quality mode for this call.
+        effective_mode = quality_mode or self.config.quality.quality_mode
+        agent_mode = effective_mode == "agent"
+        # Agent mode implies hybrid + rerank. Callers can opt in/out via env.
+        use_hybrid = agent_mode or self.config.search.enable_hybrid
+        use_rerank = (
+            agent_mode
+            or self.config.search.enable_reranker
+        )
+
         try:
             # Generate query embedding
             t_embed = time.time()
             query_embedding = self.embedding_generator.generate_single(query)
             embed_ms = (time.time() - t_embed) * 1000
 
-            # Over-fetch for post-retrieval quality pipeline
-            # Need extra candidates for: pattern filtering, symbol boosting
-            # reordering, dynamic threshold pruning, and MMR selection
+            # Over-fetch for post-retrieval quality pipeline. Hybrid mode pulls
+            # the wider window per branch so rerank has room to work.
             fetch_k = max(top_k * 3, 20)
+            if use_hybrid:
+                fetch_k = max(fetch_k, self.config.search.hybrid_candidates)
 
-            # Search pgvector (access control is in the vector store)
-            t_db = time.time()
-            raw_results = self.vector_store.search(
-                query_embedding=query_embedding,
-                user_id=effective_user_id,
-                repo_ids=repo_ids,
-                language=language,
-                top_k=fetch_k,
-            )
-            db_ms = (time.time() - t_db) * 1000
+            db_ms = 0.0
+            hybrid_meta: dict | None = None
 
-            # Apply file pattern filter early (before quality pipeline)
-            if file_pattern:
-                import fnmatch
-                raw_results = [
-                    r for r in raw_results
-                    if fnmatch.fnmatch(r.get("file_path", ""), file_pattern)
-                ]
+            if use_hybrid:
+                # Hybrid: vector + BM25 + symbol + path + trigram, fused.
+                from synsc.services.hybrid_retrieval import hybrid_retrieve
+
+                t_db = time.time()
+                with get_session() as hsess:
+                    fused = hybrid_retrieve(
+                        session=hsess,
+                        query=query,
+                        query_embedding=query_embedding,
+                        vector_search_fn=self.vector_store.search,
+                        user_id=effective_user_id,
+                        repo_ids=repo_ids,
+                        language=language,
+                        file_pattern=file_pattern,
+                        top_k=fetch_k,
+                    )
+                db_ms = (time.time() - t_db) * 1000
+                raw_results = [c.to_dict() for c in fused]
+                hybrid_meta = {
+                    "candidates": len(fused),
+                    "sources_hit": {
+                        src: sum(1 for c in fused if src in c.sources)
+                        for src in ("vector", "bm25", "symbol", "path", "trigram")
+                    },
+                }
+                # Path filter is part of hybrid retrieval already, no need to
+                # re-filter here (it would also throw away same-file siblings
+                # the path branch surfaced).
+            else:
+                # Legacy pure-vector path
+                t_db = time.time()
+                raw_results = self.vector_store.search(
+                    query_embedding=query_embedding,
+                    user_id=effective_user_id,
+                    repo_ids=repo_ids,
+                    language=language,
+                    top_k=fetch_k,
+                )
+                db_ms = (time.time() - t_db) * 1000
+
+                # Apply file pattern filter early (before quality pipeline)
+                if file_pattern:
+                    import fnmatch
+                    raw_results = [
+                        r for r in raw_results
+                        if fnmatch.fnmatch(r.get("file_path", ""), file_pattern)
+                    ]
 
             # --- Quality pipeline ---
 
@@ -508,20 +562,25 @@ class SearchService:
             # Re-sort after boosting + metadata adjustments
             raw_results.sort(key=lambda r: r["similarity"], reverse=True)
 
-            # 3. Cross-encoder reranking (blended with vector similarity)
-            #    Enable with SYNSC_ENABLE_RERANKER=true in .env
-            if len(raw_results) > 1 and self.config.search.enable_reranker:
+            # 3. Cross-encoder reranking (blended with fused/vector similarity)
+            #    Always on in agent mode, otherwise gated by SYNSC_ENABLE_RERANKER.
+            #    Limit to hybrid_rerank_k candidates to bound latency.
+            if len(raw_results) > 1 and use_rerank:
                 try:
                     from synsc.services.reranker import get_reranker
                     reranker = get_reranker()
-                    raw_results = reranker.rerank(
+                    rerank_window = self.config.search.hybrid_rerank_k
+                    head = raw_results[:rerank_window]
+                    tail = raw_results[rerank_window:]
+                    head = reranker.rerank(
                         query=query,
-                        results=raw_results,
+                        results=head,
                         blend_alpha=self.config.search.reranker_blend_alpha,
                     )
+                    raw_results = head + tail
                 except Exception as e:
                     logger.warning(
-                        "Reranker unavailable, falling back to vector similarity",
+                        "Reranker unavailable, falling back to fused similarity",
                         error=str(e),
                     )
 
@@ -541,7 +600,8 @@ class SearchService:
             # 6. Context enrichment (attach docstrings/signatures)
             raw_results = _enrich_results_with_context(raw_results)
 
-            # Format results
+            # Format results — surface candidate_sources so agents can reason
+            # about *why* a chunk matched (vector vs symbol vs path vs BM25).
             results = []
             for r in raw_results:
                 results.append({
@@ -556,6 +616,7 @@ class SearchService:
                     "relevance_score": r["similarity"],
                     "chunk_type": r.get("chunk_type", "code"),
                     "is_public": r.get("is_public", True),
+                    "candidate_sources": r.get("candidate_sources"),
                 })
             
             elapsed_time = (time.time() - start_time) * 1000
@@ -569,12 +630,29 @@ class SearchService:
                 results=len(results),
             )
 
+            # Telemetry: which branches contributed, top scores, latency.
+            # Best-effort — never break search if logging fails.
+            try:
+                from synsc.services.observability import log_search_telemetry
+                log_search_telemetry(
+                    user_id=effective_user_id,
+                    query=query,
+                    quality_mode=effective_mode,
+                    hybrid_meta=hybrid_meta,
+                    top_results=results,
+                    elapsed_ms=elapsed_time,
+                )
+            except Exception:
+                pass
+
             return {
                 "success": True,
                 "query": query,
                 "results": results,
                 "count": len(results),
                 "search_time_ms": elapsed_time,
+                "quality_mode": effective_mode,
+                "hybrid": hybrid_meta,
                 "timing": {
                     "embedding_ms": round(embed_ms, 1),
                     "db_search_ms": round(db_ms, 1),

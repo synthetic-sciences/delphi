@@ -61,9 +61,33 @@ For interactive editing of the install-time choices (provider, model, keys, dash
 
 | Var | Default | Description |
 |---|---|---|
-| `SYNSC_ENABLE_RERANKER` | `false` | Enable cross-encoder re-rank on the top-K candidates. Improves precision; costs a forward pass per query. |
-| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | sentence-transformers cross-encoder model id. |
+| `SYNSC_ENABLE_RERANKER` | `false` | Enable cross-encoder re-rank on the top-K candidates. Improves precision; costs a forward pass per query. Implicit on when `quality_mode='agent'`. |
+| `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | sentence-transformers cross-encoder model id. Falls back to this when the code-aware model can't load. |
 | `RERANKER_BLEND_ALPHA` | `0.5` | Mix between vector similarity and reranker score. `0` = pure reranker, `1` = pure vector. |
+
+The agent mode tries the code-aware reranker (`BAAI/bge-reranker-base`) first and falls back to the ms-marco model if it can't load. The fallback prevents an offline / CDN-blocked environment from disabling rerank entirely.
+
+---
+
+## Quality mode + hybrid retrieval
+
+Delphi's default `quality_mode=agent` is what MCP clients hit when no
+mode is specified. It enables hybrid retrieval (vector + BM25 + exact
+symbol + exact path + trigram), AST chunking, the cross-encoder reranker,
+and includes tests/docs/examples/configs/manifests in the index.
+
+| Var | Default | Description |
+|---|---|---|
+| `SYNSC_QUALITY_MODE` | `agent` | Global default for retrieval/indexing. One of `fast`, `balanced`, `agent`. |
+| `SYNSC_MCP_QUALITY_MODE` | `agent` | The mode an MCP-initiated request gets if it doesn't pass one explicitly. |
+| `SYNSC_FAST_MODE` | `true` | Legacy: skip tests/examples/docs at index time. Ignored in `agent` mode. |
+| `SYNSC_TURBO_MODE` | `true` | Legacy: skip AST chunking at index time. Ignored in `agent` mode. |
+| `SYNSC_CHUNK_MAX_TOKENS` | `2048` | Max tokens per chunk. |
+| `SYNSC_CHUNK_MIN_TOKENS` | `50` | Minimum tokens; chunks smaller than this are dropped. |
+| `SYNSC_CHUNK_MIN_TOKENS_AGENT` | `10` | Minimum threshold in agent mode. Lower so manifests, dotfiles, and `.env.example`-style files are kept. |
+| `SYNSC_INCLUDE_PATTERNS` | — | Comma-separated extensions/basenames to add to the include list (e.g. `.tex,.adoc`). |
+| `SYNSC_EXCLUDE_PATTERNS` | — | Comma-separated patterns to add to the exclude list. |
+| `SYNSC_FORCE_DEFAULT_BRANCH` | — | Set to any value to disable GitHub-API default-branch detection and force the configured `git.default_branch` (typically `main`) when the caller doesn't pass a branch. Off by default. |
 
 ---
 

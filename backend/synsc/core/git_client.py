@@ -1,5 +1,6 @@
 """Git operations using dulwich."""
 
+import contextlib
 import fnmatch
 import hashlib
 import os
@@ -22,16 +23,31 @@ logger = structlog.get_logger(__name__)
 class GitClient:
     """Handle Git operations for cloning and managing repositories."""
 
-    def __init__(self, repos_dir: Path | None = None):
+    def __init__(self, repos_dir: Path | None = None, quality_mode: str | None = None):
         """Initialize the Git client.
-        
+
         Args:
             repos_dir: Directory for storing cloned repos (uses temp_dir by default)
+            quality_mode: Override quality_mode for inclusion/exclusion decisions.
+                None = use config.quality.quality_mode.
         """
         config = get_config()
         self.repos_dir = repos_dir or config.storage.temp_dir
         self.git_config = config.git
+        self.quality_config = config.quality
+        # Resolve effective quality mode at call time so per-request overrides
+        # (passed by IndexingService) take effect without needing a fresh
+        # GitClient instance.
+        self._quality_mode_override = quality_mode
         self.repos_dir.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def effective_quality_mode(self) -> str:
+        return self._quality_mode_override or self.quality_config.quality_mode
+
+    def set_quality_mode(self, quality_mode: str | None) -> None:
+        """Override quality_mode for subsequent operations on this client."""
+        self._quality_mode_override = quality_mode
 
     def parse_github_url(self, url: str) -> tuple[str, str, str]:
         """Parse a GitHub URL or shorthand into (url, owner, name).
@@ -133,21 +149,71 @@ class GitClient:
 
         repo_dir = self.get_repo_dir(owner, name, branch)
 
-        # If already cloned, pull latest
+        # If already cloned, refresh against the remote before returning the
+        # cached SHA. The previous behavior trusted the on-disk HEAD, so
+        # re-indexes silently used stale code when the remote moved forward.
+        # We now fetch the remote tip and only fast-forward; if anything
+        # diverges (force-pushed, branch deleted) we wipe and re-clone.
         if repo_dir.exists():
             logger.info(
-                "Repository already exists, pulling latest",
+                "Repository already exists, refreshing against remote",
                 path=str(repo_dir),
                 branch=branch,
             )
             try:
                 repo = Repo(str(repo_dir))
-                # Get current commit
-                commit_sha = repo.head().decode()
+
+                # Build the same authenticated remote URL used at clone time
+                # so private repos refresh as well.
+                refresh_url = full_url
+                if github_token:
+                    parsed = urlparse(full_url)
+                    refresh_url = (
+                        f"https://x-access-token:{github_token}@"
+                        f"{parsed.netloc}{parsed.path}"
+                    )
+
+                # dulwich.porcelain.fetch updates remote refs without merging.
+                with contextlib.suppress(Exception):
+                    porcelain.fetch(
+                        repo, refresh_url, depth=1, force=True,
+                    )
+
+                remote_ref = f"refs/remotes/origin/{branch}".encode()
+                refs = repo.get_refs()
+                remote_sha_bytes = refs.get(remote_ref)
+
+                if remote_sha_bytes:
+                    # Fast-forward HEAD to the remote tip so list_files reads
+                    # the latest content.
+                    repo.refs[b"HEAD"] = remote_sha_bytes
+                    branch_ref = f"refs/heads/{branch}".encode()
+                    repo.refs[branch_ref] = remote_sha_bytes
+                    commit_sha = remote_sha_bytes.decode()
+                    logger.info(
+                        "Repository fast-forwarded to remote tip",
+                        path=str(repo_dir),
+                        sha=commit_sha[:8],
+                    )
+                else:
+                    # Couldn't get remote tip — fall back to local HEAD but
+                    # warn so re-indexers know they may be working with stale
+                    # source.
+                    commit_sha = repo.head().decode()
+                    logger.warning(
+                        "Could not refresh remote, using local HEAD",
+                        sha=commit_sha[:8],
+                    )
+
+                # Materialize the working tree at the new HEAD so list_files
+                # reads the refreshed content from disk.
+                with contextlib.suppress(Exception):
+                    porcelain.reset(repo, mode="hard", treeish=commit_sha.encode())
+
                 return repo_dir, owner, name, commit_sha
             except Exception as e:
                 logger.warning(
-                    "Failed to open existing repo, re-cloning",
+                    "Failed to refresh existing repo, re-cloning",
                     error=str(e),
                 )
                 shutil.rmtree(repo_dir)
@@ -219,46 +285,65 @@ class GitClient:
         return False
 
     def list_files(
-        self, repo_path: Path, include_content: bool = False, max_workers: int = 8
+        self,
+        repo_path: Path,
+        include_content: bool = False,
+        max_workers: int = 8,
     ) -> list[dict]:
         """List all indexable files in a repository.
-        
+
         Uses parallel I/O for faster file reading when include_content=True.
-        
+
+        Aggregates skip reasons per category so we can answer "what got
+        filtered and why" without spamming the log on every file.
+
         Args:
             repo_path: Path to the repository
             include_content: Whether to include file content
             max_workers: Max parallel threads for file reading (default: 8)
-            
+
         Returns:
-            List of file info dicts
+            List of file info dicts. ``self.last_skip_reasons`` is populated
+            with a counter of skip reasons for the most recent call.
         """
         # Phase 1: Collect file paths (fast, single-threaded)
         file_paths = []
-        
+        skip_reasons: dict[str, int] = {}
+        total_seen = 0
+
+        def _bump(reason: str) -> None:
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
         for root, dirs, filenames in os.walk(repo_path):
             # Skip excluded directories
-            dirs[:] = [
-                d for d in dirs
-                if not self._should_exclude(Path(root) / d, repo_path)
-            ]
-            
+            kept_dirs = []
+            for d in dirs:
+                if self._should_exclude(Path(root) / d, repo_path):
+                    _bump("dir_excluded")
+                else:
+                    kept_dirs.append(d)
+            dirs[:] = kept_dirs
+
             for filename in filenames:
+                total_seen += 1
                 file_path = Path(root) / filename
                 rel_path = file_path.relative_to(repo_path)
-                
+
                 # Check exclusions
                 if self._should_exclude(file_path, repo_path):
+                    _bump("pattern_excluded")
                     continue
-                
-                # Check file extension
+
+                # Check file extension / basename
                 if not self._should_include(file_path):
+                    _bump("extension_not_included")
                     continue
-                
+
                 # Check file size
                 try:
                     size = file_path.stat().st_size
                     if size > self.git_config.max_file_size_mb * 1024 * 1024:
+                        _bump("file_too_large")
                         logger.debug(
                             "Skipping large file",
                             path=str(rel_path),
@@ -266,9 +351,14 @@ class GitClient:
                         )
                         continue
                 except OSError:
+                    _bump("stat_error")
                     continue
-                
+
                 file_paths.append((file_path, rel_path, filename, size))
+
+        # Stash for the caller (IndexingService) to consume / log later.
+        self.last_skip_reasons = skip_reasons
+        self.last_total_seen = total_seen
         
         # Phase 2: Read file contents in parallel (if requested)
         if not include_content:
@@ -313,16 +403,22 @@ class GitClient:
         return files
 
     def _should_exclude(self, path: Path, repo_root: Path) -> bool:
-        """Check if a path should be excluded."""
+        """Check if a path should be excluded.
+
+        In agent quality mode we keep tests/docs/examples/configs because they
+        carry context an agent needs (test cases reveal contracts, examples
+        show idiomatic usage, configs reveal env vars and feature flags).
+        """
         rel_path = str(path.relative_to(repo_root))
-        
+
         # Combine patterns
         patterns = list(self.git_config.exclude_patterns)
-        
-        # Add fast mode patterns if enabled
-        if self.git_config.fast_mode:
+
+        # In agent mode, never apply fast_mode_skip_patterns even if fast_mode
+        # is on globally — agent mode is opinionated about keeping tests/docs.
+        if self.git_config.fast_mode and self.effective_quality_mode != "agent":
             patterns.extend(self.git_config.fast_mode_skip_patterns)
-        
+
         for pattern in patterns:
             # Handle directory patterns (ending with /)
             if pattern.endswith("/"):
@@ -337,10 +433,39 @@ class GitClient:
             # Handle exact matches
             elif pattern in rel_path:
                 return True
-        
+
         return False
 
     def _should_include(self, path: Path) -> bool:
-        """Check if a file should be included based on extension."""
+        """Check if a file should be included.
+
+        Inclusion rules (in order):
+        1. Exact basename match against config.git.include_basenames — covers
+           Dockerfile, Makefile, go.mod, .env.example, Procfile, etc. that
+           have no extension or unusual ones.
+        2. Extension match against config.git.include_extensions.
+        3. In agent quality mode only, basenames starting with "Dockerfile.",
+           "Makefile.", or ending with ".dockerfile" are also included.
+        """
+        name = path.name
+        if name in self.git_config.include_basenames:
+            return True
+
         suffix = path.suffix.lower()
-        return suffix in self.git_config.include_extensions
+        if suffix in self.git_config.include_extensions:
+            return True
+
+        if self.effective_quality_mode == "agent":
+            # Common variants that don't show up in include_basenames literally.
+            if name.startswith("Dockerfile.") or name.endswith(".dockerfile"):
+                return True
+            if name.startswith("Makefile.") or name.endswith(".mk"):
+                return True
+            # Bazel files — BUILD.foo, foo.bzl
+            if suffix == ".bzl":
+                return True
+            # IaC / infra
+            if suffix in {".tf", ".tfvars", ".hcl", ".bicep", ".nomad"}:
+                return True
+
+        return False

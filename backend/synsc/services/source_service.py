@@ -320,9 +320,16 @@ def index_source(
     if source_type == "repo":
         res = _get_indexing_service(user_id).index_repository(
             url=url,
-            branch=opts.get("branch", "main"),
+            # Pass None when caller didn't set a branch so default-branch
+            # detection runs against the GitHub API.
+            branch=opts.get("branch"),
             user_id=user_id,
             deep_index=bool(opts.get("deep_index", False)),
+            force_reindex=bool(opts.get("force_reindex", False)),
+            quality_mode=opts.get("quality_mode"),
+            include_tests=opts.get("include_tests"),
+            include_docs=opts.get("include_docs"),
+            include_examples=opts.get("include_examples"),
         )
         return _normalize_index_response(
             source_type="repo",
