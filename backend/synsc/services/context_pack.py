@@ -948,11 +948,22 @@ def get_chunk_context(
     same file), the enclosing function/class body if any, and same-class
     siblings when chunk relationships exist.
 
+    Side-effect: stamps an observability ``chunk_used`` event so we can
+    measure "returned vs actually used" — agents calling get_context on
+    a chunk is the strongest signal that the search hit was useful.
+
     This is the ``get_context(chunk_id)`` primitive — useful when an agent
     wants to drill into one specific result without re-running search.
     """
     if not user_id:
         raise ValueError("user_id required")
+    # Auto-stamp the chunk_used event. Best-effort — don't break the
+    # primary read on logging failure.
+    try:
+        from synsc.services.observability import log_chunk_used
+        log_chunk_used(user_id=user_id, chunk_id=chunk_id)
+    except Exception:
+        pass
     out: dict[str, Any] = {"chunk_id": chunk_id, "primary": None,
                           "neighbors": [], "enclosing": None,
                           "same_class": []}

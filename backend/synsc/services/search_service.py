@@ -770,7 +770,29 @@ class SearchService:
                 start = (start_line or 1) - 1
                 end = end_line or len(lines)
                 content = "\n".join(lines[start:end])
-            
+
+            # Observability: stamp every chunk in the requested range as
+            # "used" so we can measure get_file-after-search_code rates.
+            # Best-effort — never break the read on logging failure.
+            try:
+                from synsc.services.observability import log_chunk_used
+                lo, hi = start_line or 1, end_line or total_lines
+                used_chunks = session.execute(
+                    text(
+                        """
+                        SELECT chunk_id FROM code_chunks
+                        WHERE file_id = :fid
+                          AND start_line <= :hi AND end_line >= :lo
+                        LIMIT 25
+                        """
+                    ),
+                    {"fid": db_file.file_id, "lo": lo, "hi": hi},
+                ).fetchall()
+                for row in used_chunks:
+                    log_chunk_used(user_id=effective_user_id, chunk_id=str(row[0]))
+            except Exception:
+                pass
+
             return {
                 "success": True,
                 "repo_id": repo_id,

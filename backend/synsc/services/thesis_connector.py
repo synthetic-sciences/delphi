@@ -626,16 +626,27 @@ def search_thesis_nodes(
 def find_related_nodes(
     *,
     user_id: str,
-    node_id: str,
+    node_id: str | None = None,
+    question: str | None = None,
     max_depth: int = 2,
     edge_types: list[str] | None = None,
     top_k: int = 25,
 ) -> list[dict[str, Any]]:
-    """Walk the graph from ``node_id`` and return related nodes within
-    ``max_depth`` hops.
+    """Walk the graph from a starting node and return related nodes
+    within ``max_depth`` hops.
+
+    Either ``node_id`` (an explicit anchor) or ``question`` (we search
+    for the closest matching node first) must be supplied. The spec
+    expects ``find_related_nodes(question)`` so we accept either input.
     """
-    if not user_id or not node_id:
+    if not user_id or (not node_id and not question):
         return []
+    # If only a question was passed, anchor on the top hit.
+    if not node_id and question:
+        anchors = search_thesis_nodes(query=question, user_id=user_id, top_k=1)
+        if not anchors:
+            return []
+        node_id = anchors[0]["node_id"]
     edge_filter = ""
     params: dict[str, Any] = {"nid": node_id, "uid": user_id, "top_k": top_k}
     if edge_types:

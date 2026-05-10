@@ -1858,22 +1858,36 @@ Provides deep context to AI agents through:
 
     @server.tool()
     def find_related_nodes(
-        node_id: str,
+        node_id: str | None = None,
+        question: str | None = None,
         max_depth: int = 2,
         edge_types: list[str] | None = None,
         top_k: int = 25,
     ) -> dict[str, Any]:
-        """Walk the Thesis graph from a node, BFS up to ``max_depth`` hops."""
+        """Walk the Thesis graph from an anchor, BFS up to ``max_depth`` hops.
+
+        Pass either ``node_id`` (an explicit anchor) or ``question`` (we
+        anchor on the top semantic match). One must be supplied.
+        """
         from synsc.services.thesis_connector import find_related_nodes as _rel
 
         user_id = get_authenticated_user_id()
         if not user_id:
             return {"success": False, "error_code": "auth_required"}
+        if not node_id and not question:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": "Pass either node_id= or question=",
+            }
         nodes = _rel(
-            user_id=user_id, node_id=node_id,
+            user_id=user_id, node_id=node_id, question=question,
             max_depth=max_depth, edge_types=edge_types, top_k=top_k,
         )
-        return {"success": True, "node_id": node_id, "related": nodes}
+        return {
+            "success": True, "node_id": node_id, "question": question,
+            "related": nodes,
+        }
 
     @server.tool()
     def find_relevant_artifacts(

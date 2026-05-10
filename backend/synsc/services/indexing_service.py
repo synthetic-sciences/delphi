@@ -1142,6 +1142,15 @@ class IndexingService:
                         language=language,
                         token_count=chunk.token_count,
                     )
+                    overlapping = [
+                        s.name for s in extracted_symbols
+                        if (
+                            s.start_line <= chunk.end_line
+                            and s.end_line >= chunk.start_line
+                        )
+                    ]
+                    if overlapping:
+                        db_chunk.set_symbol_names(overlapping)
                     session.add(db_chunk)
                     enriched = enrich_chunk_for_embedding(
                         chunk.content, file_path,
@@ -1663,6 +1672,20 @@ class IndexingService:
                                 language=language,
                                 token_count=chunk.token_count,
                             )
+                            # Attach symbol names for every line-based chunk that
+                            # overlaps a symbol. Without this, the symbol-boost
+                            # branch of hybrid retrieval can't anchor to chunks
+                            # produced by line-based chunking (which is most of
+                            # them under turbo mode).
+                            overlapping = [
+                                s.name for s in extracted_symbols
+                                if (
+                                    s.start_line <= chunk.end_line
+                                    and s.end_line >= chunk.start_line
+                                )
+                            ]
+                            if overlapping:
+                                db_chunk.set_symbol_names(overlapping)
                             session.add(db_chunk)
                             enriched = enrich_chunk_for_embedding(
                                 chunk.content, file_path,
