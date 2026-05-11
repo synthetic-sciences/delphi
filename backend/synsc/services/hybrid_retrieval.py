@@ -33,7 +33,10 @@ from sqlalchemy.orm import Session
 logger = structlog.get_logger(__name__)
 
 
-_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# Allow dots inside identifiers so dotted paths like
+# ``fastapi.routing.APIRouter`` come through as a single token (matches the
+# behavior of the legacy ``_extract_query_symbols`` in search_service.py).
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
 
 
 @dataclass
@@ -83,26 +86,45 @@ class Candidate:
 
 
 def extract_identifiers(query: str) -> list[str]:
-    """Pull identifier-shaped tokens out of a query (camelCase, snake_case)."""
+    """Pull identifier-shaped tokens out of a query.
+
+    Returns CamelCase, snake_case, PascalCase, UPPER_CASE, and dotted
+    path identifiers — in first-seen order, de-duplicated, longer than
+    2 chars, excluding a small English-word stoplist that overlaps with
+    code identifiers but is almost never useful to look up.
+    """
     tokens = _IDENTIFIER_RE.findall(query)
     out: list[str] = []
     seen: set[str] = set()
     for tok in tokens:
+        # Trailing dot from "foo." → strip
+        tok = tok.rstrip(".")
         if len(tok) <= 2:
             continue
         # Skip common English verbs/articles that look like identifiers.
+        # Kept narrow on purpose — false positives here cost recall on
+        # legitimate identifiers like ``set``, ``get``.
         low = tok.lower()
-        if low in {
-            "the", "and", "for", "how", "does", "what", "this", "that",
-            "with", "from", "use", "get", "set", "not", "all", "any",
-            "find", "list", "show", "code", "file", "function", "class",
-            "method", "where", "which", "when", "why", "into", "via",
-        }:
+        if low in _STOPWORDS:
             continue
         if tok not in seen:
             seen.add(tok)
             out.append(tok)
     return out
+
+
+_STOPWORDS: frozenset[str] = frozenset({
+    "the", "and", "for", "how", "does", "what", "this", "that",
+    "with", "from", "use", "get", "set", "not", "all", "any",
+    "find", "list", "show", "code", "file", "function", "class",
+    "method", "where", "which", "when", "why", "into", "via",
+    # Additional everyday English words that show up in question form
+    # but never as code we want to find by name.
+    "work", "works", "working", "does", "doing", "make", "made",
+    "want", "need", "needs", "should", "would", "could", "have", "has",
+    "had", "been", "are", "was", "were", "will", "can", "may",
+    "explain", "tell", "give", "show", "want", "want's",
+})
 
 
 def _user_repo_filter() -> str:

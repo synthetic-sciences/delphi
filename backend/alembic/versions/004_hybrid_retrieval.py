@@ -33,96 +33,111 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _table_exists(bind, name: str) -> bool:
+    """Return True if the table exists in the public schema."""
+    import sqlalchemy as sa
+    return bool(
+        bind.execute(
+            sa.text(
+                "SELECT EXISTS ("
+                "  SELECT 1 FROM information_schema.tables "
+                "  WHERE table_schema = 'public' AND table_name = :name"
+                ")"
+            ),
+            {"name": name},
+        ).scalar()
+    )
+
+
 def upgrade() -> None:
     # 1. pg_trgm: trigram similarity for fuzzy identifier matching.
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
 
-    # 2. GIN trigram index on code_chunks.content. Speeds up LIKE '%token%'
-    #    queries from O(N) seq scan to O(log N) index lookup. Used by the
-    #    BM25/keyword candidate stage in the hybrid retrieval pipeline.
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_code_chunks_content_trgm
-        ON code_chunks
-        USING gin (content gin_trgm_ops)
-        """
-    )
+    # Tables may not exist yet if the DB was created from SQLAlchemy models
+    # only (no setup_local.sql). We skip the table-modifying steps in that
+    # case — they'll get applied by the next migration or when the model
+    # initialiser re-runs against the upgraded schema.
+    bind = op.get_bind()
 
-    # 3. GIN trigram index on symbols.name and qualified_name for exact /
-    #    fuzzy symbol lookup.
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_symbols_name_trgm
-        ON symbols
-        USING gin (name gin_trgm_ops)
-        """
-    )
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_symbols_qualified_name_trgm
-        ON symbols
-        USING gin (qualified_name gin_trgm_ops)
-        """
-    )
+    if _table_exists(bind, "code_chunks"):
+        # 2. GIN trigram index on code_chunks.content. Speeds up LIKE
+        #    '%token%' queries from O(N) seq scan to O(log N) lookup.
+        op.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_code_chunks_content_trgm
+            ON code_chunks
+            USING gin (content gin_trgm_ops)
+            """
+        )
+        # 5. tsvector generated column on code_chunks for BM25-style ranking.
+        op.execute(
+            """
+            ALTER TABLE code_chunks
+            ADD COLUMN IF NOT EXISTS content_tsv tsvector
+            GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED
+            """
+        )
+        op.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_code_chunks_content_tsv
+            ON code_chunks
+            USING gin (content_tsv)
+            """
+        )
+        # 7. Symbol-name trigram index.
+        op.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_code_chunks_symbol_names_trgm
+            ON code_chunks
+            USING gin (symbol_names gin_trgm_ops)
+            WHERE symbol_names IS NOT NULL
+            """
+        )
 
-    # 4. GIN trigram index on repository_files.file_path so exact-path /
-    #    glob-style queries can hit the index instead of seq-scanning every
-    #    file in a 30k-file repo.
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_repository_files_path_trgm
-        ON repository_files
-        USING gin (file_path gin_trgm_ops)
-        """
-    )
+    if _table_exists(bind, "symbols"):
+        # 3. GIN trigram indexes on symbols for exact/fuzzy symbol lookup.
+        op.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_symbols_name_trgm
+            ON symbols
+            USING gin (name gin_trgm_ops)
+            """
+        )
+        op.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_symbols_qualified_name_trgm
+            ON symbols
+            USING gin (qualified_name gin_trgm_ops)
+            """
+        )
 
-    # 5. tsvector generated column on code_chunks for BM25-style ranking.
-    #    Postgres' ts_rank_cd is close enough to BM25 in practice and avoids
-    #    pulling in a new dependency. The column is GENERATED so it stays in
-    #    sync with content automatically.
-    op.execute(
-        """
-        ALTER TABLE code_chunks
-        ADD COLUMN IF NOT EXISTS content_tsv tsvector
-        GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED
-        """
-    )
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_code_chunks_content_tsv
-        ON code_chunks
-        USING gin (content_tsv)
-        """
-    )
+    if _table_exists(bind, "repository_files"):
+        # 4. GIN trigram index on file_path for exact-path / glob queries.
+        op.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_repository_files_path_trgm
+            ON repository_files
+            USING gin (file_path gin_trgm_ops)
+            """
+        )
 
-    # 6. Same for paper_chunks — paper search currently uses pure vector,
-    #    we add tsvector so we can blend BM25 into paper search too.
-    op.execute(
-        """
-        ALTER TABLE paper_chunks
-        ADD COLUMN IF NOT EXISTS content_tsv tsvector
-        GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED
-        """
-    )
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_paper_chunks_content_tsv
-        ON paper_chunks
-        USING gin (content_tsv)
-        """
-    )
-
-    # 7. Symbol-name index on code_chunks.symbol_names (stored as JSON-encoded
-    #    text). LIKE '%"SymbolName"%' is fine for the volumes we deal with;
-    #    GIN trgm on the text column makes it fast enough.
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_code_chunks_symbol_names_trgm
-        ON code_chunks
-        USING gin (symbol_names gin_trgm_ops)
-        WHERE symbol_names IS NOT NULL
-        """
-    )
+    if _table_exists(bind, "paper_chunks"):
+        # 6. Same tsvector trick for paper_chunks so BM25 lights up paper
+        #    search too.
+        op.execute(
+            """
+            ALTER TABLE paper_chunks
+            ADD COLUMN IF NOT EXISTS content_tsv tsvector
+            GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED
+            """
+        )
+        op.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_paper_chunks_content_tsv
+            ON paper_chunks
+            USING gin (content_tsv)
+            """
+        )
 
 
 def downgrade() -> None:

@@ -23,6 +23,7 @@ chunks so they participate in the vector + BM25 + graph retrieval pipeline.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -711,13 +712,42 @@ def find_relevant_artifacts(
     The preview column has a trigram index, so this is fast even at scale.
     Pairs nicely with ``search_thesis_nodes`` — the artifact often answers
     "did this hypothesis pan out?".
+
+    Multi-word queries: every word longer than 2 chars is OR'd together,
+    so a query like "accuracy benchmark" matches an artifact named
+    ``accuracy_results.csv`` (via the word "accuracy") instead of the
+    naive whole-string ILIKE that the first version did.
     """
     if not user_id or not query.strip():
         return []
-    needle = query.strip()[:200]
-    params: dict[str, Any] = {
-        "uid": user_id, "needle": f"%{needle}%", "top_k": top_k,
-    }
+
+    # Tokenize the query into searchable needles. Keep the full string too
+    # so phrasal matches still rank — small string-set, all-OR'd in SQL.
+    full = query.strip()[:200]
+    word_re = re.compile(r"[A-Za-z][A-Za-z0-9_-]+")
+    words = [w for w in word_re.findall(full) if len(w) >= 3][:8]
+    needles = [full] + [w for w in words if w.lower() != full.lower()]
+
+    params: dict[str, Any] = {"uid": user_id, "top_k": top_k}
+    needle_params: list[str] = []
+    for i, n in enumerate(needles):
+        key = f"n_{i}"
+        params[key] = f"%{n}%"
+        needle_params.append(key)
+
+    name_clauses = " OR ".join(f"ta.name ILIKE :{k}" for k in needle_params)
+    preview_clauses = " OR ".join(f"ta.preview ILIKE :{k}" for k in needle_params)
+    title_clauses = " OR ".join(
+        f"(tn.title IS NOT NULL AND tn.title ILIKE :{k})" for k in needle_params
+    )
+    summary_clauses = " OR ".join(
+        f"(tn.summary IS NOT NULL AND tn.summary ILIKE :{k})" for k in needle_params
+    )
+    where_block = (
+        f"({name_clauses}) OR ({preview_clauses}) "
+        f"OR ({title_clauses}) OR ({summary_clauses})"
+    )
+
     extra = ""
     if workspace_ids:
         ph = ", ".join([f":wid_{i}" for i in range(len(workspace_ids))])
@@ -742,12 +772,7 @@ def find_relevant_artifacts(
         LEFT JOIN thesis_nodes tn ON tn.node_id = ta.node_id
         JOIN thesis_workspaces tw ON tw.workspace_id = ta.workspace_id
         WHERE uw.user_id = :uid
-          AND (
-              ta.name ILIKE :needle
-              OR ta.preview ILIKE :needle
-              OR (tn.title IS NOT NULL AND tn.title ILIKE :needle)
-              OR (tn.summary IS NOT NULL AND tn.summary ILIKE :needle)
-          )
+          AND ({where_block})
         {extra}
         ORDER BY ta.created_at DESC
         LIMIT :top_k
