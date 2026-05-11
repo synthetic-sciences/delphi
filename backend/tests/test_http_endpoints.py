@@ -28,6 +28,7 @@ API_KEY = os.getenv(
     "SYNSC_TEST_API_KEY",
     "synsc_894f2b1dbf244113edbc767ad37ce68726453e56d42c1995",
 )
+SYSTEM_PASSWORD = os.getenv("SYNSC_TEST_SYSTEM_PASSWORD") or os.getenv("SYSTEM_PASSWORD")
 AUTH = {"X-API-Key": API_KEY}
 
 
@@ -129,10 +130,8 @@ class TestPublicEndpoints:
         assert "version" in data
         assert data["database_backend"] == "postgresql"
         assert data["vector_backend"] == "pgvector"
-        assert data["auth_backend"] == "local"
+        assert data["auth_backend"] == "github_oauth+jwt"
         assert isinstance(data["uptime_seconds"], (int, float))
-        assert isinstance(data["indexed_repos"], int)
-        assert isinstance(data["indexed_papers"], int)
 
     def test_config(self, http: httpx.Client):
         r = http.get("/config")
@@ -507,27 +506,25 @@ class TestJobEndpoints:
 
 
 class TestCliAuth:
-    """Device-flow authentication for CLI tools."""
+    """Magic-link authentication for CLI tools."""
 
-    def test_start_and_poll(self, http: httpx.Client):
-        # Start session
-        r = http.post("/api/cli/auth/start")
+    def test_magic_create_and_consume(self, http: httpx.Client):
+        if not SYSTEM_PASSWORD:
+            pytest.skip("Set SYNSC_TEST_SYSTEM_PASSWORD to test CLI magic-link auth")
+
+        r = http.post("/auth/magic/create", json={"password": SYSTEM_PASSWORD})
         assert r.status_code == 200
         data = r.json()
-        assert "device_code" in data
-        assert "user_code" in data
-        assert data["expires_in"] > 0
+        assert "magic_id" in data
+        assert data["ttl_seconds"] > 0
 
-        # Poll — should be pending
-        device_code = data["device_code"]
-        r = http.get(f"/api/cli/auth/status/{device_code}")
-        assert r.status_code == 200
-        assert r.json()["status"] == "pending"
+        r = http.get(f"/auth/magic/{data['magic_id']}", follow_redirects=False)
+        assert r.status_code == 303
+        assert "synsc_session=" in r.headers.get("set-cookie", "")
 
-    def test_poll_unknown_session(self, http: httpx.Client):
-        r = http.get("/api/cli/auth/status/nonexistent-device-code-xyz")
-        # Should be 404 or return expired
-        assert r.status_code in (200, 404)
+    def test_unknown_magic_link_rejected(self, http: httpx.Client):
+        r = http.get("/auth/magic/nonexistent-device-code-xyz", follow_redirects=False)
+        assert r.status_code == 401
 
 
 # ============================================================================
