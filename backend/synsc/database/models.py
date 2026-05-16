@@ -1148,6 +1148,42 @@ class IndexingJob(Base):
         }
 
 
+class ContextBlob(Base):
+    """Named context blob — portable agent context across IDEs.
+
+    Mirrors Nia's nia.context save/load. The blob is a JSONB payload with
+    indexed source_ids, source_types, default topic/tokens, and an
+    optional thesis_workspace_id.
+    """
+
+    __tablename__ = "context_blobs"
+    __table_args__ = (
+        UniqueConstraint("user_id", "name", name="unique_user_context_name"),
+        Index("idx_context_blobs_user", "user_id"),
+    )
+
+    context_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context_id": self.context_id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "payload": self.payload,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 # ==============================================================================
 # HELPER FUNCTIONS
 # ==============================================================================

@@ -2256,6 +2256,76 @@ def create_app() -> FastAPI:
             status_code=400, detail=f"unsupported source_type: {source_type}"
         )
 
+    @app.post("/v1/contexts", tags=["Contexts"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def save_context_endpoint(
+        request: Request,
+        body: dict,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Save a named context blob for the authenticated user."""
+        from synsc.services.context_blob_service import save_context
+
+        name = body.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="name required")
+        payload = body.get("payload") or {
+            k: body.get(k)
+            for k in (
+                "source_ids",
+                "source_types",
+                "topic",
+                "tokens",
+                "thesis_workspace_id",
+                "notes",
+            )
+            if k in body
+        }
+        try:
+            blob = save_context(user_id=auth.user_id, name=name, payload=payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return SafeJSONResponse(content={"success": True, **blob})
+
+    @app.get("/v1/contexts", tags=["Contexts"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def list_contexts_endpoint(
+        request: Request,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        from synsc.services.context_blob_service import list_contexts
+
+        blobs = list_contexts(user_id=auth.user_id)
+        return SafeJSONResponse(
+            content={"success": True, "contexts": blobs, "total": len(blobs)}
+        )
+
+    @app.get("/v1/contexts/{name}", tags=["Contexts"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def load_context_endpoint(
+        request: Request,
+        name: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        from synsc.services.context_blob_service import load_context
+
+        blob = load_context(user_id=auth.user_id, name=name)
+        if not blob:
+            raise HTTPException(status_code=404, detail="context not found")
+        return SafeJSONResponse(content={"success": True, **blob})
+
+    @app.delete("/v1/contexts/{name}", tags=["Contexts"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def delete_context_endpoint(
+        request: Request,
+        name: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        from synsc.services.context_blob_service import delete_context
+
+        deleted = delete_context(user_id=auth.user_id, name=name)
+        return SafeJSONResponse(content={"success": True, "deleted": deleted})
+
     @app.get("/v1/sources/{repo_id}/visualize", tags=["Sources"])
     @limiter.limit(SEARCH_LIMIT)
     async def visualize_codebase_endpoint(

@@ -2097,6 +2097,113 @@ Provides deep context to AI agents through:
             "count": len(results),
         }
 
+    @_tool_in("sources", "minimal")
+    def save_context(
+        name: str,
+        source_ids: list[str] | None = None,
+        source_types: list[str] | None = None,
+        topic: str | None = None,
+        tokens: int | None = None,
+        thesis_workspace_id: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Save a named context (indexed source set + preferences).
+
+        Portable across IDEs — load the same context on another machine
+        with ``load_context(name)`` and the agent gets the same source_ids,
+        default topic, and preferences.
+
+        Args:
+            name: User-scoped context name (must be unique per user).
+            source_ids: Indexed source IDs to include in the context.
+            source_types: Default source type filter.
+            topic: Default topic filter to apply on subsequent fetches.
+            tokens: Default token budget.
+            thesis_workspace_id: Optional Thesis workspace to bind to.
+            notes: Free-form notes — e.g., what this context is for.
+        """
+        from synsc.services.context_blob_service import save_context as _save
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "save_context requires an authenticated user",
+            }
+        payload = {
+            "source_ids": source_ids or [],
+            "source_types": source_types or [],
+            "topic": topic,
+            "tokens": tokens,
+            "thesis_workspace_id": thesis_workspace_id,
+            "notes": notes,
+        }
+        try:
+            blob = _save(user_id=user_id, name=name, payload=payload)
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        return {"success": True, **blob}
+
+    @_tool_in("sources", "minimal")
+    def load_context(name: str) -> dict[str, Any]:
+        """Load a named context for the current user."""
+        from synsc.services.context_blob_service import load_context as _load
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "load_context requires an authenticated user",
+            }
+        blob = _load(user_id=user_id, name=name)
+        if not blob:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": f"no context named {name!r}",
+            }
+        return {"success": True, **blob}
+
+    @_tool_in("sources")
+    def list_contexts() -> dict[str, Any]:
+        """List all saved contexts for the current user."""
+        from synsc.services.context_blob_service import (
+            list_contexts as _list,
+        )
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "list_contexts requires an authenticated user",
+            }
+        blobs = _list(user_id=user_id)
+        return {"success": True, "contexts": blobs, "total": len(blobs)}
+
+    @_tool_in("sources")
+    def delete_context(name: str) -> dict[str, Any]:
+        """Delete a saved context by name."""
+        from synsc.services.context_blob_service import (
+            delete_context as _delete,
+        )
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "delete_context requires an authenticated user",
+            }
+        deleted = _delete(user_id=user_id, name=name)
+        return {"success": True, "deleted": deleted}
+
     @_tool_in("code")
     def visualize_codebase(
         repo_id: str,
