@@ -428,6 +428,9 @@ def index_source(
 
         import os
         import tempfile
+        from urllib.parse import urlparse
+
+        import httpx
 
         from synsc.core.arxiv_client import (
             ArxivError,
@@ -437,9 +440,53 @@ def index_source(
         )
 
         svc = _get_paper_service(user_id)
+        url_lower = url.lower()
+        parsed = urlparse(url) if "://" in url else None
+        is_http_pdf = (
+            parsed is not None
+            and parsed.scheme in ("http", "https")
+            and (url_lower.endswith(".pdf") or "arxiv" not in url_lower
+                 and any(seg.endswith(".pdf") for seg in parsed.path.split("/")))
+        )
 
-        if os.path.isfile(url) and url.lower().endswith(".pdf"):
+        if os.path.isfile(url) and url_lower.endswith(".pdf"):
             res = svc.index_paper(pdf_path=url, source="upload")
+            ext_ref = url
+        elif is_http_pdf and "arxiv" not in url_lower:
+            # Generic PDF URL — download and index as upload-source paper.
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                pdf_path = tmp.name
+            try:
+                with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+                    resp = client.get(url)
+                    resp.raise_for_status()
+                    if not resp.content.startswith(b"%PDF"):
+                        os.unlink(pdf_path)
+                        return _normalize_index_response(
+                            source_type="paper",
+                            res={
+                                "success": False,
+                                "error": "URL did not return a PDF",
+                            },
+                            id_key="paper_id",
+                            external_ref=url,
+                        )
+                    with open(pdf_path, "wb") as f:
+                        f.write(resp.content)
+                res = svc.index_paper(
+                    pdf_path=pdf_path,
+                    source="url",
+                    arxiv_id=None,
+                    arxiv_metadata={
+                        "title": display_name or url.rsplit("/", 1)[-1],
+                        "source_url": url,
+                    },
+                )
+            finally:
+                try:
+                    os.unlink(pdf_path)
+                except OSError:
+                    pass
             ext_ref = url
         else:
             try:
@@ -514,6 +561,28 @@ def index_source(
             source_type="docs",
             res=res,
             id_key="docs_id",
+            external_ref=url,
+        )
+
+    # Fall through to the connector registry. Connectors raise
+    # ``NotImplementedError`` when stubbed and the HTTP layer turns that
+    # into a 501.
+    from synsc.services.connectors import get_connector
+
+    conn = get_connector(source_type)
+    if conn is not None:
+        if not user_id:
+            raise ValueError(f"{source_type} indexing requires an authenticated user")
+        result = conn.index(
+            url=url,
+            user_id=user_id,
+            options=opts,
+            display_name=display_name,
+        )
+        return _normalize_index_response(
+            source_type=source_type,
+            res=result,
+            id_key=f"{source_type}_id",
             external_ref=url,
         )
 
