@@ -18,11 +18,9 @@ from collections import Counter, defaultdict
 from typing import Any
 
 import structlog
-from sqlalchemy import func
 
 from synsc.database.connection import get_session
 from synsc.database.models import (
-    CodeChunk,
     Repository,
     RepositoryFile,
     Symbol,
