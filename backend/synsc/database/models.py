@@ -728,14 +728,18 @@ class DocumentationSource(Base):
 
     __tablename__ = "documentation_sources"
     __table_args__ = (
-        UniqueConstraint("url", name="uq_documentation_sources_url"),
+        UniqueConstraint(
+            "url", "version", name="uq_documentation_sources_url_version"
+        ),
         Index("idx_docs_sources_indexed_by", "indexed_by"),
+        Index("idx_docs_sources_version", "url", "version"),
     )
 
     docs_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=generate_uuid
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[str | None] = mapped_column(String(64))
     display_name: Mapped[str | None] = mapped_column(Text)
     sitemap_url: Mapped[str | None] = mapped_column(Text)
     indexed_by: Mapped[str | None] = mapped_column(String(36), index=True)

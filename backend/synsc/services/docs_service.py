@@ -180,18 +180,27 @@ class DocsService:
         sitemap_url: str | None = None,
         max_pages: int = _DEFAULT_MAX_PAGES,
         req_delay_s: float = _DEFAULT_REQ_DELAY_S,
+        version: str | None = None,
     ) -> dict:
-        """Crawl + index a docs site. Returns the canonical index-response shape."""
+        """Crawl + index a docs site. Returns the canonical index-response shape.
+
+        ``version`` lets the caller pin a specific release (Context7 parity).
+        The same URL can be indexed multiple times at different versions; each
+        becomes its own ``docs_id``. NULL version is the legacy "rolling" snapshot.
+        """
         t0 = time.time()
 
         if not self.user_id:
             return {"success": False, "error": "User ID is required"}
 
-        # Dedup by URL.
+        # Dedup by (url, version).
         with get_session() as session:
             existing = (
                 session.query(DocumentationSource)
-                .filter(DocumentationSource.url == url)
+                .filter(
+                    DocumentationSource.url == url,
+                    DocumentationSource.version == version,
+                )
                 .first()
             )
             if existing:
@@ -275,6 +284,7 @@ class DocsService:
                 DocumentationSource(
                     docs_id=docs_id,
                     url=url,
+                    version=version,
                     display_name=display_name,
                     sitemap_url=sitemap,
                     indexed_by=self.user_id,

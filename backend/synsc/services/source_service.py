@@ -508,6 +508,7 @@ def index_source(
             sitemap_url=opts.get("sitemap_url"),
             max_pages=int(opts.get("max_pages", 200)),
             req_delay_s=float(opts.get("req_delay_s", 1.0)),
+            version=opts.get("version"),
         )
         return _normalize_index_response(
             source_type="docs",
@@ -745,15 +746,44 @@ def _lookup_repo_by_owner_name(
         return None
 
 
-def _lookup_docs_by_url(url: str) -> str | None:
+def _lookup_docs_by_url(url: str, version: str | None = None) -> str | None:
+    """Look up a docs source by URL (and optional version).
+
+    With ``version`` provided, returns the docs_id for that specific
+    crawl. Without, prefers a row where version IS NULL ("rolling"), then
+    falls back to the most-recently-indexed row.
+    """
     from synsc.database.connection import get_session
     from synsc.database.models import DocumentationSource
 
     try:
         with get_session() as session:
+            if version is not None:
+                row = (
+                    session.query(DocumentationSource.docs_id)
+                    .filter(
+                        DocumentationSource.url == url,
+                        DocumentationSource.version == version,
+                    )
+                    .first()
+                )
+                return row[0] if row else None
+            # Prefer NULL-version (the rolling snapshot)
+            row = (
+                session.query(DocumentationSource.docs_id)
+                .filter(
+                    DocumentationSource.url == url,
+                    DocumentationSource.version.is_(None),
+                )
+                .first()
+            )
+            if row:
+                return row[0]
+            # Fall back to most-recently-indexed version
             row = (
                 session.query(DocumentationSource.docs_id)
                 .filter(DocumentationSource.url == url)
+                .order_by(DocumentationSource.indexed_at.desc())
                 .first()
             )
             return row[0] if row else None
@@ -1088,7 +1118,18 @@ def resolve_source_id(raw: str, user_id: str | None = None) -> tuple[str, str]:
         )
 
     if candidate.startswith(("http://", "https://")):
-        docs_uid = _lookup_docs_by_url(candidate)
+        # Allow ``url@version`` for Context7-style pinning.
+        version: str | None = None
+        url_to_lookup = candidate
+        if "@" in candidate:
+            # Be careful: '@' can appear in URLs (auth). Only treat the
+            # final '@' as a version separator if what follows looks like
+            # a version token (no slashes / spaces).
+            head, _, tail = candidate.rpartition("@")
+            if tail and "/" not in tail and " " not in tail and len(tail) <= 64:
+                url_to_lookup = head
+                version = tail
+        docs_uid = _lookup_docs_by_url(url_to_lookup, version=version)
         if docs_uid:
             return docs_uid, "docs"
         raise ValueError(
