@@ -679,6 +679,276 @@ def _lookup_docs_by_url(url: str) -> str | None:
         return None
 
 
+def resolve_source_name(
+    name: str,
+    user_id: str | None = None,
+    source_types: list[str] | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Context7-style name→source resolver.
+
+    Takes a free-form library / repo / dataset / paper name (e.g. ``"fastapi"``,
+    ``"transformers"``, ``"Attention is All You Need"``) and returns ranked
+    candidates ``{source_id, source_type, display_name, external_ref, trust_score,
+    match_quality}`` so the caller can disambiguate before fetching.
+
+    Two-call pattern: ``resolve_source_name(name)`` → ``read_source(source_id)``.
+
+    Ranking signals:
+      - exact name match > prefix > substring
+      - higher ``trust_score`` (stars/citations/verified) tiebreaks
+      - user-owned sources rank above public when scores tie
+    """
+    if not name or not isinstance(name, str):
+        return []
+
+    needle = name.strip().lower()
+    wanted = set(source_types or ["repo", "paper", "dataset", "docs"])
+    out: list[dict[str, Any]] = []
+
+    if "repo" in wanted:
+        out.extend(_resolve_repos_by_name(needle, user_id, limit))
+    if "paper" in wanted and user_id:
+        out.extend(_resolve_papers_by_name(needle, user_id, limit))
+    if "dataset" in wanted and user_id:
+        out.extend(_resolve_datasets_by_name(needle, user_id, limit))
+    if "docs" in wanted and user_id:
+        out.extend(_resolve_docs_by_name(needle, user_id, limit))
+
+    out.sort(
+        key=lambda r: (
+            -r["match_quality"],
+            -float(r.get("trust_score") or 0.0),
+            r.get("display_name") or "",
+        )
+    )
+    return out[:limit]
+
+
+def _match_quality(needle: str, hay: str | None) -> int:
+    """4 = exact, 3 = prefix-of-full-string, 2 = prefix-of-some-token, 1 = substring, 0 = miss.
+
+    Distinguishes "fastapi" → ``tiangolo/fastapi`` (token-prefix=2) from
+    "api" → ``tiangolo/fastapi`` (substring only=1). Token-prefix beats
+    bare substring so users searching for a known name don't lose to
+    partial mid-word hits.
+    """
+    if not hay:
+        return 0
+    h = hay.lower()
+    if h == needle:
+        return 4
+    if h.startswith(needle):
+        return 3
+    for tok in re.split(r"[\s/_\-.]+", h):
+        if tok and tok.startswith(needle):
+            return 2
+    if needle in h:
+        return 1
+    return 0
+
+
+def _trust_score(metadata: Any | None, fallback: float = 0.0) -> float:
+    """Extract a 0..1 trust score from a JSON metadata blob.
+
+    Repos: stars normalized (log10). Papers: citation_count normalized.
+    Falls back to ``fallback`` when no signal is present.
+    """
+    if not metadata:
+        return fallback
+    if isinstance(metadata, str):
+        try:
+            import json as _json
+
+            metadata = _json.loads(metadata)
+        except Exception:
+            return fallback
+    if not isinstance(metadata, dict):
+        return fallback
+    if "trust_score" in metadata:
+        try:
+            return max(0.0, min(1.0, float(metadata["trust_score"])))
+        except Exception:
+            pass
+    stars = metadata.get("stars") or metadata.get("stargazers_count")
+    if stars is not None:
+        try:
+            import math
+
+            return min(1.0, math.log10(max(1.0, float(stars))) / 6.0)
+        except Exception:
+            pass
+    citations = metadata.get("citation_count") or metadata.get("citations")
+    if citations is not None:
+        try:
+            import math
+
+            return min(1.0, math.log10(max(1.0, float(citations))) / 5.0)
+        except Exception:
+            pass
+    return fallback
+
+
+def _resolve_repos_by_name(
+    needle: str, user_id: str | None, limit: int
+) -> list[dict[str, Any]]:
+    from synsc.database.connection import get_session
+    from synsc.database.models import Repository
+
+    try:
+        with get_session() as session:
+            q = session.query(Repository).filter(Repository.is_public == True)  # noqa: E712
+            rows = q.limit(500).all()
+            scored = []
+            for r in rows:
+                full = f"{r.owner}/{r.name}".lower()
+                quality = max(
+                    _match_quality(needle, r.name),
+                    _match_quality(needle, full),
+                )
+                if quality == 0:
+                    continue
+                scored.append(
+                    {
+                        "source_id": str(r.repo_id),
+                        "source_type": "repo",
+                        "display_name": f"{r.owner}/{r.name}",
+                        "external_ref": r.url,
+                        "match_quality": quality,
+                        "trust_score": _trust_score(r.repo_metadata),
+                        "extra": {
+                            "branch": r.branch,
+                            "description": r.description,
+                        },
+                    }
+                )
+            scored.sort(
+                key=lambda x: (-x["match_quality"], -x["trust_score"])
+            )
+            return scored[:limit]
+    except Exception as exc:
+        logger.debug("resolve_name: repo branch failed", error=str(exc))
+        return []
+
+
+def _resolve_papers_by_name(
+    needle: str, user_id: str, limit: int
+) -> list[dict[str, Any]]:
+    from synsc.database.connection import get_session
+    from synsc.database.models import Paper
+
+    try:
+        with get_session() as session:
+            rows = session.query(Paper).limit(500).all()
+            scored = []
+            for p in rows:
+                quality = max(
+                    _match_quality(needle, p.title),
+                    _match_quality(needle, p.arxiv_id),
+                )
+                if quality == 0:
+                    continue
+                scored.append(
+                    {
+                        "source_id": str(p.paper_id),
+                        "source_type": "paper",
+                        "display_name": p.title or p.arxiv_id or "Untitled",
+                        "external_ref": p.arxiv_id or "",
+                        "match_quality": quality,
+                        "trust_score": _trust_score(
+                            getattr(p, "paper_metadata", None)
+                        ),
+                        "extra": {},
+                    }
+                )
+            scored.sort(
+                key=lambda x: (-x["match_quality"], -x["trust_score"])
+            )
+            return scored[:limit]
+    except Exception as exc:
+        logger.debug("resolve_name: paper branch failed", error=str(exc))
+        return []
+
+
+def _resolve_datasets_by_name(
+    needle: str, user_id: str, limit: int
+) -> list[dict[str, Any]]:
+    from sqlalchemy import text as _text
+
+    from synsc.database.connection import get_session
+
+    try:
+        with get_session() as session:
+            rows = session.execute(
+                _text(
+                    "SELECT dataset_id, hf_id, name FROM datasets LIMIT 500"
+                )
+            ).all()
+            scored = []
+            for r in rows:
+                quality = max(
+                    _match_quality(needle, r.name),
+                    _match_quality(needle, r.hf_id),
+                )
+                if quality == 0:
+                    continue
+                scored.append(
+                    {
+                        "source_id": str(r.dataset_id),
+                        "source_type": "dataset",
+                        "display_name": r.name or r.hf_id,
+                        "external_ref": r.hf_id,
+                        "match_quality": quality,
+                        "trust_score": 0.0,
+                        "extra": {},
+                    }
+                )
+            scored.sort(
+                key=lambda x: (-x["match_quality"], -x["trust_score"])
+            )
+            return scored[:limit]
+    except Exception as exc:
+        logger.debug("resolve_name: dataset branch failed", error=str(exc))
+        return []
+
+
+def _resolve_docs_by_name(
+    needle: str, user_id: str, limit: int
+) -> list[dict[str, Any]]:
+    from synsc.database.connection import get_session
+    from synsc.database.models import DocumentationSource
+
+    try:
+        with get_session() as session:
+            rows = session.query(DocumentationSource).limit(500).all()
+            scored = []
+            for d in rows:
+                quality = max(
+                    _match_quality(needle, d.display_name),
+                    _match_quality(needle, d.url),
+                )
+                if quality == 0:
+                    continue
+                scored.append(
+                    {
+                        "source_id": str(d.docs_id),
+                        "source_type": "docs",
+                        "display_name": d.display_name or d.url,
+                        "external_ref": d.url,
+                        "match_quality": quality,
+                        "trust_score": 0.0,
+                        "extra": {},
+                    }
+                )
+            scored.sort(
+                key=lambda x: (-x["match_quality"], -x["trust_score"])
+            )
+            return scored[:limit]
+    except Exception as exc:
+        logger.debug("resolve_name: docs branch failed", error=str(exc))
+        return []
+
+
 def resolve_source_id(raw: str, user_id: str | None = None) -> tuple[str, str]:
     """Resolve a raw source reference to ``(canonical_uuid, source_type)``.
 

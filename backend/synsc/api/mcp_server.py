@@ -1462,6 +1462,84 @@ Provides deep context to AI agents through:
         return {"success": True, **result}
 
     @server.tool()
+    def resolve_source(
+        name: str,
+        source_types: list[str] | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Context7-style name→source resolver.
+
+        Pass a free-form name ("fastapi", "transformers", "Attention is All You
+        Need") and get ranked candidates back, each with a canonical
+        ``source_id`` to feed to ``read_source`` / ``search``.
+
+        Returns matches across repos / papers / datasets / docs (filterable
+        via ``source_types``), ordered by:
+          - exact > prefix > substring match quality
+          - higher trust_score (stars / citations / verified) tiebreaks
+
+        Args:
+            name: Free-form library / repo / dataset / paper name.
+            source_types: Subset of 'repo','paper','dataset','docs'.
+            limit: Max candidates returned (default 10).
+        """
+        from synsc.services.source_service import (
+            resolve_source_id,
+            resolve_source_name,
+        )
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+
+        # If the caller gives us something resolvable to a single canonical
+        # form (UUID, owner/repo, arxiv:ID, hf:ID, github URL), return that
+        # as a single high-confidence match.
+        try:
+            uid, stype = resolve_source_id(name, user_id=user_id)
+            single = [
+                {
+                    "source_id": uid,
+                    "source_type": stype,
+                    "display_name": name,
+                    "external_ref": name,
+                    "match_quality": 4,
+                    "trust_score": 0.0,
+                    "extra": {"resolved_via": "canonical"},
+                }
+            ]
+            _log_activity(
+                user_id=user_id,
+                action="resolve_source",
+                query=name,
+                results_count=1,
+                duration_ms=int((time.time() - start) * 1000),
+                metadata={"path": "canonical", "source": "mcp"},
+            )
+            return {"success": True, "candidates": single, "total": 1}
+        except ValueError:
+            pass
+
+        candidates = resolve_source_name(
+            name=name,
+            user_id=user_id,
+            source_types=source_types,
+            limit=limit,
+        )
+        _log_activity(
+            user_id=user_id,
+            action="resolve_source",
+            query=name,
+            results_count=len(candidates),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"path": "fuzzy", "source": "mcp"},
+        )
+        return {
+            "success": True,
+            "candidates": candidates,
+            "total": len(candidates),
+        }
+
+    @server.tool()
     def list_sources(source_type: str | None = None) -> dict[str, Any]:
         """List indexed sources, optionally filtered by type.
 

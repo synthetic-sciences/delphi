@@ -2121,6 +2121,69 @@ def create_app() -> FastAPI:
             status_code=400, detail=f"unsupported source_type: {source_type}"
         )
 
+    @app.get("/v1/sources/resolve", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def resolve_source_endpoint(
+        request: Request,
+        name: str,
+        source_types: str | None = None,
+        limit: int = 10,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Context7-style name→source resolver.
+
+        ``name`` is a free-form library / repo / dataset / paper name.
+        ``source_types`` is a comma-separated subset of
+        ``repo,paper,dataset,docs``. Returns ranked candidates so the caller
+        can pick a canonical ``source_id`` before fetching.
+        """
+        from synsc.services.source_service import (
+            resolve_source_id,
+            resolve_source_name,
+        )
+
+        types_list = (
+            [t.strip() for t in source_types.split(",") if t.strip()]
+            if source_types
+            else None
+        )
+
+        try:
+            uid, stype = resolve_source_id(name, user_id=auth.user_id)
+            return SafeJSONResponse(
+                content={
+                    "success": True,
+                    "candidates": [
+                        {
+                            "source_id": uid,
+                            "source_type": stype,
+                            "display_name": name,
+                            "external_ref": name,
+                            "match_quality": 4,
+                            "trust_score": 0.0,
+                            "extra": {"resolved_via": "canonical"},
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        except ValueError:
+            pass
+
+        candidates = resolve_source_name(
+            name=name,
+            user_id=auth.user_id,
+            source_types=types_list,
+            limit=limit,
+        )
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "candidates": candidates,
+                "total": len(candidates),
+            }
+        )
+
     @app.get("/v1/sources", tags=["Sources"])
     @limiter.limit(SEARCH_LIMIT)
     async def list_sources_endpoint(
