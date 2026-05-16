@@ -745,26 +745,55 @@ Provides deep context to AI agents through:
         return {"success": True, **paper}
 
     @server.tool()
-    async def search_papers(query: str, top_k: int = 5) -> dict[str, Any]:
+    async def search_papers(
+        query: str,
+        top_k: int = 5,
+        topic: str | None = None,
+        tokens: int | None = None,
+    ) -> dict[str, Any]:
         """Search papers using semantic search.
 
         Args:
             query: Natural language search query
             top_k: Number of results to return
+            topic: Optional section/keyword filter applied post-retrieval.
+            tokens: Optional total token budget across all returned hits.
 
         Returns:
             Matching papers with relevance scores
         """
         import asyncio
+
+        from synsc.services.budget import (
+            budget_results,
+            filter_results_by_topic,
+        )
         from synsc.services.paper_service import get_paper_service
 
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
 
         result = await asyncio.to_thread(service.search_papers, query=query, top_k=top_k)
+        if topic and isinstance(result.get("results"), list):
+            result["results"] = filter_results_by_topic(
+                result["results"],
+                topic,
+                text_keys=("content", "section_title", "section"),
+            )
+        if tokens and isinstance(result.get("results"), list):
+            result["results"] = budget_results(
+                result["results"], tokens, text_key="content"
+            )
         uid = get_authenticated_user_id()
         if uid:
-            _log_activity(uid, "search_papers", resource_type="paper", query=query, results_count=len(result.get("results", [])))
+            _log_activity(
+                uid,
+                "search_papers",
+                resource_type="paper",
+                query=query,
+                results_count=len(result.get("results", [])),
+                metadata={"topic": topic, "tokens": tokens},
+            )
         return result
 
     @server.tool()
@@ -1344,6 +1373,8 @@ Provides deep context to AI agents through:
         source_types: list[str] | None = None,
         k: int = 10,
         mode: str = "precise",
+        topic: str | None = None,
+        tokens: int | None = None,
     ) -> dict[str, Any]:
         """Unified search across indexed code + papers + datasets.
 
@@ -1357,7 +1388,16 @@ Provides deep context to AI agents through:
             source_types: Filter: any of 'repo', 'paper', 'dataset'.
             k: Number of hits (default 10, max 100).
             mode: 'precise' / 'thorough' / 'web' / 'targeted' / 'universal'.
+            topic: Optional Context7-style sub-area filter applied to result
+                text/path after retrieval.
+            tokens: Optional total token budget across all returned hits.
+                Truncates trailing results to fit; the last partial hit is
+                marked ``_truncated: true``.
         """
+        from synsc.services.budget import (
+            budget_results,
+            filter_results_by_topic,
+        )
         from synsc.services.source_service import unified_search
 
         start = time.time()
@@ -1377,13 +1417,29 @@ Provides deep context to AI agents through:
                 "error_code": "invalid_input",
                 "message": str(e),
             }
+
+        if topic and isinstance(result.get("results"), list):
+            result["results"] = filter_results_by_topic(
+                result["results"], topic, text_keys=("text", "path")
+            )
+            result["total"] = len(result["results"])
+        if tokens and isinstance(result.get("results"), list):
+            result["results"] = budget_results(
+                result["results"], tokens, text_key="text"
+            )
+
         _log_activity(
             user_id=user_id,
             action="unified_search",
             query=query,
             results_count=result.get("total", 0),
             duration_ms=int((time.time() - start) * 1000),
-            metadata={"mode": mode, "source": "mcp"},
+            metadata={
+                "mode": mode,
+                "topic": topic,
+                "tokens": tokens,
+                "source": "mcp",
+            },
         )
         return {"success": True, **result}
 
@@ -1568,22 +1624,38 @@ Provides deep context to AI agents through:
         section: str | None = None,
         start_line: int | None = None,
         end_line: int | None = None,
+        topic: str | None = None,
+        tokens: int | None = None,
     ) -> dict[str, Any]:
         """Read content from an indexed source.
 
         - paper: supports ``section=`` (canonical token or regex).
         - repo:  requires ``path=``; optional ``start_line``/``end_line``.
+        - docs:  whole-docs read; pair with ``topic`` to narrow.
 
         Args:
-            source_id: Paper or repo ID.
-            source_type: 'paper' (default) or 'repo'.
+            source_id: Paper / repo / docs ID.
+            source_type: 'paper' (default), 'repo', or 'docs'.
             path: Required for repo reads.
             section: Optional for paper reads — 'abstract', 'introduction',
                 'methods', 'results', 'discussion', 'conclusion', 'references',
                 'related work', or a regex.
             start_line: Repo read — optional 1-indexed start line.
             end_line: Repo read — optional end line.
+            topic: Optional Context7-style sub-area filter. For papers and
+                docs, narrows to chunks whose heading/section/body matches
+                any topic token (e.g. 'routing', 'hooks', 'authentication').
+            tokens: Optional token budget for the returned body. Default
+                budget (~5000) applied when omitted; pass 0 to disable.
         """
+        from synsc.services.budget import (
+            budget_results,
+            default_budget,
+            filter_results_by_topic,
+            truncate_to_tokens,
+        )
+
+        effective_tokens = tokens if tokens is not None else default_budget()
         start = time.time()
         user_id = get_authenticated_user_id()
 
@@ -1606,13 +1678,35 @@ Provides deep context to AI agents through:
                     "error_code": "not_found",
                     "message": "paper not found",
                 }
+
+            # Apply topic narrowing to the chunk list if the paper exposes one.
+            if topic and isinstance(paper.get("chunks"), list):
+                paper["chunks"] = filter_results_by_topic(
+                    paper["chunks"], topic, text_keys=("content", "section")
+                )
+            # Token budget over the joined body / chunk text.
+            if effective_tokens:
+                if isinstance(paper.get("chunks"), list):
+                    paper["chunks"] = budget_results(
+                        paper["chunks"], effective_tokens, text_key="content"
+                    )
+                if paper.get("text"):
+                    paper["text"] = truncate_to_tokens(
+                        paper["text"], effective_tokens
+                    )
+
             _log_activity(
                 user_id=user_id,
                 action="read_source",
                 resource_type="paper",
                 resource_id=source_id,
                 duration_ms=int((time.time() - start) * 1000),
-                metadata={"section": section, "source": "mcp"},
+                metadata={
+                    "section": section,
+                    "topic": topic,
+                    "tokens": effective_tokens,
+                    "source": "mcp",
+                },
             )
             return {
                 "success": True,
@@ -1643,15 +1737,61 @@ Provides deep context to AI agents through:
                     "error_code": "not_found",
                     "message": res.get("error", "not found"),
                 }
+            if effective_tokens and isinstance(res.get("content"), str):
+                truncated = truncate_to_tokens(res["content"], effective_tokens)
+                if truncated != res["content"]:
+                    res["content"] = truncated
+                    res["truncated"] = True
             _log_activity(
                 user_id=user_id,
                 action="read_source",
                 resource_type="repo",
                 resource_id=source_id,
                 duration_ms=int((time.time() - start) * 1000),
-                metadata={"path": path, "source": "mcp"},
+                metadata={
+                    "path": path,
+                    "topic": topic,
+                    "tokens": effective_tokens,
+                    "source": "mcp",
+                },
             )
             return {**res, "source_id": source_id, "source_type": "repo"}
+
+        if source_type == "docs":
+            from synsc.services.docs_service import get_docs_service
+
+            svc = get_docs_service(user_id=user_id)
+            # No dedicated single-source "read all" on docs yet — use a
+            # topic-or-broad search scoped to this docs source.
+            query = topic or "*"
+            res = svc.search_docs(query=query, top_k=20)
+            if not res.get("success"):
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "message": res.get("error", "not found"),
+                }
+            chunks = [r for r in res.get("results", []) if r.get("docs_id") == source_id]
+            chunks = filter_results_by_topic(
+                chunks, topic, text_keys=("content", "heading")
+            )
+            if effective_tokens:
+                chunks = budget_results(chunks, effective_tokens, text_key="content")
+            _log_activity(
+                user_id=user_id,
+                action="read_source",
+                resource_type="docs",
+                resource_id=source_id,
+                duration_ms=int((time.time() - start) * 1000),
+                metadata={"topic": topic, "tokens": effective_tokens, "source": "mcp"},
+            )
+            return {
+                "success": True,
+                "source_id": source_id,
+                "source_type": "docs",
+                "chunks": chunks,
+                "count": len(chunks),
+            }
 
         return {
             "success": False,
