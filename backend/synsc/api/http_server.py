@@ -302,6 +302,25 @@ class ResearchRequest(BaseModel):
     k: int | None = Field(default=None, ge=1, le=100, description="Retrieval top_k override")
 
 
+class ResearchV2StartRequest(BaseModel):
+    """Request to POST /v2/research (async session)."""
+
+    query: str = Field(..., min_length=1, max_length=4000)
+    mode: str = Field(default="quick")
+    source_ids: list[str] | None = None
+    source_types: list[str] | None = None
+    auto_index: bool = Field(
+        default=True,
+        description="DISCOVER->INDEX->SEARCH: index unknown libs found in the query",
+    )
+
+
+class ResearchFollowupRequest(BaseModel):
+    """Request to POST /v2/research/{session_id}/messages."""
+
+    message: str = Field(..., min_length=1, max_length=4000)
+
+
 class GrepSourceRequest(BaseModel):
     """Request to /v1/sources/{source_id}/grep."""
     pattern: str = Field(..., min_length=1, max_length=1000, description="Python regex")
@@ -2015,6 +2034,122 @@ def create_app() -> FastAPI:
                 "tokens_out": result["usage"]["tokens_out"],
             },
         )
+        return SafeJSONResponse(content={"success": True, **result})
+
+    # ==========================================================================
+    # Research v2 — Oracle-class async sessions with SSE
+    # ==========================================================================
+
+    @app.post("/v2/research", tags=["Research"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def research_v2_start(
+        request: Request,
+        body: ResearchV2StartRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Start an async research session. Returns session_id immediately.
+
+        Stream events via GET /v2/research/{session_id}/events (SSE) and
+        post follow-up questions to POST /v2/research/{session_id}/messages.
+        """
+        from synsc.services.research_sessions import start_session
+
+        session = await start_session(
+            query=body.query,
+            mode=body.mode,
+            source_ids=body.source_ids,
+            source_types=body.source_types,
+            user_id=auth.user_id,
+            auto_index=body.auto_index,
+        )
+        return SafeJSONResponse(
+            status_code=202,
+            content={
+                "success": True,
+                "session_id": session.session_id,
+                "status": session.status,
+            },
+        )
+
+    @app.get("/v2/research/{session_id}", tags=["Research"])
+    async def research_v2_get(
+        session_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Return the current state of a research session."""
+        from synsc.services.research_sessions import get_session
+
+        session = get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="session not found")
+        if session.user_id and auth.user_id and session.user_id != auth.user_id:
+            raise HTTPException(status_code=403, detail="not your session")
+        return SafeJSONResponse(content={"success": True, **session.to_public()})
+
+    @app.get("/v2/research/{session_id}/events", tags=["Research"])
+    async def research_v2_events(
+        session_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """SSE stream of session events.
+
+        Emits ``iteration``, ``retrieval``, ``discover``, ``index``,
+        ``answer``, ``error``, and ``done`` events. Replays history so a
+        reconnecting client never loses events.
+        """
+        from synsc.services.research_sessions import get_session, subscribe
+
+        session = get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="session not found")
+        if session.user_id and auth.user_id and session.user_id != auth.user_id:
+            raise HTTPException(status_code=403, detail="not your session")
+
+        async def _stream():
+            async for ev in subscribe(session_id):
+                import json as _json
+
+                data = _json.dumps(
+                    {
+                        "seq": ev.seq,
+                        "type": ev.type,
+                        "timestamp": ev.timestamp,
+                        "payload": ev.payload,
+                    }
+                )
+                yield f"event: {ev.type}\ndata: {data}\n\n"
+            yield "event: end\ndata: {}\n\n"
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/v2/research/{session_id}/messages", tags=["Research"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def research_v2_followup(
+        request: Request,
+        session_id: str,
+        body: ResearchFollowupRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Post a follow-up message on a completed research session."""
+        from synsc.services.research_sessions import post_followup
+
+        try:
+            result = await post_followup(
+                session_id=session_id,
+                message=body.message,
+                user_id=auth.user_id,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return SafeJSONResponse(content={"success": True, **result})
 
     # ==========================================================================

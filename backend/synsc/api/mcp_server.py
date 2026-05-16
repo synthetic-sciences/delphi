@@ -1275,6 +1275,145 @@ Provides deep context to AI agents through:
     # ==========================================================================
 
     @_tool_in("research")
+    async def research_start(
+        query: str,
+        mode: str = "quick",
+        source_ids: list[str] | None = None,
+        source_types: list[str] | None = None,
+        auto_index: bool = True,
+    ) -> dict[str, Any]:
+        """Start an async research session. Returns session_id immediately.
+
+        Use ``research_status`` to poll, ``research_events`` to get the
+        replayed event log, and ``research_followup`` to ask a follow-up
+        on a completed session.
+
+        DISCOVER -> INDEX -> SEARCH (Nia Oracle parity): when ``auto_index`` is
+        True (default) and the query mentions an unindexed library / repo /
+        arxiv / hf dataset, the session indexes it before searching.
+        Budget-guarded: max 3 auto-indexes per session.
+        """
+        from synsc.services.research_sessions import start_session
+
+        if mode not in ("quick", "deep", "oracle"):
+            return {
+                "success": False,
+                "error_code": "invalid_mode",
+                "message": f"Invalid mode '{mode}': expected quick / deep / oracle",
+            }
+        user_id = get_authenticated_user_id()
+        session = await start_session(
+            query=query,
+            mode=mode,
+            source_ids=source_ids,
+            source_types=source_types,
+            user_id=user_id,
+            auto_index=auto_index,
+        )
+        return {
+            "success": True,
+            "session_id": session.session_id,
+            "status": session.status,
+        }
+
+    @_tool_in("research")
+    def research_status(session_id: str) -> dict[str, Any]:
+        """Get current state of an async research session."""
+        from synsc.services.research_sessions import get_session
+
+        session = get_session(session_id)
+        if not session:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "session not found",
+            }
+        user_id = get_authenticated_user_id()
+        if session.user_id and user_id and session.user_id != user_id:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": "not your session",
+            }
+        return {"success": True, **session.to_public()}
+
+    @_tool_in("research")
+    def research_events(
+        session_id: str,
+        since_seq: int = 0,
+    ) -> dict[str, Any]:
+        """Get the event log for a research session.
+
+        Replays all events with seq > since_seq. Cheaper than SSE for agents
+        that prefer a polling loop. Pair with ``research_status`` to know
+        when status='completed'.
+        """
+        from synsc.services.research_sessions import get_session
+
+        session = get_session(session_id)
+        if not session:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "session not found",
+            }
+        user_id = get_authenticated_user_id()
+        if session.user_id and user_id and session.user_id != user_id:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": "not your session",
+            }
+        events = [
+            {
+                "seq": ev.seq,
+                "type": ev.type,
+                "timestamp": ev.timestamp,
+                "payload": ev.payload,
+            }
+            for ev in session.events
+            if ev.seq > since_seq
+        ]
+        return {
+            "success": True,
+            "session_id": session_id,
+            "status": session.status,
+            "events": events,
+            "latest_seq": session.events[-1].seq if session.events else -1,
+        }
+
+    @_tool_in("research")
+    async def research_followup(
+        session_id: str,
+        message: str,
+    ) -> dict[str, Any]:
+        """Post a follow-up question on a completed research session.
+
+        Stitches the prior question + answer into the new query so the
+        follow-up has continuity. Returns the new answer + citations.
+        """
+        from synsc.services.research_sessions import post_followup
+
+        user_id = get_authenticated_user_id()
+        try:
+            result = await post_followup(
+                session_id=session_id, message=message, user_id=user_id
+            )
+        except PermissionError as exc:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": str(exc),
+            }
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        return {"success": True, **result}
+
+    @_tool_in("research")
     def research(
         query: str,
         mode: str = "quick",
