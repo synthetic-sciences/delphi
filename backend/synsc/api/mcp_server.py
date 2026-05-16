@@ -1958,6 +1958,49 @@ Provides deep context to AI agents through:
             "count": len(results),
         }
 
+    @_tool_in("code")
+    def visualize_codebase(
+        repo_id: str,
+        max_dirs: int = 30,
+        max_symbols: int = 50,
+        max_edges: int = 100,
+    ) -> dict[str, Any]:
+        """Return a structural JSON graph of an indexed repository.
+
+        Surfaces shape in one response: file/language/symbol counts, directory
+        rollup, top exported symbols, and a directory-level module graph
+        derived from chunk_relationships. Lets agents orient in a new repo
+        without grepping the whole tree.
+
+        Args:
+            repo_id: Repository UUID.
+            max_dirs: Cap on directory entries (default 30).
+            max_symbols: Cap on top-symbol entries (default 50).
+            max_edges: Cap on module-graph edges (default 100).
+        """
+        from synsc.services.visualization_service import (
+            visualize_codebase as _viz,
+        )
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        result = _viz(
+            repo_id=repo_id,
+            user_id=user_id,
+            max_dirs=max_dirs,
+            max_symbols=max_symbols,
+            max_edges=max_edges,
+        )
+        _log_activity(
+            user_id=user_id,
+            action="visualize_codebase",
+            resource_type="repo",
+            resource_id=repo_id,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"source": "mcp"},
+        )
+        return result
+
     @_tool_in("sources")
     def tree_source(
         source_id: str,

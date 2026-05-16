@@ -2121,6 +2121,35 @@ def create_app() -> FastAPI:
             status_code=400, detail=f"unsupported source_type: {source_type}"
         )
 
+    @app.get("/v1/sources/{repo_id}/visualize", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def visualize_codebase_endpoint(
+        request: Request,
+        repo_id: str,
+        max_dirs: int = 30,
+        max_symbols: int = 50,
+        max_edges: int = 100,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Structural JSON graph of an indexed repository."""
+        from synsc.services.visualization_service import visualize_codebase
+
+        result = visualize_codebase(
+            repo_id=repo_id,
+            user_id=auth.user_id,
+            max_dirs=max_dirs,
+            max_symbols=max_symbols,
+            max_edges=max_edges,
+        )
+        if not result.get("success"):
+            code = (
+                404 if result.get("error_code") == "not_found"
+                else 403 if result.get("error_code") == "forbidden"
+                else 400
+            )
+            raise HTTPException(status_code=code, detail=result.get("message"))
+        return SafeJSONResponse(content=result)
+
     @app.get("/v1/sources/resolve", tags=["Sources"])
     @limiter.limit(SEARCH_LIMIT)
     async def resolve_source_endpoint(
