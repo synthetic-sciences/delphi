@@ -1662,8 +1662,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "sources": sources, "total": len(sources)}
 
-    @_tool_in("sources", "minimal")
-    def read_source(
+    def _do_read(
         source_id: str,
         source_type: str = "paper",
         path: str | None = None,
@@ -1672,28 +1671,9 @@ Provides deep context to AI agents through:
         end_line: int | None = None,
         topic: str | None = None,
         tokens: int | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
-        """Read content from an indexed source.
-
-        - paper: supports ``section=`` (canonical token or regex).
-        - repo:  requires ``path=``; optional ``start_line``/``end_line``.
-        - docs:  whole-docs read; pair with ``topic`` to narrow.
-
-        Args:
-            source_id: Paper / repo / docs ID.
-            source_type: 'paper' (default), 'repo', or 'docs'.
-            path: Required for repo reads.
-            section: Optional for paper reads — 'abstract', 'introduction',
-                'methods', 'results', 'discussion', 'conclusion', 'references',
-                'related work', or a regex.
-            start_line: Repo read — optional 1-indexed start line.
-            end_line: Repo read — optional end line.
-            topic: Optional Context7-style sub-area filter. For papers and
-                docs, narrows to chunks whose heading/section/body matches
-                any topic token (e.g. 'routing', 'hooks', 'authentication').
-            tokens: Optional token budget for the returned body. Default
-                budget (~5000) applied when omitted; pass 0 to disable.
-        """
+        """Shared read-source implementation used by ``read_source`` and ``batch_read``."""
         from synsc.services.budget import (
             budget_results,
             default_budget,
@@ -1703,7 +1683,8 @@ Provides deep context to AI agents through:
 
         effective_tokens = tokens if tokens is not None else default_budget()
         start = time.time()
-        user_id = get_authenticated_user_id()
+        if user_id is None:
+            user_id = get_authenticated_user_id()
 
         if source_type == "paper":
             from synsc.services.paper_service import get_paper_service
@@ -1843,6 +1824,138 @@ Provides deep context to AI agents through:
             "success": False,
             "error_code": "invalid_input",
             "message": f"unsupported source_type: {source_type}",
+        }
+
+    @_tool_in("sources", "minimal")
+    def read_source(
+        source_id: str,
+        source_type: str = "paper",
+        path: str | None = None,
+        section: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        topic: str | None = None,
+        tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Read content from an indexed source.
+
+        - paper: supports ``section=`` (canonical token or regex).
+        - repo:  requires ``path=``; optional ``start_line``/``end_line``.
+        - docs:  whole-docs read; pair with ``topic`` to narrow.
+
+        Args:
+            source_id: Paper / repo / docs ID.
+            source_type: 'paper' (default), 'repo', or 'docs'.
+            path: Required for repo reads.
+            section: Optional for paper reads — 'abstract', 'introduction',
+                'methods', 'results', 'discussion', 'conclusion', 'references',
+                'related work', or a regex.
+            start_line: Repo read — optional 1-indexed start line.
+            end_line: Repo read — optional end line.
+            topic: Optional Context7-style sub-area filter.
+            tokens: Optional token budget for the returned body. Default
+                budget (~5000) applied when omitted; pass 0 to disable.
+        """
+        return _do_read(
+            source_id=source_id,
+            source_type=source_type,
+            path=path,
+            section=section,
+            start_line=start_line,
+            end_line=end_line,
+            topic=topic,
+            tokens=tokens,
+        )
+
+    @_tool_in("sources", "minimal")
+    def batch_read(
+        requests: list[dict[str, Any]],
+        topic: str | None = None,
+        tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Fetch multiple sources in one MCP call.
+
+        Each request is a dict with at minimum ``source_id``. Optional per-
+        request overrides: ``source_type``, ``path``, ``section``, ``topic``,
+        ``tokens``. Top-level ``topic`` / ``tokens`` are used as defaults.
+
+        Saves a turn vs. calling ``read_source`` N times. Per-request
+        failures don't abort the batch — each result carries its own
+        ``success`` flag.
+
+        Args:
+            requests: List of request dicts.
+            topic: Default topic filter for each request.
+            tokens: Default token budget for each request.
+        """
+        if not isinstance(requests, list) or not requests:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": "batch_read requires a non-empty list of requests",
+            }
+        if len(requests) > 32:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": "batch_read max 32 requests per call",
+            }
+
+        results: list[dict[str, Any]] = []
+        start = time.time()
+        user_id = get_authenticated_user_id()
+
+        for idx, req in enumerate(requests):
+            if not isinstance(req, dict) or "source_id" not in req:
+                results.append(
+                    {
+                        "success": False,
+                        "error_code": "invalid_input",
+                        "message": f"request[{idx}] missing source_id",
+                        "request_index": idx,
+                    }
+                )
+                continue
+
+            try:
+                # Reuse the registered tool's underlying function — we can't
+                # easily call `read_source` directly from inside the closure
+                # without recursive decoration, so we inline a minimal
+                # dispatch using the same services.
+                result = _do_read(
+                    source_id=str(req["source_id"]),
+                    source_type=str(req.get("source_type") or "paper"),
+                    path=req.get("path"),
+                    section=req.get("section"),
+                    start_line=req.get("start_line"),
+                    end_line=req.get("end_line"),
+                    topic=req.get("topic", topic),
+                    tokens=req.get("tokens", tokens),
+                    user_id=user_id,
+                )
+                result["request_index"] = idx
+                results.append(result)
+            except Exception as exc:
+                results.append(
+                    {
+                        "success": False,
+                        "error_code": "internal_error",
+                        "message": str(exc),
+                        "request_index": idx,
+                    }
+                )
+
+        _log_activity(
+            user_id=user_id,
+            action="batch_read",
+            results_count=len(results),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"batch_size": len(requests), "source": "mcp"},
+        )
+        return {
+            "success": True,
+            "results": results,
+            "count": len(results),
         }
 
     @_tool_in("sources")
