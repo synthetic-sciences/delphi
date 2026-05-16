@@ -2256,6 +2256,83 @@ def create_app() -> FastAPI:
             status_code=400, detail=f"unsupported source_type: {source_type}"
         )
 
+    # ==========================================================================
+    # Public Try-Live endpoint — Context7-style anonymous query surface.
+    # ==========================================================================
+
+    @app.get("/v1/try", tags=["Public"])
+    async def try_live_endpoint(
+        request: Request,
+        q: str,
+        source_types: str | None = None,
+        k: int = 5,
+    ):
+        """Public anonymous search endpoint.
+
+        Gated by ``SYNSC_PUBLIC_TRY_ENABLED=true``. Searches only sources
+        with ``visibility='public'`` (or legacy ``is_public=True``). Returns
+        a small JSON response suitable for a frontend chat UI.
+
+        No auth required — meant to drive a public Try-Live page so a
+        non-MCP-client user can poke at the index.
+        """
+        if os.environ.get("SYNSC_PUBLIC_TRY_ENABLED", "false").lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="public try endpoint disabled (set SYNSC_PUBLIC_TRY_ENABLED=true)",
+            )
+        if not q or len(q) > 500:
+            raise HTTPException(status_code=400, detail="q must be 1..500 chars")
+        if k < 1 or k > 20:
+            raise HTTPException(status_code=400, detail="k must be 1..20")
+
+        from synsc.services.source_service import unified_search
+
+        types_list = (
+            [t.strip() for t in source_types.split(",") if t.strip()]
+            if source_types
+            else None
+        )
+
+        try:
+            result = unified_search(
+                query=q,
+                source_ids=None,
+                source_types=types_list,
+                k=k,
+                mode="precise",
+                user_id=None,  # anonymous → only public sources surface
+            )
+        except Exception as exc:
+            logger.exception("try-live search failed")
+            return SafeJSONResponse(
+                status_code=500,
+                content={"success": False, "error": str(exc)},
+            )
+
+        # Trim each hit's text so a public page can't be used to scrape
+        # full content in bulk.
+        for r in result.get("results", []):
+            if isinstance(r.get("text"), str) and len(r["text"]) > 400:
+                r["text"] = r["text"][:400] + "..."
+                r["_truncated"] = True
+
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "query": q,
+                **result,
+                "disclaimer": (
+                    "Public Try-Live — results limited to public sources, "
+                    "snippets truncated. Sign in for full access."
+                ),
+            }
+        )
+
     @app.post("/v1/contexts", tags=["Contexts"])
     @limiter.limit(SEARCH_LIMIT)
     async def save_context_endpoint(
