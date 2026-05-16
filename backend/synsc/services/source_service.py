@@ -42,6 +42,7 @@ def _norm_code_hit(r: dict) -> dict:
         "score": float(r.get("relevance_score", 0.0)),
         "path": r.get("file_path"),
         "line_no": r.get("start_line"),
+        "trust_score": float(r.get("trust_score") or 0.0),
         "metadata": {
             "repo_name": r.get("repo_name"),
             "language": r.get("language"),
@@ -158,8 +159,90 @@ def unified_retrieve(
         except Exception as exc:
             logger.warning("unified_retrieve: docs branch failed", error=str(exc))
 
-    hits.sort(key=lambda h: h["score"], reverse=True)
+    # Apply per-source trust boost so high-authority sources tie-break above
+    # low-authority ones at the same retrieval score. Boost is small (max
+    # +0.1) so it never overwhelms semantic relevance.
+    hits = _attach_trust_scores(hits)
+    hits.sort(
+        key=lambda h: (
+            h["score"] + 0.1 * float(h.get("trust_score") or 0.0),
+            h.get("trust_score") or 0.0,
+        ),
+        reverse=True,
+    )
     return hits[:k]
+
+
+def _attach_trust_scores(hits: list[dict]) -> list[dict]:
+    """Backfill trust_score on hits by fetching the source row.
+
+    One DB call per distinct source_id+source_type. Cheap enough at k<=100.
+    """
+    if not hits:
+        return hits
+
+    need = {
+        (h.get("source_type"), h.get("source_id"))
+        for h in hits
+        if not h.get("trust_score") and h.get("source_id")
+    }
+    if not need:
+        return hits
+
+    scores: dict[tuple[str, str], float] = {}
+    try:
+        from synsc.database.connection import get_session
+        from synsc.database.models import (
+            DocumentationSource,
+            Paper,
+            Repository,
+        )
+
+        with get_session() as session:
+            repo_ids = [sid for (stype, sid) in need if stype == "repo"]
+            paper_ids = [sid for (stype, sid) in need if stype == "paper"]
+            docs_ids = [sid for (stype, sid) in need if stype == "docs"]
+            if repo_ids:
+                for r in (
+                    session.query(Repository)
+                    .filter(Repository.repo_id.in_(repo_ids))
+                    .all()
+                ):
+                    scores[("repo", str(r.repo_id))] = _trust_score(
+                        r.repo_metadata
+                    )
+            if paper_ids:
+                for p in (
+                    session.query(Paper)
+                    .filter(Paper.paper_id.in_(paper_ids))
+                    .all()
+                ):
+                    scores[("paper", str(p.paper_id))] = _trust_score(
+                        getattr(p, "paper_metadata", None)
+                    )
+            if docs_ids:
+                for d in (
+                    session.query(DocumentationSource)
+                    .filter(DocumentationSource.docs_id.in_(docs_ids))
+                    .all()
+                ):
+                    # Docs trust is conservative — explicit metadata only,
+                    # no star/citation proxy available.
+                    md = getattr(d, "doc_metadata", None) or getattr(
+                        d, "metadata", None
+                    )
+                    scores[("docs", str(d.docs_id))] = _trust_score(md)
+    except Exception as exc:
+        logger.debug("trust: backfill failed", error=str(exc))
+        return hits
+
+    for h in hits:
+        if h.get("trust_score"):
+            continue
+        h["trust_score"] = scores.get(
+            (h.get("source_type"), h.get("source_id")), 0.0
+        )
+    return hits
 
 
 # ---------------------------------------------------------------------------
