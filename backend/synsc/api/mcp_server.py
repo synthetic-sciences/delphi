@@ -2097,6 +2097,101 @@ Provides deep context to AI agents through:
             "count": len(results),
         }
 
+    @_tool_in("sources")
+    def set_source_visibility(
+        source_type: str,
+        source_id: str,
+        visibility: str,
+    ) -> dict[str, Any]:
+        """Change a source's visibility tier.
+
+        Tiers: 'public' (in lists, searchable by everyone),
+        'private' (owner-only), 'unlisted' (not in public lists but
+        anyone with the source_id can add it — link-share). Only the
+        indexer can change visibility.
+        """
+        from synsc.services.ownership_service import set_visibility
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "auth required",
+            }
+        try:
+            res = set_visibility(
+                source_type=source_type,
+                source_id=source_id,
+                visibility=visibility,
+                user_id=user_id,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        except LookupError as exc:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": str(exc),
+            }
+        except PermissionError as exc:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": str(exc),
+            }
+        return {"success": True, **res}
+
+    @_tool_in("sources")
+    def transfer_source_ownership(
+        source_type: str,
+        source_id: str,
+        new_owner_user_id: str,
+    ) -> dict[str, Any]:
+        """Transfer indexer ownership of a source to another user.
+
+        Only the current indexer can transfer.
+        """
+        from synsc.services.ownership_service import transfer_ownership
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "auth required",
+            }
+        try:
+            res = transfer_ownership(
+                source_type=source_type,
+                source_id=source_id,
+                new_owner_user_id=new_owner_user_id,
+                user_id=user_id,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        except LookupError as exc:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": str(exc),
+            }
+        except PermissionError as exc:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": str(exc),
+            }
+        return {"success": True, **res}
+
     @_tool_in("sources", "minimal")
     def save_context(
         name: str,

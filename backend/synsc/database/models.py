@@ -115,8 +115,9 @@ class Repository(Base):
     description: Mapped[str | None] = mapped_column(Text)
     
     is_public: Mapped[bool] = mapped_column(Boolean, default=True)
+    visibility: Mapped[str] = mapped_column(String(16), default="public")
     indexed_by: Mapped[str | None] = mapped_column(String(36), index=True)
-    
+
     # Stats
     files_count: Mapped[int] = mapped_column(Integer, default=0)
     chunks_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -461,6 +462,7 @@ class Paper(Base):
     pdf_url: Mapped[str | None] = mapped_column(Text)
     pdf_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
+    visibility: Mapped[str] = mapped_column(String(16), default="private")
     indexed_by: Mapped[str | None] = mapped_column(String(36), index=True)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -744,6 +746,9 @@ class DocumentationSource(Base):
     sitemap_url: Mapped[str | None] = mapped_column(Text)
     indexed_by: Mapped[str | None] = mapped_column(String(36), index=True)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    visibility: Mapped[str] = mapped_column(
+        String(16), default="public", nullable=False
+    )
     pages_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     chunks_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
