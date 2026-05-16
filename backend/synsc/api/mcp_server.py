@@ -136,6 +136,52 @@ Provides deep context to AI agents through:
         transport_security=transport_security,
     )
 
+    # ------------------------------------------------------------------
+    # Scoped MCP surfaces (Nia parity).
+    #
+    # ``SYNSC_MCP_PROFILE`` selects a subset of tools to expose. Agents
+    # pay a token cost for every tool definition in the MCP handshake;
+    # exposing only the relevant subset for a workflow is a free win.
+    #
+    # Profile values:
+    #   all     — every tool (default)
+    #   code    — repos: index/search/symbols/context/analyze
+    #   papers  — papers + research + datasets
+    #   docs    — docs / sources / generic search / resolve
+    #   thesis  — Thesis graph tools
+    #   minimal — resolve_source + search + read_source (the 3-tool starter)
+    # ------------------------------------------------------------------
+    _profile = os.environ.get("SYNSC_MCP_PROFILE", "all").strip().lower()
+    _profile_groups: dict[str, set[str]] = {
+        "all": {"code", "papers", "datasets", "research", "docs", "thesis", "sources", "minimal"},
+        "code": {"code", "sources", "minimal"},
+        "papers": {"papers", "research", "datasets", "sources", "minimal"},
+        "docs": {"docs", "sources", "minimal"},
+        "thesis": {"thesis", "sources", "minimal"},
+        "minimal": {"minimal"},
+    }
+    _enabled_groups = _profile_groups.get(_profile, _profile_groups["all"])
+    if _profile not in _profile_groups:
+        logger.warning(
+            "unknown SYNSC_MCP_PROFILE, falling back to 'all'",
+            profile=_profile,
+        )
+
+    def _tool_in(*groups: str):
+        """Wrap ``@server.tool()`` with a profile gate.
+
+        Usage: ``@_tool_in("code")`` instead of ``@server.tool()``. If the
+        tool's group(s) don't intersect the active profile the decorator
+        returns the function un-registered (still importable / unit-testable).
+        """
+        enabled = any(g in _enabled_groups for g in groups)
+        if not enabled:
+            def _skip(fn):  # noqa: ANN001
+                logger.debug("mcp: skipping tool by profile", tool=fn.__name__, groups=groups)
+                return fn
+            return _skip
+        return server.tool()
+
     # ==========================================================================
     # AUTH HELPERS
     # ==========================================================================
@@ -177,7 +223,7 @@ Provides deep context to AI agents through:
     # CODE REPOSITORY TOOLS
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("code")
     async def index_repository(
         url: str,
         branch: str | None = None,
@@ -245,7 +291,7 @@ Provides deep context to AI agents through:
             )
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def list_repositories(limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """List all indexed repositories.
 
@@ -268,7 +314,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "list_repositories", resource_type="repository")
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def get_repository(repo_id: str) -> dict[str, Any]:
         """Get detailed information about an indexed repository.
 
@@ -286,7 +332,7 @@ Provides deep context to AI agents through:
         result = service.get_repository(repo_id, user_id=user_id)
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def delete_repository(repo_id: str) -> dict[str, Any]:
         """Delete an indexed repository.
 
@@ -304,7 +350,7 @@ Provides deep context to AI agents through:
         result = service.delete_repository(repo_id, user_id=user_id)
         return result
 
-    @server.tool()
+    @_tool_in("code")
     async def search_code(
         query: str,
         repo_ids: list[str] | None = None,
@@ -359,7 +405,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "search_code", resource_type="repository", query=query, results_count=len(result.get("results", [])))
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def get_file(
         repo_id: str,
         file_path: str,
@@ -388,7 +434,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "get_file", resource_type="repository", resource_id=repo_id, metadata={"file_path": file_path})
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def search_symbols(
         name: str,
         repo_ids: list[str] | None = None,
@@ -422,7 +468,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "search_symbols", resource_type="repository", query=name, results_count=len(result.get("results", [])))
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def analyze_repository(repo_id: str) -> dict[str, Any]:
         """Get comprehensive analysis of an indexed repository.
 
@@ -447,7 +493,7 @@ Provides deep context to AI agents through:
         result = service.analyze_repository(repo_id, user_id=user_id)
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def get_directory_structure(
         repo_id: str,
         max_depth: int = 4,
@@ -473,7 +519,7 @@ Provides deep context to AI agents through:
         )
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def get_symbol(symbol_id: str) -> dict[str, Any]:
         """Get detailed information about a specific code symbol.
 
@@ -491,7 +537,7 @@ Provides deep context to AI agents through:
         result = service.get_symbol(symbol_id, user_id=user_id)
         return result
 
-    @server.tool()
+    @_tool_in("code")
     async def build_context_pack(
         query: str,
         repo_ids: list[str] | None = None,
@@ -565,7 +611,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("code")
     def get_context(
         chunk_id: str,
         radius: int = 1,
@@ -605,7 +651,7 @@ Provides deep context to AI agents through:
             return {"success": False, "error_code": result["error"]}
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("code")
     def remove_from_collection(repo_id: str) -> dict[str, Any]:
         """Remove a repository from your collection without deleting it.
 
@@ -627,7 +673,7 @@ Provides deep context to AI agents through:
     # RESEARCH PAPER TOOLS
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("papers")
     async def index_paper(source: str) -> dict[str, Any]:
         """Index a research paper from arXiv or local PDF.
 
@@ -692,7 +738,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "index_paper", resource_type="paper", metadata={"source": source})
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def list_papers(limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """List all indexed papers.
 
@@ -716,7 +762,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "list_papers", resource_type="paper")
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def get_paper(paper_id: str, section: str | None = None) -> dict[str, Any]:
         """Get full paper content, optionally filtered to a single section.
 
@@ -744,7 +790,7 @@ Provides deep context to AI agents through:
             return {"success": False, "error_code": "not_found", "message": "Paper not found"}
         return {"success": True, **paper}
 
-    @server.tool()
+    @_tool_in("papers")
     async def search_papers(
         query: str,
         top_k: int = 5,
@@ -796,7 +842,7 @@ Provides deep context to AI agents through:
             )
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def get_citations(paper_id: str) -> dict[str, Any]:
         """Extract all citations from a paper.
 
@@ -820,7 +866,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def get_equations(paper_id: str) -> dict[str, Any]:
         """Extract all equations from a paper.
 
@@ -844,7 +890,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def get_code_snippets(paper_id: str) -> dict[str, Any]:
         """Extract all code snippets from a paper.
 
@@ -878,7 +924,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def generate_report(paper_id: str) -> dict[str, Any]:
         """Generate comprehensive markdown report for a paper.
 
@@ -940,7 +986,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def compare_papers(paper_ids: list[str]) -> dict[str, Any]:
         """Compare multiple papers side-by-side.
 
@@ -996,7 +1042,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def extract_quoted_evidence(
         paper_id: str,
         claim: str,
@@ -1030,7 +1076,7 @@ Provides deep context to AI agents through:
             max_quotes=max_quotes,
         )
 
-    @server.tool()
+    @_tool_in("papers")
     def joint_retrieval(
         query: str,
         paper_ids: list[str] | None = None,
@@ -1065,7 +1111,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("papers")
     def delete_paper(paper_id: str) -> dict[str, Any]:
         """Delete an indexed paper and all associated data.
 
@@ -1092,7 +1138,7 @@ Provides deep context to AI agents through:
     # HUGGINGFACE DATASET TOOLS
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("datasets")
     async def index_dataset(source: str) -> dict[str, Any]:
         """Index a HuggingFace dataset for semantic search.
 
@@ -1130,7 +1176,7 @@ Provides deep context to AI agents through:
         result = await asyncio.to_thread(service.index_dataset, hf_id, hf_token=hf_token)
         return result
 
-    @server.tool()
+    @_tool_in("datasets")
     def list_datasets(limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """List all indexed HuggingFace datasets.
 
@@ -1153,7 +1199,7 @@ Provides deep context to AI agents through:
 
         return {"success": True, "datasets": datasets, "total": len(datasets)}
 
-    @server.tool()
+    @_tool_in("datasets")
     def get_dataset(dataset_id: str) -> dict[str, Any]:
         """Get detailed information about an indexed dataset.
 
@@ -1178,7 +1224,7 @@ Provides deep context to AI agents through:
 
         return {"success": True, "dataset": dataset}
 
-    @server.tool()
+    @_tool_in("datasets")
     async def search_datasets(query: str, top_k: int = 10) -> dict[str, Any]:
         """Search datasets using semantic search over dataset cards.
 
@@ -1202,7 +1248,7 @@ Provides deep context to AI agents through:
 
         return result
 
-    @server.tool()
+    @_tool_in("datasets")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:
         """Delete an indexed dataset.
 
@@ -1228,7 +1274,7 @@ Provides deep context to AI agents through:
     # UNIFIED RESEARCH TOOL
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("research")
     def research(
         query: str,
         mode: str = "quick",
@@ -1311,7 +1357,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("docs")
     def grep_source(
         source_id: str,
         pattern: str,
@@ -1366,7 +1412,7 @@ Provides deep context to AI agents through:
     # UNIFIED SOURCE TOOLS (Nia-parity P1)
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("sources", "minimal")
     def search(
         query: str,
         source_ids: list[str] | None = None,
@@ -1443,7 +1489,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("sources")
     def index_source(
         source_type: str,
         url: str,
@@ -1517,7 +1563,7 @@ Provides deep context to AI agents through:
             }
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("sources", "minimal")
     def resolve_source(
         name: str,
         source_types: list[str] | None = None,
@@ -1595,7 +1641,7 @@ Provides deep context to AI agents through:
             "total": len(candidates),
         }
 
-    @server.tool()
+    @_tool_in("sources")
     def list_sources(source_type: str | None = None) -> dict[str, Any]:
         """List indexed sources, optionally filtered by type.
 
@@ -1616,7 +1662,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "sources": sources, "total": len(sources)}
 
-    @server.tool()
+    @_tool_in("sources", "minimal")
     def read_source(
         source_id: str,
         source_type: str = "paper",
@@ -1799,7 +1845,7 @@ Provides deep context to AI agents through:
             "message": f"unsupported source_type: {source_type}",
         }
 
-    @server.tool()
+    @_tool_in("sources")
     def tree_source(
         source_id: str,
         action: str = "tree",
@@ -1864,7 +1910,7 @@ Provides deep context to AI agents through:
     # executions / tool contracts into Delphi, then offers graph-aware
     # retrieval on top.
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_register_workspace(
         external_id: str,
         name: str,
@@ -1885,7 +1931,7 @@ Provides deep context to AI agents through:
             tags=tags, is_public=is_public,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_ingest_node(
         workspace_id: str,
         external_id: str,
@@ -1922,7 +1968,7 @@ Provides deep context to AI agents through:
             created_by=created_by,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_ingest_edge(
         workspace_id: str,
         source_external_id: str,
@@ -1943,7 +1989,7 @@ Provides deep context to AI agents through:
             edge_type=edge_type, metadata=metadata,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_ingest_artifact(
         workspace_id: str,
         kind: str,
@@ -1967,7 +2013,7 @@ Provides deep context to AI agents through:
             metadata=metadata, external_id=external_id,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_ingest_execution(
         workspace_id: str,
         tool: str | None,
@@ -1995,7 +2041,7 @@ Provides deep context to AI agents through:
             external_id=external_id,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_ingest_tool_contract(
         tool_name: str,
         workspace_id: str | None = None,
@@ -2022,7 +2068,7 @@ Provides deep context to AI agents through:
             signature=signature, examples=examples, tags=tags,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def build_thesis_context(
         question: str,
         node_id: str | None = None,
@@ -2053,7 +2099,7 @@ Provides deep context to AI agents through:
             workspace_ids=workspace_ids, token_budget=token_budget,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def summarize_relevant_subgraph(
         question: str,
         root_node_id: str | None = None,
@@ -2074,7 +2120,7 @@ Provides deep context to AI agents through:
             root_node_id=root_node_id, max_depth=max_depth,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def find_related_nodes(
         node_id: str | None = None,
         question: str | None = None,
@@ -2107,7 +2153,7 @@ Provides deep context to AI agents through:
             "related": nodes,
         }
 
-    @server.tool()
+    @_tool_in("thesis")
     def find_relevant_artifacts(
         question: str,
         workspace_ids: list[str] | None = None,
@@ -2133,7 +2179,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "question": question, "artifacts": artifacts}
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_retrieve_tool_contract(
         task: str,
         top_k: int = 5,
@@ -2153,7 +2199,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "task": task, "contracts": contracts}
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_what_was_tried(
         question: str,
         workspace_ids: list[str] | None = None,
@@ -2175,7 +2221,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_what_not_to_repeat(
         question: str,
         workspace_ids: list[str] | None = None,
@@ -2193,7 +2239,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_active_work_context(
         workspace_ids: list[str] | None = None,
         top_k: int = 10,
@@ -2208,7 +2254,7 @@ Provides deep context to AI agents through:
             user_id=user_id, workspace_ids=workspace_ids, top_k=top_k,
         )
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_find_decisions(
         question: str,
         workspace_ids: list[str] | None = None,
@@ -2230,7 +2276,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "question": question, "decisions": decisions}
 
-    @server.tool()
+    @_tool_in("thesis")
     def thesis_search_nodes(
         query: str,
         workspace_ids: list[str] | None = None,
@@ -2251,7 +2297,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "query": query, "nodes": nodes}
 
-    @server.tool()
+    @_tool_in("code")
     def classify_failure(
         description: str,
         query: str | None = None,
