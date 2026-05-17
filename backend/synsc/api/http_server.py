@@ -171,7 +171,13 @@ def _research_rate_check(api_key: str, mode: str, rpm: int) -> bool:
 class IndexRepositoryRequest(BaseModel):
     """Request to index a repository."""
     url: str = Field(..., description="GitHub repository URL or shorthand (owner/repo)")
-    branch: str = Field(default="main", description="Branch to index")
+    branch: str | None = Field(
+        default=None,
+        description=(
+            "Branch to index. None means auto-detect the repo's default branch "
+            "(no longer hard-coded to 'main')."
+        ),
+    )
     deep_index: bool = Field(
         default=False,
         description="Deep indexing: full AST chunking per function/class (slower, higher quality)",
@@ -179,6 +185,26 @@ class IndexRepositoryRequest(BaseModel):
     force_reindex: bool = Field(
         default=False,
         description="Skip diff detection and fully re-index from scratch",
+    )
+    quality_mode: str | None = Field(
+        default=None,
+        description=(
+            "'fast', 'balanced', or 'agent'. Agent mode includes tests/docs/"
+            "examples/configs/manifests, runs AST chunking, and enables hybrid "
+            "retrieval. Defaults to the server's configured quality_mode."
+        ),
+    )
+    include_tests: bool | None = Field(
+        default=None,
+        description="Override category-level inclusion of tests/specs.",
+    )
+    include_docs: bool | None = Field(
+        default=None,
+        description="Override category-level inclusion of docs/markdown.",
+    )
+    include_examples: bool | None = Field(
+        default=None,
+        description="Override category-level inclusion of examples/fixtures.",
     )
 
 
@@ -274,6 +300,25 @@ class ResearchRequest(BaseModel):
         default=None, description="Filter by types: 'repo', 'paper', 'dataset'"
     )
     k: int | None = Field(default=None, ge=1, le=100, description="Retrieval top_k override")
+
+
+class ResearchV2StartRequest(BaseModel):
+    """Request to POST /v2/research (async session)."""
+
+    query: str = Field(..., min_length=1, max_length=4000)
+    mode: str = Field(default="quick")
+    source_ids: list[str] | None = None
+    source_types: list[str] | None = None
+    auto_index: bool = Field(
+        default=True,
+        description="DISCOVER->INDEX->SEARCH: index unknown libs found in the query",
+    )
+
+
+class ResearchFollowupRequest(BaseModel):
+    """Request to POST /v2/research/{session_id}/messages."""
+
+    message: str = Field(..., min_length=1, max_length=4000)
 
 
 class GrepSourceRequest(BaseModel):
@@ -1125,6 +1170,10 @@ def create_app() -> FastAPI:
                 body.url, body.branch, user_id=auth.user_id,
                 deep_index=body.deep_index,
                 force_reindex=body.force_reindex,
+                quality_mode=body.quality_mode,
+                include_tests=body.include_tests,
+                include_docs=body.include_docs,
+                include_examples=body.include_examples,
             )
             _cache_invalidate_user(auth.user_id)
             _log_activity(auth.user_id, "index_repository", "repository", metadata={"url": body.url, "branch": body.branch})
@@ -1180,6 +1229,10 @@ def create_app() -> FastAPI:
                                 progress_callback=progress_callback,
                                 deep_index=body.deep_index,
                                 force_reindex=body.force_reindex,
+                                quality_mode=body.quality_mode,
+                                include_tests=body.include_tests,
+                                include_docs=body.include_docs,
+                                include_examples=body.include_examples,
                             )
                         )
                         return result
@@ -1984,6 +2037,122 @@ def create_app() -> FastAPI:
         return SafeJSONResponse(content={"success": True, **result})
 
     # ==========================================================================
+    # Research v2 — Oracle-class async sessions with SSE
+    # ==========================================================================
+
+    @app.post("/v2/research", tags=["Research"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def research_v2_start(
+        request: Request,
+        body: ResearchV2StartRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Start an async research session. Returns session_id immediately.
+
+        Stream events via GET /v2/research/{session_id}/events (SSE) and
+        post follow-up questions to POST /v2/research/{session_id}/messages.
+        """
+        from synsc.services.research_sessions import start_session
+
+        session = await start_session(
+            query=body.query,
+            mode=body.mode,
+            source_ids=body.source_ids,
+            source_types=body.source_types,
+            user_id=auth.user_id,
+            auto_index=body.auto_index,
+        )
+        return SafeJSONResponse(
+            status_code=202,
+            content={
+                "success": True,
+                "session_id": session.session_id,
+                "status": session.status,
+            },
+        )
+
+    @app.get("/v2/research/{session_id}", tags=["Research"])
+    async def research_v2_get(
+        session_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Return the current state of a research session."""
+        from synsc.services.research_sessions import get_session
+
+        session = get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="session not found")
+        if session.user_id and auth.user_id and session.user_id != auth.user_id:
+            raise HTTPException(status_code=403, detail="not your session")
+        return SafeJSONResponse(content={"success": True, **session.to_public()})
+
+    @app.get("/v2/research/{session_id}/events", tags=["Research"])
+    async def research_v2_events(
+        session_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """SSE stream of session events.
+
+        Emits ``iteration``, ``retrieval``, ``discover``, ``index``,
+        ``answer``, ``error``, and ``done`` events. Replays history so a
+        reconnecting client never loses events.
+        """
+        from synsc.services.research_sessions import get_session, subscribe
+
+        session = get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="session not found")
+        if session.user_id and auth.user_id and session.user_id != auth.user_id:
+            raise HTTPException(status_code=403, detail="not your session")
+
+        async def _stream():
+            async for ev in subscribe(session_id):
+                import json as _json
+
+                data = _json.dumps(
+                    {
+                        "seq": ev.seq,
+                        "type": ev.type,
+                        "timestamp": ev.timestamp,
+                        "payload": ev.payload,
+                    }
+                )
+                yield f"event: {ev.type}\ndata: {data}\n\n"
+            yield "event: end\ndata: {}\n\n"
+
+        return StreamingResponse(
+            _stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.post("/v2/research/{session_id}/messages", tags=["Research"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def research_v2_followup(
+        request: Request,
+        session_id: str,
+        body: ResearchFollowupRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Post a follow-up message on a completed research session."""
+        from synsc.services.research_sessions import post_followup
+
+        try:
+            result = await post_followup(
+                session_id=session_id,
+                message=body.message,
+                user_id=auth.user_id,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return SafeJSONResponse(content={"success": True, **result})
+
+    # ==========================================================================
     # Sources (unified grep + read + tree surface)
     # ==========================================================================
 
@@ -2085,6 +2254,245 @@ def create_app() -> FastAPI:
 
         raise HTTPException(
             status_code=400, detail=f"unsupported source_type: {source_type}"
+        )
+
+    # ==========================================================================
+    # Public Try-Live endpoint — Context7-style anonymous query surface.
+    # ==========================================================================
+
+    @app.get("/v1/try", tags=["Public"])
+    async def try_live_endpoint(
+        request: Request,
+        q: str,
+        source_types: str | None = None,
+        k: int = 5,
+    ):
+        """Public anonymous search endpoint.
+
+        Gated by ``SYNSC_PUBLIC_TRY_ENABLED=true``. Searches only sources
+        with ``visibility='public'`` (or legacy ``is_public=True``). Returns
+        a small JSON response suitable for a frontend chat UI.
+
+        No auth required — meant to drive a public Try-Live page so a
+        non-MCP-client user can poke at the index.
+        """
+        if os.environ.get("SYNSC_PUBLIC_TRY_ENABLED", "false").lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="public try endpoint disabled (set SYNSC_PUBLIC_TRY_ENABLED=true)",
+            )
+        if not q or len(q) > 500:
+            raise HTTPException(status_code=400, detail="q must be 1..500 chars")
+        if k < 1 or k > 20:
+            raise HTTPException(status_code=400, detail="k must be 1..20")
+
+        from synsc.services.source_service import unified_search
+
+        types_list = (
+            [t.strip() for t in source_types.split(",") if t.strip()]
+            if source_types
+            else None
+        )
+
+        try:
+            result = unified_search(
+                query=q,
+                source_ids=None,
+                source_types=types_list,
+                k=k,
+                mode="precise",
+                user_id=None,  # anonymous → only public sources surface
+            )
+        except Exception as exc:
+            logger.exception("try-live search failed")
+            return SafeJSONResponse(
+                status_code=500,
+                content={"success": False, "error": str(exc)},
+            )
+
+        # Trim each hit's text so a public page can't be used to scrape
+        # full content in bulk.
+        for r in result.get("results", []):
+            if isinstance(r.get("text"), str) and len(r["text"]) > 400:
+                r["text"] = r["text"][:400] + "..."
+                r["_truncated"] = True
+
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "query": q,
+                **result,
+                "disclaimer": (
+                    "Public Try-Live — results limited to public sources, "
+                    "snippets truncated. Sign in for full access."
+                ),
+            }
+        )
+
+    @app.post("/v1/contexts", tags=["Contexts"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def save_context_endpoint(
+        request: Request,
+        body: dict,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Save a named context blob for the authenticated user."""
+        from synsc.services.context_blob_service import save_context
+
+        name = body.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="name required")
+        payload = body.get("payload") or {
+            k: body.get(k)
+            for k in (
+                "source_ids",
+                "source_types",
+                "topic",
+                "tokens",
+                "thesis_workspace_id",
+                "notes",
+            )
+            if k in body
+        }
+        try:
+            blob = save_context(user_id=auth.user_id, name=name, payload=payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return SafeJSONResponse(content={"success": True, **blob})
+
+    @app.get("/v1/contexts", tags=["Contexts"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def list_contexts_endpoint(
+        request: Request,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        from synsc.services.context_blob_service import list_contexts
+
+        blobs = list_contexts(user_id=auth.user_id)
+        return SafeJSONResponse(
+            content={"success": True, "contexts": blobs, "total": len(blobs)}
+        )
+
+    @app.get("/v1/contexts/{name}", tags=["Contexts"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def load_context_endpoint(
+        request: Request,
+        name: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        from synsc.services.context_blob_service import load_context
+
+        blob = load_context(user_id=auth.user_id, name=name)
+        if not blob:
+            raise HTTPException(status_code=404, detail="context not found")
+        return SafeJSONResponse(content={"success": True, **blob})
+
+    @app.delete("/v1/contexts/{name}", tags=["Contexts"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def delete_context_endpoint(
+        request: Request,
+        name: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        from synsc.services.context_blob_service import delete_context
+
+        deleted = delete_context(user_id=auth.user_id, name=name)
+        return SafeJSONResponse(content={"success": True, "deleted": deleted})
+
+    @app.get("/v1/sources/{repo_id}/visualize", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def visualize_codebase_endpoint(
+        request: Request,
+        repo_id: str,
+        max_dirs: int = 30,
+        max_symbols: int = 50,
+        max_edges: int = 100,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Structural JSON graph of an indexed repository."""
+        from synsc.services.visualization_service import visualize_codebase
+
+        result = visualize_codebase(
+            repo_id=repo_id,
+            user_id=auth.user_id,
+            max_dirs=max_dirs,
+            max_symbols=max_symbols,
+            max_edges=max_edges,
+        )
+        if not result.get("success"):
+            code = (
+                404 if result.get("error_code") == "not_found"
+                else 403 if result.get("error_code") == "forbidden"
+                else 400
+            )
+            raise HTTPException(status_code=code, detail=result.get("message"))
+        return SafeJSONResponse(content=result)
+
+    @app.get("/v1/sources/resolve", tags=["Sources"])
+    @limiter.limit(SEARCH_LIMIT)
+    async def resolve_source_endpoint(
+        request: Request,
+        name: str,
+        source_types: str | None = None,
+        limit: int = 10,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Context7-style name→source resolver.
+
+        ``name`` is a free-form library / repo / dataset / paper name.
+        ``source_types`` is a comma-separated subset of
+        ``repo,paper,dataset,docs``. Returns ranked candidates so the caller
+        can pick a canonical ``source_id`` before fetching.
+        """
+        from synsc.services.source_service import (
+            resolve_source_id,
+            resolve_source_name,
+        )
+
+        types_list = (
+            [t.strip() for t in source_types.split(",") if t.strip()]
+            if source_types
+            else None
+        )
+
+        try:
+            uid, stype = resolve_source_id(name, user_id=auth.user_id)
+            return SafeJSONResponse(
+                content={
+                    "success": True,
+                    "candidates": [
+                        {
+                            "source_id": uid,
+                            "source_type": stype,
+                            "display_name": name,
+                            "external_ref": name,
+                            "match_quality": 4,
+                            "trust_score": 0.0,
+                            "extra": {"resolved_via": "canonical"},
+                        }
+                    ],
+                    "total": 1,
+                }
+            )
+        except ValueError:
+            pass
+
+        candidates = resolve_source_name(
+            name=name,
+            user_id=auth.user_id,
+            source_types=types_list,
+            limit=limit,
+        )
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "candidates": candidates,
+                "total": len(candidates),
+            }
         )
 
     @app.get("/v1/sources", tags=["Sources"])

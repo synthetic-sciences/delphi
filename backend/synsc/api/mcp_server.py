@@ -136,6 +136,52 @@ Provides deep context to AI agents through:
         transport_security=transport_security,
     )
 
+    # ------------------------------------------------------------------
+    # Scoped MCP surfaces (Nia parity).
+    #
+    # ``SYNSC_MCP_PROFILE`` selects a subset of tools to expose. Agents
+    # pay a token cost for every tool definition in the MCP handshake;
+    # exposing only the relevant subset for a workflow is a free win.
+    #
+    # Profile values:
+    #   all     — every tool (default)
+    #   code    — repos: index/search/symbols/context/analyze
+    #   papers  — papers + research + datasets
+    #   docs    — docs / sources / generic search / resolve
+    #   thesis  — Thesis graph tools
+    #   minimal — resolve_source + search + read_source (the 3-tool starter)
+    # ------------------------------------------------------------------
+    _profile = os.environ.get("SYNSC_MCP_PROFILE", "all").strip().lower()
+    _profile_groups: dict[str, set[str]] = {
+        "all": {"code", "papers", "datasets", "research", "docs", "thesis", "sources", "minimal"},
+        "code": {"code", "sources", "minimal"},
+        "papers": {"papers", "research", "datasets", "sources", "minimal"},
+        "docs": {"docs", "sources", "minimal"},
+        "thesis": {"thesis", "sources", "minimal"},
+        "minimal": {"minimal"},
+    }
+    _enabled_groups = _profile_groups.get(_profile, _profile_groups["all"])
+    if _profile not in _profile_groups:
+        logger.warning(
+            "unknown SYNSC_MCP_PROFILE, falling back to 'all'",
+            profile=_profile,
+        )
+
+    def _tool_in(*groups: str):
+        """Wrap ``@server.tool()`` with a profile gate.
+
+        Usage: ``@_tool_in("code")`` instead of ``@server.tool()``. If the
+        tool's group(s) don't intersect the active profile the decorator
+        returns the function un-registered (still importable / unit-testable).
+        """
+        enabled = any(g in _enabled_groups for g in groups)
+        if not enabled:
+            def _skip(fn):  # noqa: ANN001
+                logger.debug("mcp: skipping tool by profile", tool=fn.__name__, groups=groups)
+                return fn
+            return _skip
+        return server.tool()
+
     # ==========================================================================
     # AUTH HELPERS
     # ==========================================================================
@@ -177,25 +223,51 @@ Provides deep context to AI agents through:
     # CODE REPOSITORY TOOLS
     # ==========================================================================
 
-    @server.tool()
-    async def index_repository(url: str, branch: str = "main", deep_index: bool = False, force_reindex: bool = False) -> dict[str, Any]:
-        """Index a GitHub repository for semantic code search.
+    @_tool_in("code")
+    async def index_repository(
+        url: str,
+        branch: str | None = None,
+        deep_index: bool = False,
+        force_reindex: bool = False,
+        quality_mode: str | None = None,
+        include_tests: bool | None = None,
+        include_docs: bool | None = None,
+        include_examples: bool | None = None,
+    ) -> dict[str, Any]:
+        """Index a GitHub repository for semantic code search (agent-grade by default).
 
         If the repository was previously indexed and has new commits, performs a
         diff-aware re-index — only changed files are re-processed, preserving the
         repo_id and all user collection links.
 
+        Quality mode (default 'agent' for MCP):
+          - 'agent': index everything useful (tests, docs, examples, configs,
+            manifests, dotfiles), AST chunking on, hybrid retrieval, rerank top
+            50, lower min-chunk threshold so small but meaningful files are kept.
+          - 'balanced': skip nothing structural, AST chunking on, no rerank.
+          - 'fast': legacy behavior — skip tests/docs/examples, turbo chunking.
+
         Args:
             url: GitHub repository URL (e.g., "facebook/react" or full URL)
-            branch: Branch to index (default: main)
-            deep_index: Full AST chunking per function/class (slower, higher quality)
-            force_reindex: Skip diff detection and fully re-index from scratch
+            branch: Branch to index. None auto-detects the repo's default branch.
+            deep_index: Full AST chunking per function/class. Implied by agent mode.
+            force_reindex: Skip diff detection and fully re-index from scratch.
+            quality_mode: 'agent' (default for MCP), 'balanced', or 'fast'.
+            include_tests: Force include/exclude test files independent of mode.
+            include_docs: Force include/exclude docs/markdown independent of mode.
+            include_examples: Force include/exclude examples/fixtures.
 
         Returns:
-            Dictionary with repo_id, files_indexed, chunks_created, diff_stats, etc.
+            Dictionary with repo_id, files_indexed, chunks_created, diff_stats,
+            and the quality_mode that was actually applied.
         """
         import asyncio
+        from synsc.config import get_config
         from synsc.services.indexing_service import IndexingService
+
+        # MCP gets agent-quality by default unless caller passes 'fast'/'balanced'.
+        if quality_mode is None:
+            quality_mode = get_config().quality.mcp_default_mode
 
         service = IndexingService()
         user_id = get_authenticated_user_id()
@@ -203,13 +275,23 @@ Provides deep context to AI agents through:
         result = await asyncio.to_thread(
             service.index_repository, url, branch, user_id=user_id,
             deep_index=deep_index, force_reindex=force_reindex,
+            quality_mode=quality_mode,
+            include_tests=include_tests,
+            include_docs=include_docs,
+            include_examples=include_examples,
         )
+        # Stamp the mode that was applied so the agent knows what it got.
+        if isinstance(result, dict):
+            result.setdefault("quality_mode", quality_mode)
         uid = get_authenticated_user_id()
         if uid:
-            _log_activity(uid, "index_repository", resource_type="repository", metadata={"url": url, "branch": branch})
+            _log_activity(
+                uid, "index_repository", resource_type="repository",
+                metadata={"url": url, "branch": branch, "quality_mode": quality_mode},
+            )
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def list_repositories(limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """List all indexed repositories.
 
@@ -232,7 +314,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "list_repositories", resource_type="repository")
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def get_repository(repo_id: str) -> dict[str, Any]:
         """Get detailed information about an indexed repository.
 
@@ -250,7 +332,7 @@ Provides deep context to AI agents through:
         result = service.get_repository(repo_id, user_id=user_id)
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def delete_repository(repo_id: str) -> dict[str, Any]:
         """Delete an indexed repository.
 
@@ -268,28 +350,46 @@ Provides deep context to AI agents through:
         result = service.delete_repository(repo_id, user_id=user_id)
         return result
 
-    @server.tool()
+    @_tool_in("code")
     async def search_code(
         query: str,
         repo_ids: list[str] | None = None,
         language: str | None = None,
         file_pattern: str | None = None,
         top_k: int = 10,
+        quality_mode: str | None = None,
     ) -> dict[str, Any]:
-        """Search code using natural language or keywords.
+        """Hybrid code search (agent-quality by default for MCP).
+
+        Runs five retrieval branches and fuses them: vector embedding
+        (semantic), BM25 / full-text (keyword), exact symbol lookup,
+        exact path/glob match, and trigram fallback. The cross-encoder
+        reranker re-orders the top fused window.
+
+        Each result carries ``candidate_sources`` showing which branches
+        contributed — vital for debugging "why did Delphi miss this?".
 
         Args:
             query: Natural language search query
             repo_ids: Optional list of repo IDs to search
             language: Filter by programming language
-            file_pattern: Glob pattern for file paths
+            file_pattern: Glob pattern for file paths (applied to the path
+                branch BEFORE vector retrieval, so exact-file intent is
+                never filtered out)
             top_k: Number of results to return
+            quality_mode: Override the retrieval mode for this call. None =
+                MCP default (agent). Pass 'fast' for legacy pure-vector.
 
         Returns:
-            Search results with code snippets and relevance scores
+            Search results with code snippets, relevance scores, and a
+            ``hybrid`` block showing how many candidates each branch hit.
         """
         import asyncio
+        from synsc.config import get_config
         from synsc.services.search_service import SearchService
+
+        if quality_mode is None:
+            quality_mode = get_config().quality.mcp_default_mode
 
         service = SearchService()
         user_id = get_authenticated_user_id()
@@ -298,13 +398,14 @@ Provides deep context to AI agents through:
             service.search_code,
             query=query, repo_ids=repo_ids, language=language,
             file_pattern=file_pattern, top_k=top_k, user_id=user_id,
+            quality_mode=quality_mode,
         )
         uid = get_authenticated_user_id()
         if uid:
             _log_activity(uid, "search_code", resource_type="repository", query=query, results_count=len(result.get("results", [])))
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def get_file(
         repo_id: str,
         file_path: str,
@@ -333,7 +434,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "get_file", resource_type="repository", resource_id=repo_id, metadata={"file_path": file_path})
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def search_symbols(
         name: str,
         repo_ids: list[str] | None = None,
@@ -367,7 +468,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "search_symbols", resource_type="repository", query=name, results_count=len(result.get("results", [])))
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def analyze_repository(repo_id: str) -> dict[str, Any]:
         """Get comprehensive analysis of an indexed repository.
 
@@ -392,7 +493,7 @@ Provides deep context to AI agents through:
         result = service.analyze_repository(repo_id, user_id=user_id)
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def get_directory_structure(
         repo_id: str,
         max_depth: int = 4,
@@ -418,7 +519,7 @@ Provides deep context to AI agents through:
         )
         return result
 
-    @server.tool()
+    @_tool_in("code")
     def get_symbol(symbol_id: str) -> dict[str, Any]:
         """Get detailed information about a specific code symbol.
 
@@ -436,7 +537,121 @@ Provides deep context to AI agents through:
         result = service.get_symbol(symbol_id, user_id=user_id)
         return result
 
-    @server.tool()
+    @_tool_in("code")
+    async def build_context_pack(
+        query: str,
+        repo_ids: list[str] | None = None,
+        quality_mode: str | None = None,
+        token_budget: int = 6000,
+        include_architecture: bool = True,
+        include_tests: bool = True,
+        include_docs: bool = True,
+        include_examples: bool = True,
+        include_configs: bool = True,
+    ) -> dict[str, Any]:
+        """Build an agent-ready context pack for a query.
+
+        Instead of returning isolated snippets, this tool assembles a
+        structured payload designed for direct agent consumption:
+
+          - **Primary hits** from hybrid search (vector+BM25+symbol+path).
+          - **Enclosing function/class bodies** for each primary hit.
+          - **Adjacent chunks** (N-1 / N+1) for flow context.
+          - **Same-class siblings** so the agent sees the full API surface.
+          - **Imports/dependencies** of each primary file.
+          - **Linked tests** that mention the matched symbol.
+          - **Linked docs / examples / configs** that reference the API.
+          - **Symbol details**: signatures + docstrings.
+          - **Architecture summary** for broad queries (top dirs, lang split).
+          - **Why-matched** rationale and stable file_path:line ranges.
+
+        A token budgeter compresses by *utility* (tested implementation
+        beats long example file) rather than raw similarity. A re-query
+        planner kicks in when the budget is under-filled or a key
+        category is missing.
+
+        Args:
+            query: The agent's question.
+            repo_ids: Optional list of repo IDs to scope the pack to.
+            quality_mode: 'fast'/'balanced'/'agent' (default agent).
+            token_budget: Approximate target token budget for the pack body.
+            include_architecture: Add a directory-level overview for broad queries.
+            include_tests/docs/examples/configs: Toggle per-category inclusion.
+        """
+        import asyncio
+        from synsc.config import get_config
+        from synsc.services.context_pack import build_context_pack as _build_pack
+
+        if quality_mode is None:
+            quality_mode = get_config().quality.mcp_default_mode
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "auth_required",
+                "message": "Authentication required for context pack",
+            }
+
+        result = await asyncio.to_thread(
+            _build_pack,
+            query=query, user_id=user_id, repo_ids=repo_ids,
+            quality_mode=quality_mode,
+            token_budget=token_budget,
+            include_architecture=include_architecture,
+            include_tests=include_tests,
+            include_docs=include_docs,
+            include_examples=include_examples,
+            include_configs=include_configs,
+        )
+        _log_activity(
+            user_id, "build_context_pack",
+            resource_type="repository", query=query,
+            metadata={"quality_mode": quality_mode, "token_budget": token_budget},
+        )
+        return {"success": True, **result}
+
+    @_tool_in("code")
+    def get_context(
+        chunk_id: str,
+        radius: int = 1,
+        include_enclosing: bool = True,
+        include_same_class: bool = True,
+    ) -> dict[str, Any]:
+        """Fetch one chunk plus its surrounding context.
+
+        Returns the chunk itself, ``radius`` chunks above and below (in the
+        same file), the tightest enclosing function/class body, and any
+        same-class sibling chunks. Use this when you need to drill into a
+        specific search hit without re-running a query.
+
+        Args:
+            chunk_id: The chunk identifier (UUID) from a search result.
+            radius: How many adjacent chunks to fetch on each side (default 1).
+            include_enclosing: Include the enclosing symbol body (default true).
+            include_same_class: Include same-class sibling chunks (default true).
+        """
+        from synsc.services.context_pack import get_chunk_context
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "auth_required",
+                "message": "Authentication required",
+            }
+        result = get_chunk_context(
+            chunk_id=chunk_id,
+            user_id=user_id,
+            radius=radius,
+            include_enclosing=include_enclosing,
+            include_same_class=include_same_class,
+        )
+        if "error" in result:
+            return {"success": False, "error_code": result["error"]}
+        return {"success": True, **result}
+
+    @_tool_in("code")
     def remove_from_collection(repo_id: str) -> dict[str, Any]:
         """Remove a repository from your collection without deleting it.
 
@@ -458,7 +673,7 @@ Provides deep context to AI agents through:
     # RESEARCH PAPER TOOLS
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("papers")
     async def index_paper(source: str) -> dict[str, Any]:
         """Index a research paper from arXiv or local PDF.
 
@@ -523,7 +738,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "index_paper", resource_type="paper", metadata={"source": source})
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def list_papers(limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """List all indexed papers.
 
@@ -547,7 +762,7 @@ Provides deep context to AI agents through:
             _log_activity(uid, "list_papers", resource_type="paper")
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def get_paper(paper_id: str, section: str | None = None) -> dict[str, Any]:
         """Get full paper content, optionally filtered to a single section.
 
@@ -575,30 +790,59 @@ Provides deep context to AI agents through:
             return {"success": False, "error_code": "not_found", "message": "Paper not found"}
         return {"success": True, **paper}
 
-    @server.tool()
-    async def search_papers(query: str, top_k: int = 5) -> dict[str, Any]:
+    @_tool_in("papers")
+    async def search_papers(
+        query: str,
+        top_k: int = 5,
+        topic: str | None = None,
+        tokens: int | None = None,
+    ) -> dict[str, Any]:
         """Search papers using semantic search.
 
         Args:
             query: Natural language search query
             top_k: Number of results to return
+            topic: Optional section/keyword filter applied post-retrieval.
+            tokens: Optional total token budget across all returned hits.
 
         Returns:
             Matching papers with relevance scores
         """
         import asyncio
+
+        from synsc.services.budget import (
+            budget_results,
+            filter_results_by_topic,
+        )
         from synsc.services.paper_service import get_paper_service
 
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
 
         result = await asyncio.to_thread(service.search_papers, query=query, top_k=top_k)
+        if topic and isinstance(result.get("results"), list):
+            result["results"] = filter_results_by_topic(
+                result["results"],
+                topic,
+                text_keys=("content", "section_title", "section"),
+            )
+        if tokens and isinstance(result.get("results"), list):
+            result["results"] = budget_results(
+                result["results"], tokens, text_key="content"
+            )
         uid = get_authenticated_user_id()
         if uid:
-            _log_activity(uid, "search_papers", resource_type="paper", query=query, results_count=len(result.get("results", [])))
+            _log_activity(
+                uid,
+                "search_papers",
+                resource_type="paper",
+                query=query,
+                results_count=len(result.get("results", [])),
+                metadata={"topic": topic, "tokens": tokens},
+            )
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def get_citations(paper_id: str) -> dict[str, Any]:
         """Extract all citations from a paper.
 
@@ -622,7 +866,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def get_equations(paper_id: str) -> dict[str, Any]:
         """Extract all equations from a paper.
 
@@ -646,7 +890,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def get_code_snippets(paper_id: str) -> dict[str, Any]:
         """Extract all code snippets from a paper.
 
@@ -680,7 +924,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def generate_report(paper_id: str) -> dict[str, Any]:
         """Generate comprehensive markdown report for a paper.
 
@@ -742,7 +986,7 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
     def compare_papers(paper_ids: list[str]) -> dict[str, Any]:
         """Compare multiple papers side-by-side.
 
@@ -798,7 +1042,76 @@ Provides deep context to AI agents through:
         }
         return result
 
-    @server.tool()
+    @_tool_in("papers")
+    def extract_quoted_evidence(
+        paper_id: str,
+        claim: str,
+        max_quotes: int = 5,
+    ) -> dict[str, Any]:
+        """Extract literal sentences from a paper that ground a claim.
+
+        Use this when an agent is about to write something like "the paper
+        shows X" — instead of paraphrasing, ask Delphi for the actual
+        quote. Returns the top sentences ranked by token overlap with the
+        claim, along with section + page so the agent can cite precisely.
+
+        Args:
+            paper_id: Paper identifier (UUID).
+            claim: The claim being grounded (a sentence or short phrase).
+            max_quotes: Maximum number of supporting sentences to return.
+        """
+        from synsc.services.paper_retrieval import extract_quoted_evidence as _q
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "auth_required",
+                "message": "Authentication required",
+            }
+        return _q(
+            paper_id=paper_id,
+            claim=claim,
+            user_id=user_id,
+            max_quotes=max_quotes,
+        )
+
+    @_tool_in("papers")
+    def joint_retrieval(
+        query: str,
+        paper_ids: list[str] | None = None,
+        repo_ids: list[str] | None = None,
+        top_k: int = 10,
+    ) -> dict[str, Any]:
+        """Joint retrieval across papers, code, and the Thesis graph.
+
+        Single tool call returns paper hits + code hits + Thesis-graph hits
+        for a query. Built for research workflows where the agent wants to
+        cite a paper, reference an implementation, and pick up prior
+        decisions from the graph in one shot.
+
+        Args:
+            query: Natural-language query.
+            paper_ids: Optional paper scope.
+            repo_ids: Optional repo scope.
+            top_k: Top hits per source.
+        """
+        from synsc.services.paper_retrieval import joint_retrieval as _joint
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "auth_required",
+                "message": "Authentication required",
+            }
+        result = _joint(
+            query=query, user_id=user_id,
+            paper_ids=paper_ids, repo_ids=repo_ids, top_k=top_k,
+        )
+        return {"success": True, **result}
+
+    @_tool_in("papers")
     def delete_paper(paper_id: str) -> dict[str, Any]:
         """Delete an indexed paper and all associated data.
 
@@ -825,7 +1138,7 @@ Provides deep context to AI agents through:
     # HUGGINGFACE DATASET TOOLS
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("datasets")
     async def index_dataset(source: str) -> dict[str, Any]:
         """Index a HuggingFace dataset for semantic search.
 
@@ -863,7 +1176,7 @@ Provides deep context to AI agents through:
         result = await asyncio.to_thread(service.index_dataset, hf_id, hf_token=hf_token)
         return result
 
-    @server.tool()
+    @_tool_in("datasets")
     def list_datasets(limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """List all indexed HuggingFace datasets.
 
@@ -886,7 +1199,7 @@ Provides deep context to AI agents through:
 
         return {"success": True, "datasets": datasets, "total": len(datasets)}
 
-    @server.tool()
+    @_tool_in("datasets")
     def get_dataset(dataset_id: str) -> dict[str, Any]:
         """Get detailed information about an indexed dataset.
 
@@ -911,7 +1224,7 @@ Provides deep context to AI agents through:
 
         return {"success": True, "dataset": dataset}
 
-    @server.tool()
+    @_tool_in("datasets")
     async def search_datasets(query: str, top_k: int = 10) -> dict[str, Any]:
         """Search datasets using semantic search over dataset cards.
 
@@ -935,7 +1248,7 @@ Provides deep context to AI agents through:
 
         return result
 
-    @server.tool()
+    @_tool_in("datasets")
     def delete_dataset(dataset_id: str) -> dict[str, Any]:
         """Delete an indexed dataset.
 
@@ -961,7 +1274,146 @@ Provides deep context to AI agents through:
     # UNIFIED RESEARCH TOOL
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("research")
+    async def research_start(
+        query: str,
+        mode: str = "quick",
+        source_ids: list[str] | None = None,
+        source_types: list[str] | None = None,
+        auto_index: bool = True,
+    ) -> dict[str, Any]:
+        """Start an async research session. Returns session_id immediately.
+
+        Use ``research_status`` to poll, ``research_events`` to get the
+        replayed event log, and ``research_followup`` to ask a follow-up
+        on a completed session.
+
+        DISCOVER -> INDEX -> SEARCH (Nia Oracle parity): when ``auto_index`` is
+        True (default) and the query mentions an unindexed library / repo /
+        arxiv / hf dataset, the session indexes it before searching.
+        Budget-guarded: max 3 auto-indexes per session.
+        """
+        from synsc.services.research_sessions import start_session
+
+        if mode not in ("quick", "deep", "oracle"):
+            return {
+                "success": False,
+                "error_code": "invalid_mode",
+                "message": f"Invalid mode '{mode}': expected quick / deep / oracle",
+            }
+        user_id = get_authenticated_user_id()
+        session = await start_session(
+            query=query,
+            mode=mode,
+            source_ids=source_ids,
+            source_types=source_types,
+            user_id=user_id,
+            auto_index=auto_index,
+        )
+        return {
+            "success": True,
+            "session_id": session.session_id,
+            "status": session.status,
+        }
+
+    @_tool_in("research")
+    def research_status(session_id: str) -> dict[str, Any]:
+        """Get current state of an async research session."""
+        from synsc.services.research_sessions import get_session
+
+        session = get_session(session_id)
+        if not session:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "session not found",
+            }
+        user_id = get_authenticated_user_id()
+        if session.user_id and user_id and session.user_id != user_id:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": "not your session",
+            }
+        return {"success": True, **session.to_public()}
+
+    @_tool_in("research")
+    def research_events(
+        session_id: str,
+        since_seq: int = 0,
+    ) -> dict[str, Any]:
+        """Get the event log for a research session.
+
+        Replays all events with seq > since_seq. Cheaper than SSE for agents
+        that prefer a polling loop. Pair with ``research_status`` to know
+        when status='completed'.
+        """
+        from synsc.services.research_sessions import get_session
+
+        session = get_session(session_id)
+        if not session:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "session not found",
+            }
+        user_id = get_authenticated_user_id()
+        if session.user_id and user_id and session.user_id != user_id:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": "not your session",
+            }
+        events = [
+            {
+                "seq": ev.seq,
+                "type": ev.type,
+                "timestamp": ev.timestamp,
+                "payload": ev.payload,
+            }
+            for ev in session.events
+            if ev.seq > since_seq
+        ]
+        return {
+            "success": True,
+            "session_id": session_id,
+            "status": session.status,
+            "events": events,
+            "latest_seq": session.events[-1].seq if session.events else -1,
+        }
+
+    @_tool_in("research")
+    async def research_followup(
+        session_id: str,
+        message: str,
+    ) -> dict[str, Any]:
+        """Post a follow-up question on a completed research session.
+
+        Stitches the prior question + answer into the new query so the
+        follow-up has continuity. Returns the new answer + citations.
+        """
+        from synsc.services.research_sessions import post_followup
+
+        user_id = get_authenticated_user_id()
+        try:
+            result = await post_followup(
+                session_id=session_id, message=message, user_id=user_id
+            )
+        except PermissionError as exc:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": str(exc),
+            }
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        return {"success": True, **result}
+
+    @_tool_in("research")
     def research(
         query: str,
         mode: str = "quick",
@@ -1044,7 +1496,7 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("docs")
     def grep_source(
         source_id: str,
         pattern: str,
@@ -1099,13 +1551,15 @@ Provides deep context to AI agents through:
     # UNIFIED SOURCE TOOLS (Nia-parity P1)
     # ==========================================================================
 
-    @server.tool()
+    @_tool_in("sources", "minimal")
     def search(
         query: str,
         source_ids: list[str] | None = None,
         source_types: list[str] | None = None,
         k: int = 10,
         mode: str = "precise",
+        topic: str | None = None,
+        tokens: int | None = None,
     ) -> dict[str, Any]:
         """Unified search across indexed code + papers + datasets.
 
@@ -1119,7 +1573,16 @@ Provides deep context to AI agents through:
             source_types: Filter: any of 'repo', 'paper', 'dataset'.
             k: Number of hits (default 10, max 100).
             mode: 'precise' / 'thorough' / 'web' / 'targeted' / 'universal'.
+            topic: Optional Context7-style sub-area filter applied to result
+                text/path after retrieval.
+            tokens: Optional total token budget across all returned hits.
+                Truncates trailing results to fit; the last partial hit is
+                marked ``_truncated: true``.
         """
+        from synsc.services.budget import (
+            budget_results,
+            filter_results_by_topic,
+        )
         from synsc.services.source_service import unified_search
 
         start = time.time()
@@ -1139,17 +1602,33 @@ Provides deep context to AI agents through:
                 "error_code": "invalid_input",
                 "message": str(e),
             }
+
+        if topic and isinstance(result.get("results"), list):
+            result["results"] = filter_results_by_topic(
+                result["results"], topic, text_keys=("text", "path")
+            )
+            result["total"] = len(result["results"])
+        if tokens and isinstance(result.get("results"), list):
+            result["results"] = budget_results(
+                result["results"], tokens, text_key="text"
+            )
+
         _log_activity(
             user_id=user_id,
             action="unified_search",
             query=query,
             results_count=result.get("total", 0),
             duration_ms=int((time.time() - start) * 1000),
-            metadata={"mode": mode, "source": "mcp"},
+            metadata={
+                "mode": mode,
+                "topic": topic,
+                "tokens": tokens,
+                "source": "mcp",
+            },
         )
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("sources")
     def index_source(
         source_type: str,
         url: str,
@@ -1158,13 +1637,28 @@ Provides deep context to AI agents through:
     ) -> dict[str, Any]:
         """Unified indexing dispatch — repo / paper / dataset / docs.
 
+        For repos, MCP gets agent-quality indexing by default (tests, docs,
+        examples, configs, manifests, dotfiles all included; AST chunking;
+        rerank). Pass ``options={'quality_mode': 'fast'}`` for the legacy
+        fast-skip behavior.
+
         Args:
             source_type: 'repo', 'paper', 'dataset', or 'docs' (docs lands later).
             url: GitHub URL, arXiv URL/ID, HF dataset ID, or docs URL.
             display_name: Optional friendly label.
-            options: Per-type options (e.g., {'branch': 'main', 'deep_index': false}).
+            options: Per-type options. Repo accepts: ``branch``, ``deep_index``,
+                ``force_reindex``, ``quality_mode``, ``include_tests``,
+                ``include_docs``, ``include_examples``.
         """
+        from synsc.config import get_config
         from synsc.services.source_service import index_source as _index_source
+
+        # Default repo indexing to MCP agent mode unless caller said otherwise.
+        if source_type == "repo":
+            options = dict(options or {})
+            options.setdefault(
+                "quality_mode", get_config().quality.mcp_default_mode
+            )
 
         start = time.time()
         user_id = get_authenticated_user_id()
@@ -1208,7 +1702,85 @@ Provides deep context to AI agents through:
             }
         return {"success": True, **result}
 
-    @server.tool()
+    @_tool_in("sources", "minimal")
+    def resolve_source(
+        name: str,
+        source_types: list[str] | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Context7-style name→source resolver.
+
+        Pass a free-form name ("fastapi", "transformers", "Attention is All You
+        Need") and get ranked candidates back, each with a canonical
+        ``source_id`` to feed to ``read_source`` / ``search``.
+
+        Returns matches across repos / papers / datasets / docs (filterable
+        via ``source_types``), ordered by:
+          - exact > prefix > substring match quality
+          - higher trust_score (stars / citations / verified) tiebreaks
+
+        Args:
+            name: Free-form library / repo / dataset / paper name.
+            source_types: Subset of 'repo','paper','dataset','docs'.
+            limit: Max candidates returned (default 10).
+        """
+        from synsc.services.source_service import (
+            resolve_source_id,
+            resolve_source_name,
+        )
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+
+        # If the caller gives us something resolvable to a single canonical
+        # form (UUID, owner/repo, arxiv:ID, hf:ID, github URL), return that
+        # as a single high-confidence match.
+        try:
+            uid, stype = resolve_source_id(name, user_id=user_id)
+            single = [
+                {
+                    "source_id": uid,
+                    "source_type": stype,
+                    "display_name": name,
+                    "external_ref": name,
+                    "match_quality": 4,
+                    "trust_score": 0.0,
+                    "extra": {"resolved_via": "canonical"},
+                }
+            ]
+            _log_activity(
+                user_id=user_id,
+                action="resolve_source",
+                query=name,
+                results_count=1,
+                duration_ms=int((time.time() - start) * 1000),
+                metadata={"path": "canonical", "source": "mcp"},
+            )
+            return {"success": True, "candidates": single, "total": 1}
+        except ValueError:
+            pass
+
+        candidates = resolve_source_name(
+            name=name,
+            user_id=user_id,
+            source_types=source_types,
+            limit=limit,
+        )
+        _log_activity(
+            user_id=user_id,
+            action="resolve_source",
+            query=name,
+            results_count=len(candidates),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"path": "fuzzy", "source": "mcp"},
+        )
+        return {
+            "success": True,
+            "candidates": candidates,
+            "total": len(candidates),
+        }
+
+    @_tool_in("sources")
     def list_sources(source_type: str | None = None) -> dict[str, Any]:
         """List indexed sources, optionally filtered by type.
 
@@ -1229,32 +1801,29 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "sources": sources, "total": len(sources)}
 
-    @server.tool()
-    def read_source(
+    def _do_read(
         source_id: str,
         source_type: str = "paper",
         path: str | None = None,
         section: str | None = None,
         start_line: int | None = None,
         end_line: int | None = None,
+        topic: str | None = None,
+        tokens: int | None = None,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
-        """Read content from an indexed source.
+        """Shared read-source implementation used by ``read_source`` and ``batch_read``."""
+        from synsc.services.budget import (
+            budget_results,
+            default_budget,
+            filter_results_by_topic,
+            truncate_to_tokens,
+        )
 
-        - paper: supports ``section=`` (canonical token or regex).
-        - repo:  requires ``path=``; optional ``start_line``/``end_line``.
-
-        Args:
-            source_id: Paper or repo ID.
-            source_type: 'paper' (default) or 'repo'.
-            path: Required for repo reads.
-            section: Optional for paper reads — 'abstract', 'introduction',
-                'methods', 'results', 'discussion', 'conclusion', 'references',
-                'related work', or a regex.
-            start_line: Repo read — optional 1-indexed start line.
-            end_line: Repo read — optional end line.
-        """
+        effective_tokens = tokens if tokens is not None else default_budget()
         start = time.time()
-        user_id = get_authenticated_user_id()
+        if user_id is None:
+            user_id = get_authenticated_user_id()
 
         if source_type == "paper":
             from synsc.services.paper_service import get_paper_service
@@ -1275,13 +1844,35 @@ Provides deep context to AI agents through:
                     "error_code": "not_found",
                     "message": "paper not found",
                 }
+
+            # Apply topic narrowing to the chunk list if the paper exposes one.
+            if topic and isinstance(paper.get("chunks"), list):
+                paper["chunks"] = filter_results_by_topic(
+                    paper["chunks"], topic, text_keys=("content", "section")
+                )
+            # Token budget over the joined body / chunk text.
+            if effective_tokens:
+                if isinstance(paper.get("chunks"), list):
+                    paper["chunks"] = budget_results(
+                        paper["chunks"], effective_tokens, text_key="content"
+                    )
+                if paper.get("text"):
+                    paper["text"] = truncate_to_tokens(
+                        paper["text"], effective_tokens
+                    )
+
             _log_activity(
                 user_id=user_id,
                 action="read_source",
                 resource_type="paper",
                 resource_id=source_id,
                 duration_ms=int((time.time() - start) * 1000),
-                metadata={"section": section, "source": "mcp"},
+                metadata={
+                    "section": section,
+                    "topic": topic,
+                    "tokens": effective_tokens,
+                    "source": "mcp",
+                },
             )
             return {
                 "success": True,
@@ -1312,15 +1903,61 @@ Provides deep context to AI agents through:
                     "error_code": "not_found",
                     "message": res.get("error", "not found"),
                 }
+            if effective_tokens and isinstance(res.get("content"), str):
+                truncated = truncate_to_tokens(res["content"], effective_tokens)
+                if truncated != res["content"]:
+                    res["content"] = truncated
+                    res["truncated"] = True
             _log_activity(
                 user_id=user_id,
                 action="read_source",
                 resource_type="repo",
                 resource_id=source_id,
                 duration_ms=int((time.time() - start) * 1000),
-                metadata={"path": path, "source": "mcp"},
+                metadata={
+                    "path": path,
+                    "topic": topic,
+                    "tokens": effective_tokens,
+                    "source": "mcp",
+                },
             )
             return {**res, "source_id": source_id, "source_type": "repo"}
+
+        if source_type == "docs":
+            from synsc.services.docs_service import get_docs_service
+
+            svc = get_docs_service(user_id=user_id)
+            # No dedicated single-source "read all" on docs yet — use a
+            # topic-or-broad search scoped to this docs source.
+            query = topic or "*"
+            res = svc.search_docs(query=query, top_k=20)
+            if not res.get("success"):
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "message": res.get("error", "not found"),
+                }
+            chunks = [r for r in res.get("results", []) if r.get("docs_id") == source_id]
+            chunks = filter_results_by_topic(
+                chunks, topic, text_keys=("content", "heading")
+            )
+            if effective_tokens:
+                chunks = budget_results(chunks, effective_tokens, text_key="content")
+            _log_activity(
+                user_id=user_id,
+                action="read_source",
+                resource_type="docs",
+                resource_id=source_id,
+                duration_ms=int((time.time() - start) * 1000),
+                metadata={"topic": topic, "tokens": effective_tokens, "source": "mcp"},
+            )
+            return {
+                "success": True,
+                "source_id": source_id,
+                "source_type": "docs",
+                "chunks": chunks,
+                "count": len(chunks),
+            }
 
         return {
             "success": False,
@@ -1328,7 +1965,384 @@ Provides deep context to AI agents through:
             "message": f"unsupported source_type: {source_type}",
         }
 
-    @server.tool()
+    @_tool_in("sources", "minimal")
+    def read_source(
+        source_id: str,
+        source_type: str = "paper",
+        path: str | None = None,
+        section: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        topic: str | None = None,
+        tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Read content from an indexed source.
+
+        - paper: supports ``section=`` (canonical token or regex).
+        - repo:  requires ``path=``; optional ``start_line``/``end_line``.
+        - docs:  whole-docs read; pair with ``topic`` to narrow.
+
+        Args:
+            source_id: Paper / repo / docs ID.
+            source_type: 'paper' (default), 'repo', or 'docs'.
+            path: Required for repo reads.
+            section: Optional for paper reads — 'abstract', 'introduction',
+                'methods', 'results', 'discussion', 'conclusion', 'references',
+                'related work', or a regex.
+            start_line: Repo read — optional 1-indexed start line.
+            end_line: Repo read — optional end line.
+            topic: Optional Context7-style sub-area filter.
+            tokens: Optional token budget for the returned body. Default
+                budget (~5000) applied when omitted; pass 0 to disable.
+        """
+        return _do_read(
+            source_id=source_id,
+            source_type=source_type,
+            path=path,
+            section=section,
+            start_line=start_line,
+            end_line=end_line,
+            topic=topic,
+            tokens=tokens,
+        )
+
+    @_tool_in("sources", "minimal")
+    def batch_read(
+        requests: list[dict[str, Any]],
+        topic: str | None = None,
+        tokens: int | None = None,
+    ) -> dict[str, Any]:
+        """Fetch multiple sources in one MCP call.
+
+        Each request is a dict with at minimum ``source_id``. Optional per-
+        request overrides: ``source_type``, ``path``, ``section``, ``topic``,
+        ``tokens``. Top-level ``topic`` / ``tokens`` are used as defaults.
+
+        Saves a turn vs. calling ``read_source`` N times. Per-request
+        failures don't abort the batch — each result carries its own
+        ``success`` flag.
+
+        Args:
+            requests: List of request dicts.
+            topic: Default topic filter for each request.
+            tokens: Default token budget for each request.
+        """
+        if not isinstance(requests, list) or not requests:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": "batch_read requires a non-empty list of requests",
+            }
+        if len(requests) > 32:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": "batch_read max 32 requests per call",
+            }
+
+        results: list[dict[str, Any]] = []
+        start = time.time()
+        user_id = get_authenticated_user_id()
+
+        for idx, req in enumerate(requests):
+            if not isinstance(req, dict) or "source_id" not in req:
+                results.append(
+                    {
+                        "success": False,
+                        "error_code": "invalid_input",
+                        "message": f"request[{idx}] missing source_id",
+                        "request_index": idx,
+                    }
+                )
+                continue
+
+            try:
+                # Reuse the registered tool's underlying function — we can't
+                # easily call `read_source` directly from inside the closure
+                # without recursive decoration, so we inline a minimal
+                # dispatch using the same services.
+                result = _do_read(
+                    source_id=str(req["source_id"]),
+                    source_type=str(req.get("source_type") or "paper"),
+                    path=req.get("path"),
+                    section=req.get("section"),
+                    start_line=req.get("start_line"),
+                    end_line=req.get("end_line"),
+                    topic=req.get("topic", topic),
+                    tokens=req.get("tokens", tokens),
+                    user_id=user_id,
+                )
+                result["request_index"] = idx
+                results.append(result)
+            except Exception as exc:
+                results.append(
+                    {
+                        "success": False,
+                        "error_code": "internal_error",
+                        "message": str(exc),
+                        "request_index": idx,
+                    }
+                )
+
+        _log_activity(
+            user_id=user_id,
+            action="batch_read",
+            results_count=len(results),
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"batch_size": len(requests), "source": "mcp"},
+        )
+        return {
+            "success": True,
+            "results": results,
+            "count": len(results),
+        }
+
+    @_tool_in("sources")
+    def set_source_visibility(
+        source_type: str,
+        source_id: str,
+        visibility: str,
+    ) -> dict[str, Any]:
+        """Change a source's visibility tier.
+
+        Tiers: 'public' (in lists, searchable by everyone),
+        'private' (owner-only), 'unlisted' (not in public lists but
+        anyone with the source_id can add it — link-share). Only the
+        indexer can change visibility.
+        """
+        from synsc.services.ownership_service import set_visibility
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "auth required",
+            }
+        try:
+            res = set_visibility(
+                source_type=source_type,
+                source_id=source_id,
+                visibility=visibility,
+                user_id=user_id,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        except LookupError as exc:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": str(exc),
+            }
+        except PermissionError as exc:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": str(exc),
+            }
+        return {"success": True, **res}
+
+    @_tool_in("sources")
+    def transfer_source_ownership(
+        source_type: str,
+        source_id: str,
+        new_owner_user_id: str,
+    ) -> dict[str, Any]:
+        """Transfer indexer ownership of a source to another user.
+
+        Only the current indexer can transfer.
+        """
+        from synsc.services.ownership_service import transfer_ownership
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "auth required",
+            }
+        try:
+            res = transfer_ownership(
+                source_type=source_type,
+                source_id=source_id,
+                new_owner_user_id=new_owner_user_id,
+                user_id=user_id,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        except LookupError as exc:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": str(exc),
+            }
+        except PermissionError as exc:
+            return {
+                "success": False,
+                "error_code": "forbidden",
+                "message": str(exc),
+            }
+        return {"success": True, **res}
+
+    @_tool_in("sources", "minimal")
+    def save_context(
+        name: str,
+        source_ids: list[str] | None = None,
+        source_types: list[str] | None = None,
+        topic: str | None = None,
+        tokens: int | None = None,
+        thesis_workspace_id: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Save a named context (indexed source set + preferences).
+
+        Portable across IDEs — load the same context on another machine
+        with ``load_context(name)`` and the agent gets the same source_ids,
+        default topic, and preferences.
+
+        Args:
+            name: User-scoped context name (must be unique per user).
+            source_ids: Indexed source IDs to include in the context.
+            source_types: Default source type filter.
+            topic: Default topic filter to apply on subsequent fetches.
+            tokens: Default token budget.
+            thesis_workspace_id: Optional Thesis workspace to bind to.
+            notes: Free-form notes — e.g., what this context is for.
+        """
+        from synsc.services.context_blob_service import save_context as _save
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "save_context requires an authenticated user",
+            }
+        payload = {
+            "source_ids": source_ids or [],
+            "source_types": source_types or [],
+            "topic": topic,
+            "tokens": tokens,
+            "thesis_workspace_id": thesis_workspace_id,
+            "notes": notes,
+        }
+        try:
+            blob = _save(user_id=user_id, name=name, payload=payload)
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        return {"success": True, **blob}
+
+    @_tool_in("sources", "minimal")
+    def load_context(name: str) -> dict[str, Any]:
+        """Load a named context for the current user."""
+        from synsc.services.context_blob_service import load_context as _load
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "load_context requires an authenticated user",
+            }
+        blob = _load(user_id=user_id, name=name)
+        if not blob:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": f"no context named {name!r}",
+            }
+        return {"success": True, **blob}
+
+    @_tool_in("sources")
+    def list_contexts() -> dict[str, Any]:
+        """List all saved contexts for the current user."""
+        from synsc.services.context_blob_service import (
+            list_contexts as _list,
+        )
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "list_contexts requires an authenticated user",
+            }
+        blobs = _list(user_id=user_id)
+        return {"success": True, "contexts": blobs, "total": len(blobs)}
+
+    @_tool_in("sources")
+    def delete_context(name: str) -> dict[str, Any]:
+        """Delete a saved context by name."""
+        from synsc.services.context_blob_service import (
+            delete_context as _delete,
+        )
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "unauthenticated",
+                "message": "delete_context requires an authenticated user",
+            }
+        deleted = _delete(user_id=user_id, name=name)
+        return {"success": True, "deleted": deleted}
+
+    @_tool_in("code")
+    def visualize_codebase(
+        repo_id: str,
+        max_dirs: int = 30,
+        max_symbols: int = 50,
+        max_edges: int = 100,
+    ) -> dict[str, Any]:
+        """Return a structural JSON graph of an indexed repository.
+
+        Surfaces shape in one response: file/language/symbol counts, directory
+        rollup, top exported symbols, and a directory-level module graph
+        derived from chunk_relationships. Lets agents orient in a new repo
+        without grepping the whole tree.
+
+        Args:
+            repo_id: Repository UUID.
+            max_dirs: Cap on directory entries (default 30).
+            max_symbols: Cap on top-symbol entries (default 50).
+            max_edges: Cap on module-graph edges (default 100).
+        """
+        from synsc.services.visualization_service import (
+            visualize_codebase as _viz,
+        )
+
+        start = time.time()
+        user_id = get_authenticated_user_id()
+        result = _viz(
+            repo_id=repo_id,
+            user_id=user_id,
+            max_dirs=max_dirs,
+            max_symbols=max_symbols,
+            max_edges=max_edges,
+        )
+        _log_activity(
+            user_id=user_id,
+            action="visualize_codebase",
+            resource_type="repo",
+            resource_id=repo_id,
+            duration_ms=int((time.time() - start) * 1000),
+            metadata={"source": "mcp"},
+        )
+        return result
+
+    @_tool_in("sources")
     def tree_source(
         source_id: str,
         action: str = "tree",
@@ -1382,6 +2396,424 @@ Provides deep context to AI agents through:
             metadata={"action": action, "source": "mcp"},
         )
         return result
+
+    # ==========================================================================
+    # THESIS CONNECTOR TOOLS
+    # ==========================================================================
+    #
+    # Thesis is the long-running research workflow system. Agents working in
+    # Thesis need: "what's already been tried", "what's been decided", "what
+    # tool contracts apply". The connector ports nodes / edges / artifacts /
+    # executions / tool contracts into Delphi, then offers graph-aware
+    # retrieval on top.
+
+    @_tool_in("thesis")
+    def thesis_register_workspace(
+        external_id: str,
+        name: str,
+        display_name: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        is_public: bool = False,
+    ) -> dict[str, Any]:
+        """Register (create or update) a Thesis workspace and link it to the user."""
+        from synsc.services.thesis_connector import ingest_workspace
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return ingest_workspace(
+            user_id=user_id, external_id=external_id, name=name,
+            display_name=display_name, description=description,
+            tags=tags, is_public=is_public,
+        )
+
+    @_tool_in("thesis")
+    def thesis_ingest_node(
+        workspace_id: str,
+        external_id: str,
+        node_type: str,
+        title: str | None = None,
+        summary: str | None = None,
+        content: str | None = None,
+        status: str | None = None,
+        outcome: str | None = None,
+        tags: list[str] | None = None,
+        decision_rationale: str | None = None,
+        commit_sha: str | None = None,
+        is_committed: bool = False,
+        created_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Index (or re-index) a Thesis node — claim/hypothesis/plan/decision/insight.
+
+        Embeds summary / content / rationale / outcome as separate chunks so
+        a search for "rationale for choosing X" finds the rationale chunk
+        instead of being diluted by the full node body.
+        """
+        from synsc.services.thesis_connector import ingest_node
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return ingest_node(
+            user_id=user_id, workspace_id=workspace_id,
+            external_id=external_id, node_type=node_type,
+            title=title, summary=summary, content=content,
+            status=status, outcome=outcome, tags=tags,
+            decision_rationale=decision_rationale,
+            commit_sha=commit_sha, is_committed=is_committed,
+            created_by=created_by,
+        )
+
+    @_tool_in("thesis")
+    def thesis_ingest_edge(
+        workspace_id: str,
+        source_external_id: str,
+        target_external_id: str,
+        edge_type: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Add a directed edge between two nodes in a workspace."""
+        from synsc.services.thesis_connector import ingest_edge
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return ingest_edge(
+            user_id=user_id, workspace_id=workspace_id,
+            source_external_id=source_external_id,
+            target_external_id=target_external_id,
+            edge_type=edge_type, metadata=metadata,
+        )
+
+    @_tool_in("thesis")
+    def thesis_ingest_artifact(
+        workspace_id: str,
+        kind: str,
+        node_external_id: str | None = None,
+        name: str | None = None,
+        preview: str | None = None,
+        uri: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        external_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Attach an artifact (table / plot / log / diff / metric / model)."""
+        from synsc.services.thesis_connector import ingest_artifact
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return ingest_artifact(
+            user_id=user_id, workspace_id=workspace_id,
+            node_external_id=node_external_id, kind=kind,
+            name=name, preview=preview, uri=uri,
+            metadata=metadata, external_id=external_id,
+        )
+
+    @_tool_in("thesis")
+    def thesis_ingest_execution(
+        workspace_id: str,
+        tool: str | None,
+        status: str | None,
+        node_external_id: str | None = None,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        duration_ms: int | None = None,
+        inputs: dict[str, Any] | None = None,
+        output_summary: str | None = None,
+        error: str | None = None,
+        external_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an execution / tool-call against a node."""
+        from synsc.services.thesis_connector import ingest_execution
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return ingest_execution(
+            user_id=user_id, workspace_id=workspace_id,
+            node_external_id=node_external_id, tool=tool, status=status,
+            started_at=started_at, ended_at=ended_at, duration_ms=duration_ms,
+            inputs=inputs, output_summary=output_summary, error=error,
+            external_id=external_id,
+        )
+
+    @_tool_in("thesis")
+    def thesis_ingest_tool_contract(
+        tool_name: str,
+        workspace_id: str | None = None,
+        display_name: str | None = None,
+        description: str | None = None,
+        when_to_use: str | None = None,
+        avoid_when: str | None = None,
+        signature: dict[str, Any] | None = None,
+        examples: list[dict[str, Any]] | None = None,
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Register a tool-contract document so agents can fetch it via
+        ``thesis_retrieve_tool_contract``.
+        """
+        from synsc.services.thesis_connector import ingest_tool_contract
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return ingest_tool_contract(
+            user_id=user_id, tool_name=tool_name, workspace_id=workspace_id,
+            display_name=display_name, description=description,
+            when_to_use=when_to_use, avoid_when=avoid_when,
+            signature=signature, examples=examples, tags=tags,
+        )
+
+    @_tool_in("thesis")
+    def build_thesis_context(
+        question: str,
+        node_id: str | None = None,
+        workspace_ids: list[str] | None = None,
+        token_budget: int = 4000,
+    ) -> dict[str, Any]:
+        """Build a Thesis-aware context pack for a research question.
+
+        Returns matched nodes (vector + BM25 + artifact-aware ranking),
+        a 2-hop subgraph around the top match, relevant artifacts (tables,
+        plots, logs), tool contracts that apply, "what's been tried"
+        (matched nodes + their executions), and "what shouldn't be
+        repeated" (failed-outcome nodes).
+
+        Args:
+            question: The agent's question.
+            node_id: Optional anchor node to start the subgraph walk from.
+            workspace_ids: Optional workspace scope.
+            token_budget: Approximate target tokens for the pack body.
+        """
+        from synsc.services.thesis_connector import build_thesis_context as _bld
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return _bld(
+            user_id=user_id, question=question, node_id=node_id,
+            workspace_ids=workspace_ids, token_budget=token_budget,
+        )
+
+    @_tool_in("thesis")
+    def summarize_relevant_subgraph(
+        question: str,
+        root_node_id: str | None = None,
+        max_depth: int = 2,
+    ) -> dict[str, Any]:
+        """Return a compact subgraph summary for the matched region.
+
+        Useful before drilling in — agent gets shape + size + edge types
+        without pulling every node body.
+        """
+        from synsc.services.thesis_connector import summarize_relevant_subgraph as _sub
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return _sub(
+            user_id=user_id, question=question,
+            root_node_id=root_node_id, max_depth=max_depth,
+        )
+
+    @_tool_in("thesis")
+    def find_related_nodes(
+        node_id: str | None = None,
+        question: str | None = None,
+        max_depth: int = 2,
+        edge_types: list[str] | None = None,
+        top_k: int = 25,
+    ) -> dict[str, Any]:
+        """Walk the Thesis graph from an anchor, BFS up to ``max_depth`` hops.
+
+        Pass either ``node_id`` (an explicit anchor) or ``question`` (we
+        anchor on the top semantic match). One must be supplied.
+        """
+        from synsc.services.thesis_connector import find_related_nodes as _rel
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        if not node_id and not question:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": "Pass either node_id= or question=",
+            }
+        nodes = _rel(
+            user_id=user_id, node_id=node_id, question=question,
+            max_depth=max_depth, edge_types=edge_types, top_k=top_k,
+        )
+        return {
+            "success": True, "node_id": node_id, "question": question,
+            "related": nodes,
+        }
+
+    @_tool_in("thesis")
+    def find_relevant_artifacts(
+        question: str,
+        workspace_ids: list[str] | None = None,
+        kinds: list[str] | None = None,
+        top_k: int = 10,
+    ) -> dict[str, Any]:
+        """Find Thesis artifacts (tables / plots / logs) relevant to a question.
+
+        Args:
+            question: Search query.
+            workspace_ids: Optional workspace scope.
+            kinds: Optional artifact-kind filter (e.g. ['table','metric']).
+            top_k: Number of artifacts to return.
+        """
+        from synsc.services.thesis_connector import find_relevant_artifacts as _art
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        artifacts = _art(
+            user_id=user_id, query=question,
+            workspace_ids=workspace_ids, kinds=kinds, top_k=top_k,
+        )
+        return {"success": True, "question": question, "artifacts": artifacts}
+
+    @_tool_in("thesis")
+    def thesis_retrieve_tool_contract(
+        task: str,
+        top_k: int = 5,
+    ) -> dict[str, Any]:
+        """Find tool-contract documents applicable to a task description.
+
+        Returns signature + when_to_use + examples for each matched contract
+        so the agent can call the tool correctly without separate lookup.
+        """
+        from synsc.services.thesis_connector import retrieve_tool_contract
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        contracts = retrieve_tool_contract(
+            user_id=user_id, task=task, top_k=top_k,
+        )
+        return {"success": True, "task": task, "contracts": contracts}
+
+    @_tool_in("thesis")
+    def thesis_what_was_tried(
+        question: str,
+        workspace_ids: list[str] | None = None,
+        top_k: int = 10,
+    ) -> dict[str, Any]:
+        """"What has already been tried for this question?"
+
+        Returns matched nodes plus their executions and outcomes — full
+        "we tried Y, status was Z, here's what happened" picture.
+        """
+        from synsc.services.thesis_connector import find_what_was_tried
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        result = find_what_was_tried(
+            user_id=user_id, question=question,
+            workspace_ids=workspace_ids, top_k=top_k,
+        )
+        return {"success": True, **result}
+
+    @_tool_in("thesis")
+    def thesis_what_not_to_repeat(
+        question: str,
+        workspace_ids: list[str] | None = None,
+        top_k: int = 10,
+    ) -> dict[str, Any]:
+        """"What should I not repeat?" — failed-outcome nodes for the question."""
+        from synsc.services.thesis_connector import find_what_not_to_repeat
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        result = find_what_not_to_repeat(
+            user_id=user_id, question=question,
+            workspace_ids=workspace_ids, top_k=top_k,
+        )
+        return {"success": True, **result}
+
+    @_tool_in("thesis")
+    def thesis_active_work_context(
+        workspace_ids: list[str] | None = None,
+        top_k: int = 10,
+    ) -> dict[str, Any]:
+        """Recent in-progress nodes + open executions — "what was I doing?"."""
+        from synsc.services.thesis_connector import get_active_work_context
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        return get_active_work_context(
+            user_id=user_id, workspace_ids=workspace_ids, top_k=top_k,
+        )
+
+    @_tool_in("thesis")
+    def thesis_find_decisions(
+        question: str,
+        workspace_ids: list[str] | None = None,
+        top_k: int = 5,
+    ) -> dict[str, Any]:
+        """Surface committed decisions related to a question (decision-memory ranking).
+
+        Only nodes with ``node_type='decision'`` AND ``is_committed=TRUE``
+        — locked-in rationale that subsequent work should respect.
+        """
+        from synsc.services.thesis_connector import find_decisions
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        decisions = find_decisions(
+            user_id=user_id, question=question,
+            workspace_ids=workspace_ids, top_k=top_k,
+        )
+        return {"success": True, "question": question, "decisions": decisions}
+
+    @_tool_in("thesis")
+    def thesis_search_nodes(
+        query: str,
+        workspace_ids: list[str] | None = None,
+        node_types: list[str] | None = None,
+        only_committed: bool = False,
+        top_k: int = 10,
+    ) -> dict[str, Any]:
+        """Hybrid search over Thesis nodes (vector + BM25 + artifact-aware)."""
+        from synsc.services.thesis_connector import search_thesis_nodes
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        nodes = search_thesis_nodes(
+            query=query, user_id=user_id,
+            workspace_ids=workspace_ids, node_types=node_types,
+            only_committed=only_committed, top_k=top_k,
+        )
+        return {"success": True, "query": query, "nodes": nodes}
+
+    @_tool_in("code")
+    def classify_failure(
+        description: str,
+        query: str | None = None,
+        repo_id: str | None = None,
+    ) -> dict[str, Any]:
+        """"Delphi failed because" classifier.
+
+        Pass a short description of what went wrong; we tag it with a
+        stable failure-mode code and write to the activity log so we can
+        aggregate over time and fix the right thing.
+        """
+        from synsc.services.observability import classify_failure as _cls
+
+        user_id = get_authenticated_user_id()
+        result = _cls(
+            description=description, user_id=user_id,
+            query=query, repo_id=repo_id,
+        )
+        return {"success": True, **result}
 
     return server
 

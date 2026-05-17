@@ -40,7 +40,8 @@ export async function getAccessToken(): Promise<string | null> {
 /**
  * Legacy setAccessToken — no-op since cookies are set by the backend.
  */
-export function setAccessToken(_token: string): void {
+export function setAccessToken(token: string): void {
+  void token;
   // No-op: session is managed via httpOnly cookie set by the backend.
 }
 

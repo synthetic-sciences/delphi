@@ -26,14 +26,27 @@ class CodeChunk:
 class CodeChunker:
     """Chunk code files for semantic search."""
 
-    def __init__(self):
-        """Initialize the chunker."""
+    def __init__(self, quality_mode: str | None = None):
+        """Initialize the chunker.
+
+        Args:
+            quality_mode: Override quality mode for this chunker. When set to
+                'agent', the minimum chunk threshold drops so that small but
+                meaningful files (manifests, dotfiles, .env.example, tiny
+                Procfiles) are not silently dropped.
+        """
         config = get_config()
         self.max_tokens = config.chunking.max_tokens
         self.overlap_tokens = config.chunking.overlap_tokens
-        self.min_chunk_tokens = config.chunking.min_chunk_tokens
         self.respect_boundaries = config.chunking.respect_boundaries
-        
+
+        effective_mode = quality_mode or config.quality.quality_mode
+        self.quality_mode = effective_mode
+        if effective_mode == "agent":
+            self.min_chunk_tokens = config.chunking.min_chunk_tokens_agent
+        else:
+            self.min_chunk_tokens = config.chunking.min_chunk_tokens
+
         # Use cl100k_base tokenizer (GPT-4 tokenizer)
         self._tokenizer = tiktoken.get_encoding("cl100k_base")
 

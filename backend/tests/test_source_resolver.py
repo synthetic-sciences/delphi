@@ -120,7 +120,7 @@ def test_resolve_docs_url(monkeypatch):
     monkeypatch.setattr(
         source_service,
         "_lookup_docs_by_url",
-        lambda url: "docs-uuid" if "example.com" in url else None,
+        lambda url, version=None: "docs-uuid" if "example.com" in url else None,
     )
     sid, stype = source_service.resolve_source_id(
         "https://docs.example.com", user_id="u1"
