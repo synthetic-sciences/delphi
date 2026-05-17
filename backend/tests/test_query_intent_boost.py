@@ -24,24 +24,21 @@ def test_identifier_queries_detected():
         assert source_service.classify_query_intent(q) == "identifier", q
 
 
-def test_conceptual_phrases_override_identifier_tokens():
-    """A query with both an identifier-shaped token and a how-to phrase is conceptual."""
-    for q in (
-        "FastAPI OAuth2 password flow with httpx client to call token endpoint",
-        "Use FastAPI middleware to handle CORS",
-        "Configure FastAPI with HTTPS",
-    ):
-        assert source_service.classify_query_intent(q) == "conceptual", q
+def test_identifier_token_dominates_conceptual_phrase():
+    """When an identifier is named explicitly, treat as identifier intent.
 
-
-def test_gerund_opener_is_conceptual():
-    """``Mounting``, ``Streaming``, ``Configuring`` — how-to-do-X queries."""
+    Earlier iterations tried to force "with X to Y" phrasing to conceptual
+    even when an identifier was present. Bench results showed that hurt
+    more than helped — when the user names the exact class they want
+    (``StreamingResponse``, ``OAuth2PasswordBearer``), code is the right
+    answer, not the surrounding tutorial.
+    """
     for q in (
+        "Stream a response body with FastAPI StreamingResponse",
         "Mounting a httpx-based test client to a FastAPI app",
-        "Streaming a response with StreamingResponse",
-        "Configuring CORS middleware",
+        "FastAPI OAuth2 password flow with httpx",
     ):
-        assert source_service.classify_query_intent(q) == "conceptual", q
+        assert source_service.classify_query_intent(q) == "identifier", q
 
 
 def test_neutral_queries():
