@@ -231,26 +231,24 @@ def _has_conceptual_phrase(query: str) -> bool:
 def classify_query_intent(query: str) -> str:
     """Return ``'conceptual'``, ``'identifier'``, or ``'neutral'``.
 
-    Heuristic:
-      - Starts with a wh- / how / explain word → conceptual.
-      - Contains a conceptual phrase like " with X to Y" → conceptual,
-        even if an identifier-shaped token is also present.
-      - Contains a dotted identifier, snake_case_with_underscores, or
-        a multi-char CamelCase token → identifier.
-      - Otherwise neutral.
+    Heuristic — runs through these checks in order:
+
+      1. Wh-/how-/explain starter → conceptual.
+      2. Dotted identifier, snake_case, or multi-char CamelCase token →
+         identifier.
+      3. Otherwise neutral.
+
+    Earlier iterations tried to detect "with X to Y" / gerund openers as
+    conceptual even with identifier tokens present, but that hurt as much
+    as it helped on bench: queries like "Stream a response body with
+    FastAPI StreamingResponse" want the StreamingResponse class, not the
+    tutorial. Sticking to the simpler classifier wins overall.
     """
     if not query:
         return "neutral"
     q = query.strip().lower()
     first = (q.split() or [""])[0].rstrip(",?:")
     if first in _CONCEPTUAL_STARTERS:
-        return "conceptual"
-    if _has_conceptual_phrase(query):
-        return "conceptual"
-    # Gerund opener — "Mounting a test client to a FastAPI app",
-    # "Streaming a response", "Configuring CORS" — these are all
-    # how-to-do-X questions even when followed by identifiers.
-    if len(first) > 4 and first.endswith("ing"):
         return "conceptual"
     # Dotted call (foo.Bar) is a strong identifier signal.
     if _CODE_IDENTIFIER_RE.search(query):
