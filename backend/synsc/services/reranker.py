@@ -37,18 +37,56 @@ class Reranker:
     def __init__(self, model_name: str | None = None):
         """Initialize the reranker.
 
+        Tries the configured code-aware model first (BAAI/bge-reranker-base
+        by default — works well on code+text pairs), then falls back to the
+        ms-marco model. The fallback prevents an offline/CDN-blocked
+        environment from disabling rerank entirely.
+
         Args:
             model_name: HuggingFace cross-encoder model name.
-                        Defaults to config (RERANKER_MODEL env var) or ms-marco-MiniLM-L-6-v2.
+                        Defaults to config (RERANKER_MODEL env var) or
+                        the code-aware bge-reranker-base.
         """
         from sentence_transformers import CrossEncoder
 
         config = get_config()
-        self.model_name = model_name or config.search.reranker_model
 
-        logger.info("Loading cross-encoder reranker: %s", self.model_name)
-        self.model = CrossEncoder(self.model_name)
-        logger.info("Reranker ready: %s", self.model_name)
+        # Build the candidate list: explicit override → code-aware →
+        # plain text fallback. De-dup while preserving order.
+        candidates: list[str] = []
+        if model_name:
+            candidates.append(model_name)
+        else:
+            if config.search.use_code_reranker:
+                candidates.append(config.search.code_reranker_model)
+            candidates.append(config.search.reranker_model)
+            candidates.append(DEFAULT_RERANKER_MODEL)
+
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for c in candidates:
+            if c and c not in seen:
+                ordered.append(c)
+                seen.add(c)
+
+        last_err: Exception | None = None
+        for cand in ordered:
+            try:
+                logger.info("Loading cross-encoder reranker: %s", cand)
+                self.model = CrossEncoder(cand)
+                self.model_name = cand
+                logger.info("Reranker ready: %s", cand)
+                break
+            except Exception as e:
+                last_err = e
+                logger.warning(
+                    "Reranker load failed for %s: %s — trying next.", cand, e
+                )
+        else:
+            # Loop completed without break: every candidate failed.
+            raise RuntimeError(
+                f"All reranker models failed to load: last error {last_err}"
+            )
 
     def rerank(
         self,

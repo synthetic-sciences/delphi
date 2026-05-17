@@ -773,74 +773,52 @@ class PaperService:
         self,
         query: str,
         top_k: int = 10,
+        rerank: bool = True,
     ) -> dict[str, Any]:
-        """Search papers using pgvector semantic similarity."""
+        """Search papers using hybrid retrieval + cross-encoder reranking.
+
+        Pipeline:
+          1. Vector + BM25 fusion (hybrid_search_papers)
+          2. Section-aware boost (Methods/Results > Related Work)
+          3. Citation-aware boost (cited papers rank slightly higher)
+          4. Cross-encoder rerank of the top window
+
+        Args:
+            query: Natural-language search query.
+            top_k: Number of results to return.
+            rerank: When True (default), apply the cross-encoder. Set to
+                False for raw blended scores (faster, lower quality).
+        """
         try:
             import time as _time
-            start = _time.time()
 
-            # Generate query embedding
+            from synsc.services.paper_retrieval import (
+                hybrid_search_papers,
+                rerank_papers,
+            )
+
+            start = _time.time()
             embedding_gen = self._get_embedding_generator()
             query_embedding = embedding_gen.generate_single(query)
 
-            # Format as pgvector string
-            embedding_list = (
-                query_embedding.tolist()
-                if hasattr(query_embedding, "tolist")
-                else list(query_embedding)
+            results = hybrid_search_papers(
+                user_id=self.user_id,
+                query=query,
+                query_embedding=query_embedding,
+                top_k=top_k * 3,  # over-fetch for rerank
             )
-            embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
-
-            with get_session() as session:
-                # Use raw SQL with pgvector <=> operator for cosine distance
-                results = session.execute(
-                    text("""
-                        SELECT
-                            pc.chunk_id,
-                            pc.paper_id,
-                            p.title AS paper_title,
-                            p.authors AS paper_authors,
-                            pc.content,
-                            pc.section_title,
-                            pc.chunk_type,
-                            pc.page_number,
-                            1 - (pce.embedding <=> CAST(:embedding AS vector)) AS similarity
-                        FROM paper_chunk_embeddings pce
-                        JOIN paper_chunks pc ON pc.chunk_id = pce.chunk_id
-                        JOIN papers p ON p.paper_id = pc.paper_id
-                        JOIN user_papers up ON up.paper_id = p.paper_id
-                        WHERE up.user_id = :user_id
-                        ORDER BY pce.embedding <=> CAST(:embedding AS vector)
-                        LIMIT :top_k
-                    """),
-                    {
-                        "embedding": embedding_str,
-                        "user_id": self.user_id,
-                        "top_k": top_k,
-                    },
-                ).fetchall()
+            if rerank:
+                results = rerank_papers(query, results)
+            results = results[:top_k]
 
             elapsed = (_time.time() - start) * 1000
-
             return {
                 "success": True,
                 "query": query,
-                "results": [
-                    {
-                        "chunk_id": r.chunk_id,
-                        "paper_id": r.paper_id,
-                        "paper_title": r.paper_title,
-                        "paper_authors": r.paper_authors,
-                        "content": r.content,
-                        "section_title": r.section_title,
-                        "chunk_type": r.chunk_type,
-                        "page_number": r.page_number,
-                        "similarity": round(r.similarity, 4) if r.similarity else 0,
-                    }
-                    for r in results
-                ],
+                "results": results,
                 "count": len(results),
                 "search_time_ms": round(elapsed, 1),
+                "reranked": bool(rerank),
             }
         except Exception as e:
             logger.exception("Paper search failed")

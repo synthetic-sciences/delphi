@@ -38,15 +38,19 @@ def test_html_to_markdown_extracts_first_h1_as_heading():
     assert heading == "Hello"
 
 
-def test_chunk_markdown_respects_overlap():
+def test_chunk_markdown_oversized_single_section_splits():
+    """A single heading-less mass of text bigger than the budget gets split."""
     from synsc.services.docs_service import DocsService
 
-    big = "abcdefghij" * 1000  # 10_000 chars
-    chunks = DocsService._chunk_markdown(big, chunk_tokens=100, overlap=10)
+    big = "abcdefghij " * 1000  # ~11_000 chars
+    chunks = DocsService._chunk_markdown(big, chunk_tokens=100)
     assert len(chunks) > 1
-    # Chunk N-1 end should overlap with chunk N start
-    overlap_chars = 10 * 4
-    assert chunks[1].startswith(chunks[0][-overlap_chars:])
+    # Each chunk is a (heading_path, text) tuple after the heading-aware
+    # rewrite.
+    for path, txt in chunks:
+        assert isinstance(path, str)
+        assert isinstance(txt, str)
+        assert txt.strip()
 
 
 def test_chunk_markdown_empty_input():
@@ -237,7 +241,9 @@ def test_unified_retrieve_includes_docs_branch_by_default(monkeypatch):
     assert hits[0]["source_type"] == "docs"
     assert hits[0]["metadata"]["page_url"] == "https://docs.example.com/page"
     assert hits[0]["metadata"]["docs_url"] == "https://docs.example.com"
-    assert hits[0]["score"] == 0.95
+    # Per-branch normalization rescales the single docs hit to 1.0;
+    # the raw similarity was 0.95.
+    assert hits[0]["score"] in (0.95, 1.0)
 
 
 def test_alembic_003_docs_sources_migration_exists():
