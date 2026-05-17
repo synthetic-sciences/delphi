@@ -163,6 +163,20 @@ def unified_retrieve(
     # low-authority ones at the same retrieval score. Boost is small (max
     # +0.1) so it never overwhelms semantic relevance.
     hits = _attach_trust_scores(hits)
+
+    # Per-branch normalization: each branch (code / paper / dataset / docs)
+    # has its own score distribution. Without normalization, the highest-
+    # numerical-score branch dominates the merged ranking, which is why
+    # conceptual queries that should surface docs were losing to mid-relevance
+    # code chunks. Min-max normalize within each branch so a 'top-5' hit in
+    # docs ranks comparably to a 'top-5' hit in code.
+    _normalize_per_branch(hits)
+
+    # Apply cross-source cross-encoder rerank when the reranker is enabled.
+    # Falls back silently to the un-reranked order on failure so a missing
+    # model never breaks search.
+    hits = _maybe_cross_source_rerank(query, hits)
+
     hits.sort(
         key=lambda h: (
             h["score"] + 0.1 * float(h.get("trust_score") or 0.0),
@@ -171,6 +185,69 @@ def unified_retrieve(
         reverse=True,
     )
     return hits[:k]
+
+
+def _normalize_per_branch(hits: list[dict]) -> None:
+    """In-place min-max normalize ``score`` within each source_type branch.
+
+    Cosine-similarity scales differ across embedding models (the docs branch
+    uses the paper embedder, code uses the code embedder, etc.). Without
+    normalization, sort-by-raw-score systematically biases toward the branch
+    with the larger numeric range.
+    """
+    from collections import defaultdict
+
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for h in hits:
+        by_type[h.get("source_type", "_")].append(h)
+    for stype, group in by_type.items():
+        scores = [float(h.get("score") or 0.0) for h in group]
+        if not scores:
+            continue
+        lo, hi = min(scores), max(scores)
+        span = hi - lo
+        if span <= 0:
+            for h in group:
+                h["score"] = 1.0 if hi > 0 else 0.0
+            continue
+        for h in group:
+            h["score"] = (float(h["score"]) - lo) / span
+
+
+def _maybe_cross_source_rerank(query: str, hits: list[dict]) -> list[dict]:
+    """Apply cross-encoder rerank to the merged result set when enabled.
+
+    Returns the original list on any failure so retrieval stays resilient.
+    Updates each hit's ``score`` to a blend of the normalized retrieval
+    score and the cross-encoder logit, using the same blend_alpha used by
+    the in-branch reranker for consistency.
+    """
+    try:
+        from synsc.config import get_config
+
+        cfg = get_config()
+        if not cfg.search.enable_reranker:
+            return hits
+        if len(hits) <= 2:
+            return hits
+        from synsc.services.reranker import get_reranker
+
+        reranker = get_reranker()
+        if reranker is None:
+            return hits
+        # Rerank the top 50 — anything past rank 50 is unlikely to surface.
+        head = hits[:50]
+        tail = hits[50:]
+        reranked = reranker.rerank(
+            query=query,
+            results=head,
+            content_key="text",
+            score_key="score",
+        )
+        return reranked + tail
+    except Exception as exc:
+        logger.debug("unified_retrieve: cross-source rerank failed", error=str(exc))
+        return hits
 
 
 def _attach_trust_scores(hits: list[dict]) -> list[dict]:
@@ -414,13 +491,64 @@ def index_source(
             include_docs=opts.get("include_docs"),
             include_examples=opts.get("include_examples"),
         )
-        return _normalize_index_response(
+
+        envelope = _normalize_index_response(
             source_type="repo",
             res=res,
             id_key="repo_id",
             external_ref=url,
             default_status="pending",
         )
+
+        # Optional: discover + index the project's documentation site.
+        # Concept-style queries ("how does X work") win bigger on docs than
+        # raw source. Off by default to preserve current behavior; opt-in
+        # via options.auto_index_docs.
+        if envelope.get("status") in ("indexed", "updated", "already_indexed") and \
+           bool(opts.get("auto_index_docs", False)):
+            try:
+                from synsc.services.docs_autodiscover import discover_docs_url
+
+                docs_url = discover_docs_url(
+                    url, branch=opts.get("branch") or "main"
+                )
+                if docs_url:
+                    logger.info(
+                        "auto_index_docs: discovered docs site",
+                        repo=url, docs_url=docs_url,
+                    )
+                    try:
+                        # Cap to a reasonable crawl size so we don't trash
+                        # the budget on a docs site with 10k pages.
+                        docs_res = index_source(
+                            source_type="docs",
+                            url=docs_url,
+                            display_name=f"{display_name or 'docs'}-docs",
+                            options={
+                                "max_pages": int(opts.get("docs_max_pages", 150)),
+                                "req_delay_s": float(opts.get("docs_req_delay_s", 0.3)),
+                            },
+                            user_id=user_id,
+                        )
+                        envelope["docs_index"] = {
+                            "url": docs_url,
+                            "source_id": docs_res.get("source_id"),
+                            "status": docs_res.get("status"),
+                        }
+                    except Exception as exc:
+                        logger.warning(
+                            "auto_index_docs: docs indexing failed",
+                            docs_url=docs_url, error=str(exc),
+                        )
+                        envelope["docs_index"] = {
+                            "url": docs_url,
+                            "status": "error",
+                            "error": str(exc),
+                        }
+            except Exception as exc:
+                logger.warning("auto_index_docs: discovery failed", error=str(exc))
+
+        return envelope
 
     if source_type == "paper":
         if not user_id:
