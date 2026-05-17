@@ -172,6 +172,11 @@ def unified_retrieve(
     # docs ranks comparably to a 'top-5' hit in code.
     _normalize_per_branch(hits)
 
+    # Query-type-aware boost: a conceptual question ("how does X work")
+    # should surface docs / paper above code. An identifier-shaped query
+    # ("FastAPI Depends signature") should keep code-bias.
+    _apply_query_type_boost(query, hits)
+
     # Apply cross-source cross-encoder rerank when the reranker is enabled.
     # Falls back silently to the un-reranked order on failure so a missing
     # model never breaks search.
@@ -185,6 +190,98 @@ def unified_retrieve(
         reverse=True,
     )
     return hits[:k]
+
+
+_CONCEPTUAL_STARTERS = {
+    "how", "why", "what", "when", "where", "explain", "describe",
+    "show", "tell", "compare", "difference",
+}
+# Conceptual phrases that flip the intent even when an identifier shows
+# up first. ``FastAPI OAuth2 ... with httpx to call token endpoint`` looks
+# identifier-heavy by tokens alone but is a how-to-integrate question.
+_CONCEPTUAL_PHRASES = (
+    " with ", " using ", " to call ", " to use ", " to implement ",
+    " for testing ", " to mount ", " to integrate ", " to handle ",
+    " to configure ", " to stream ", " to define ", " to add ",
+)
+_CODE_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_]")
+
+
+def _has_identifier_token(query: str) -> bool:
+    """True iff any token has ≥2 uppercase letters AND length ≥ 5.
+
+    Catches ``FastAPI``, ``OAuth2PasswordBearer``, ``AsyncClient``, ``BaseModel``
+    while ignoring three-letter acronyms like ``URL`` or ``HTTP`` that show
+    up frequently in conceptual queries.
+    """
+    for tok in re.split(r"[\s,?:.]+", query):
+        if len(tok) < 5:
+            continue
+        upper = sum(1 for c in tok if c.isupper())
+        if upper >= 2 and any(c.islower() for c in tok):
+            return True
+    return False
+
+
+def _has_conceptual_phrase(query: str) -> bool:
+    q = " " + query.lower() + " "
+    return any(p in q for p in _CONCEPTUAL_PHRASES)
+
+
+def classify_query_intent(query: str) -> str:
+    """Return ``'conceptual'``, ``'identifier'``, or ``'neutral'``.
+
+    Heuristic:
+      - Starts with a wh- / how / explain word → conceptual.
+      - Contains a conceptual phrase like " with X to Y" → conceptual,
+        even if an identifier-shaped token is also present.
+      - Contains a dotted identifier, snake_case_with_underscores, or
+        a multi-char CamelCase token → identifier.
+      - Otherwise neutral.
+    """
+    if not query:
+        return "neutral"
+    q = query.strip().lower()
+    first = (q.split() or [""])[0].rstrip(",?:")
+    if first in _CONCEPTUAL_STARTERS:
+        return "conceptual"
+    if _has_conceptual_phrase(query):
+        return "conceptual"
+    # Gerund opener — "Mounting a test client to a FastAPI app",
+    # "Streaming a response", "Configuring CORS" — these are all
+    # how-to-do-X questions even when followed by identifiers.
+    if len(first) > 4 and first.endswith("ing"):
+        return "conceptual"
+    # Dotted call (foo.Bar) is a strong identifier signal.
+    if _CODE_IDENTIFIER_RE.search(query):
+        return "identifier"
+    # snake_case with underscores → identifier.
+    if any(tok.count("_") >= 1 and tok.islower() for tok in query.split()):
+        return "identifier"
+    # CamelCase token like ``OAuth2PasswordBearer`` → identifier.
+    if _has_identifier_token(query):
+        return "identifier"
+    return "neutral"
+
+
+def _apply_query_type_boost(query: str, hits: list[dict]) -> None:
+    """In-place: boost docs (and paper) results when the query is conceptual.
+
+    Conceptual: +0.15 to docs / paper. Identifier: +0.10 to code. Neutral:
+    no change. Boost is small enough that a clearly-better other-branch
+    result still wins, but tips ties toward the more user-helpful surface.
+    """
+    intent = classify_query_intent(query)
+    if intent == "neutral":
+        return
+    if intent == "conceptual":
+        for h in hits:
+            if h.get("source_type") in ("docs", "paper"):
+                h["score"] = float(h.get("score") or 0.0) + 0.15
+    elif intent == "identifier":
+        for h in hits:
+            if h.get("source_type") == "repo":
+                h["score"] = float(h.get("score") or 0.0) + 0.10
 
 
 def _normalize_per_branch(hits: list[dict]) -> None:
