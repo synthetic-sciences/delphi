@@ -99,3 +99,6 @@ docs/*
 !docs/gpu.md
 !frontend/src/app/docs/
 CLAUDE.md
+
+# ─── Local-only scratch (bench results, work notes, etc.) ────
+ignore/

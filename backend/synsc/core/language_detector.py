@@ -123,19 +123,89 @@ EXTENSION_MAP: dict[str, str] = {
     ".vue": "vue",
     ".svelte": "svelte",
     ".astro": "astro",
+
+    # Infrastructure / IaC
+    ".tf": "terraform",
+    ".tfvars": "terraform",
+    ".hcl": "hcl",
+    ".bicep": "bicep",
+    ".bzl": "starlark",
+    ".dockerfile": "dockerfile",
+    ".mk": "makefile",
+    ".rst": "restructuredtext",
+}
+
+# Basename → language for files that have no extension (Dockerfile, Makefile, etc.)
+BASENAME_MAP: dict[str, str] = {
+    "Dockerfile": "dockerfile",
+    "Containerfile": "dockerfile",
+    "Makefile": "makefile",
+    "GNUmakefile": "makefile",
+    "Procfile": "yaml",
+    "Vagrantfile": "ruby",
+    "Berksfile": "ruby",
+    "Gemfile": "ruby",
+    "Rakefile": "ruby",
+    "Justfile": "makefile",
+    "justfile": "makefile",
+    "BUILD": "starlark",
+    "BUILD.bazel": "starlark",
+    "WORKSPACE": "starlark",
+    "CMakeLists.txt": "cmake",
+    ".env.example": "shell",
+    ".env.sample": "shell",
+    ".env.template": "shell",
+    ".envrc": "shell",
+    ".gitignore": "gitignore",
+    ".dockerignore": "gitignore",
+    ".gitattributes": "gitattributes",
+    ".editorconfig": "editorconfig",
+    ".prettierrc": "json",
+    ".eslintrc": "json",
+    ".npmrc": "ini",
+    ".yarnrc": "ini",
+    ".nvmrc": "text",
+    ".python-version": "text",
+    ".node-version": "text",
+    ".tool-versions": "text",
+    ".ruby-version": "text",
+    ".rustup-toolchain": "text",
+    "go.mod": "go-mod",
+    "go.sum": "go-sum",
+    "go.work": "go-mod",
+    "rust-toolchain": "text",
+    "OWNERS": "text",
+    "CODEOWNERS": "text",
+    "MAINTAINERS": "text",
+    "README": "markdown",
+    "LICENSE": "text",
+    "NOTICE": "text",
+    "CHANGELOG": "markdown",
+    "AUTHORS": "text",
 }
 
 
 def detect_language(file_path: str | Path) -> str | None:
-    """Detect the programming language from file extension.
-    
+    """Detect the programming language from file extension or basename.
+
     Args:
         file_path: Path to the file
-        
+
     Returns:
         Language name or None if unknown
     """
     path = Path(file_path)
+
+    # Try exact basename first — handles Dockerfile, Makefile, go.mod, etc.
+    basename = path.name
+    if basename in BASENAME_MAP:
+        return BASENAME_MAP[basename]
+    # Variants like "Dockerfile.dev", "Makefile.alpine"
+    if basename.startswith("Dockerfile."):
+        return "dockerfile"
+    if basename.startswith("Makefile.") or basename.startswith("makefile."):
+        return "makefile"
+
     suffix = path.suffix.lower()
     return EXTENSION_MAP.get(suffix)
 

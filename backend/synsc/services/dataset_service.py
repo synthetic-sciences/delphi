@@ -491,25 +491,40 @@ class DatasetService:
                     },
                 ).fetchall()
 
+            results_list = [
+                {
+                    "chunk_id": r.chunk_id,
+                    "dataset_id": r.dataset_id,
+                    "dataset_name": r.dataset_name,
+                    "hf_id": r.hf_id,
+                    "content": r.content,
+                    "section_title": r.section_title,
+                    "chunk_type": r.chunk_type,
+                    "similarity": round(r.similarity, 4) if r.similarity else 0,
+                }
+                for r in results
+            ]
+
+            # Cross-encoder rerank — same path as code/paper search. Best-effort.
+            if len(results_list) > 1:
+                try:
+                    from synsc.services.reranker import get_reranker
+                    reranker = get_reranker()
+                    results_list = reranker.rerank(
+                        query=query, results=results_list,
+                        content_key="content", score_key="similarity",
+                        blend_alpha=0.4,
+                    )
+                except Exception as e:
+                    logger.warning("dataset rerank failed", error=str(e))
+
             elapsed = (time.time() - start) * 1000
 
             return {
                 "success": True,
                 "query": query,
-                "results": [
-                    {
-                        "chunk_id": r.chunk_id,
-                        "dataset_id": r.dataset_id,
-                        "dataset_name": r.dataset_name,
-                        "hf_id": r.hf_id,
-                        "content": r.content,
-                        "section_title": r.section_title,
-                        "chunk_type": r.chunk_type,
-                        "similarity": round(r.similarity, 4) if r.similarity else 0,
-                    }
-                    for r in results
-                ],
-                "count": len(results),
+                "results": results_list[:top_k],
+                "count": min(len(results_list), top_k),
                 "search_time_ms": round(elapsed, 1),
             }
         except Exception as e:

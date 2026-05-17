@@ -4,6 +4,7 @@ Local-only deployment - requires PostgreSQL + pgvector for storage.
 Supports code repository, research paper, and dataset indexing.
 """
 
+import contextlib
 import os
 from pathlib import Path
 from typing import Literal
@@ -56,9 +57,43 @@ class ChunkConfig(BaseModel):
     max_tokens: int = Field(default=2048, description="Max tokens per chunk")
     overlap_tokens: int = Field(default=100, description="Token overlap between chunks")
     min_chunk_tokens: int = Field(default=50, description="Minimum tokens for a chunk")
+    # In agent quality mode small files (manifests, dotfiles, .env.example, etc.)
+    # are still useful context, so we lower the floor to keep them.
+    min_chunk_tokens_agent: int = Field(
+        default=10,
+        description="Minimum tokens for a chunk when quality_mode=agent",
+    )
     respect_boundaries: bool = Field(
         default=True, description="Respect function/class boundaries when chunking"
     )
+
+
+class QualityConfig(BaseModel):
+    """Quality / retrieval mode for indexing and search.
+
+    - 'fast': legacy behavior — skip tests/docs/examples, turbo chunking, no rerank.
+    - 'balanced': skip nothing structural, AST chunking on, no rerank.
+    - 'agent': default for MCP. Index everything useful (tests, docs, configs,
+      manifests, dotfiles), AST chunking on, hybrid retrieval, rerank top 50,
+      lower min_chunk_tokens, context-pack ready.
+    """
+
+    quality_mode: Literal["fast", "balanced", "agent"] = Field(
+        default="agent",
+        description="Quality preset: 'fast', 'balanced', or 'agent'.",
+    )
+    # When quality_mode=agent, MCP callers get the same agent-quality behavior
+    # by default unless they pass quality_mode='fast' explicitly.
+    mcp_default_mode: Literal["fast", "balanced", "agent"] = Field(
+        default="agent",
+        description="Default quality_mode for MCP-initiated indexing requests.",
+    )
+    # Per-mode toggles (pulled by indexing/search services).
+    include_tests_in_agent: bool = Field(default=True)
+    include_docs_in_agent: bool = Field(default=True)
+    include_examples_in_agent: bool = Field(default=True)
+    include_configs_in_agent: bool = Field(default=True)
+    include_manifests_in_agent: bool = Field(default=True)
 
 
 class StorageConfig(BaseModel):
@@ -156,6 +191,41 @@ class GitConfig(BaseModel):
         description="File extensions to include",
     )
 
+    # Basename-only files: configs, manifests, dotfiles, build files. These are
+    # not matched by suffix because they have no extension or unusual ones.
+    # In agent quality mode these are indexed verbatim so agents can reason
+    # about deps, build commands, env vars, container images, etc.
+    include_basenames: list[str] = Field(
+        default=[
+            "Dockerfile", "Dockerfile.dev", "Dockerfile.prod",
+            "Containerfile",
+            "Makefile", "GNUmakefile", "BUILD", "BUILD.bazel", "WORKSPACE",
+            "CMakeLists.txt",
+            "Procfile", "Procfile.dev",
+            "Vagrantfile", "Berksfile", "Gemfile", "Rakefile",
+            "Justfile", "justfile",
+            ".env.example", ".env.sample", ".env.template", ".envrc",
+            ".gitignore", ".dockerignore", ".gitattributes",
+            ".editorconfig", ".prettierrc", ".eslintrc",
+            ".npmrc", ".yarnrc", ".nvmrc", ".python-version", ".node-version",
+            ".tool-versions", ".ruby-version", ".rustup-toolchain",
+            "go.mod", "go.sum", "go.work",
+            "Cargo.toml", "rust-toolchain", "rust-toolchain.toml",
+            "pyproject.toml", "setup.cfg", "setup.py",
+            "requirements.txt", "requirements-dev.txt", "constraints.txt",
+            "Pipfile",
+            "package.json", "tsconfig.json", "jsconfig.json",
+            "deno.json", "deno.jsonc", "bun.lockb",
+            "pubspec.yaml", "build.gradle", "build.gradle.kts",
+            "pom.xml", "build.sbt",
+            "composer.json", "elm.json", "mix.exs",
+            "OWNERS", "CODEOWNERS", "MAINTAINERS",
+            "README", "LICENSE", "NOTICE", "CHANGELOG", "AUTHORS",
+            "SECURITY.md", "CONTRIBUTING.md", "CHANGELOG.md", "MAINTAINERS.md",
+        ],
+        description="Files indexed by exact basename, not by extension.",
+    )
+
 
 class PaperConfig(BaseModel):
     """Configuration for research paper processing."""
@@ -215,6 +285,31 @@ class SearchConfig(BaseModel):
         description="Weight for cross-encoder score (0=vector only, 1=cross-encoder only)",
     )
 
+    # Hybrid retrieval — vector + BM25 + symbol + path + trigram.
+    # Implicitly on for quality_mode='agent'.
+    enable_hybrid: bool = Field(
+        default=False,
+        description="Run BM25/symbol/path/trigram alongside vector and fuse the results.",
+    )
+    hybrid_candidates: int = Field(
+        default=50,
+        description="Top-K per branch before fusion (also the rerank window).",
+    )
+    hybrid_rerank_k: int = Field(
+        default=50,
+        description="Number of fused candidates to feed to the cross-encoder reranker.",
+    )
+
+    # Code-aware reranker — falls back to ms-marco when unavailable.
+    code_reranker_model: str = Field(
+        default="BAAI/bge-reranker-base",
+        description="Code/text-aware reranker preferred over ms-marco when available.",
+    )
+    use_code_reranker: bool = Field(
+        default=True,
+        description="Try the code-aware reranker first; fall back to text reranker.",
+    )
+
 
 class APIConfig(BaseModel):
     """Configuration for HTTP API server."""
@@ -269,6 +364,7 @@ class SynscConfig(BaseModel):
     research: ResearchConfig = Field(default_factory=ResearchConfig)
     api: APIConfig = Field(default_factory=APIConfig)
     features: FeatureFlags = Field(default_factory=FeatureFlags)
+    quality: QualityConfig = Field(default_factory=QualityConfig)
 
     # Server settings
     server_name: str = Field(default="synsc-context", description="MCP server name")
@@ -343,6 +439,40 @@ class SynscConfig(BaseModel):
             config.search.reranker_model = reranker_model
         if blend_alpha := os.getenv("RERANKER_BLEND_ALPHA"):
             config.search.reranker_blend_alpha = float(blend_alpha)
+
+        # Quality mode + indexing overrides — agents can override per-process
+        # without a code change. Useful for benchmarks and ad-hoc reindexing.
+        if qmode := os.getenv("SYNSC_QUALITY_MODE"):
+            qm = qmode.lower().strip()
+            if qm in ("fast", "balanced", "agent"):
+                config.quality.quality_mode = qm  # type: ignore
+        if mcp_qmode := os.getenv("SYNSC_MCP_QUALITY_MODE"):
+            mq = mcp_qmode.lower().strip()
+            if mq in ("fast", "balanced", "agent"):
+                config.quality.mcp_default_mode = mq  # type: ignore
+        if fast := os.getenv("SYNSC_FAST_MODE"):
+            config.git.fast_mode = fast.lower() in ("true", "1", "yes")
+        if turbo := os.getenv("SYNSC_TURBO_MODE"):
+            config.git.turbo_mode = turbo.lower() in ("true", "1", "yes")
+        if max_tok := os.getenv("SYNSC_CHUNK_MAX_TOKENS"):
+            with contextlib.suppress(ValueError):
+                config.chunking.max_tokens = int(max_tok)
+        if min_tok := os.getenv("SYNSC_CHUNK_MIN_TOKENS"):
+            with contextlib.suppress(ValueError):
+                config.chunking.min_chunk_tokens = int(min_tok)
+        if min_tok_agent := os.getenv("SYNSC_CHUNK_MIN_TOKENS_AGENT"):
+            with contextlib.suppress(ValueError):
+                config.chunking.min_chunk_tokens_agent = int(min_tok_agent)
+        if extra_inc := os.getenv("SYNSC_INCLUDE_PATTERNS"):
+            extras = [p.strip() for p in extra_inc.split(",") if p.strip()]
+            config.git.include_extensions = list(
+                dict.fromkeys(config.git.include_extensions + extras)
+            )
+        if extra_exc := os.getenv("SYNSC_EXCLUDE_PATTERNS"):
+            extras = [p.strip() for p in extra_exc.split(",") if p.strip()]
+            config.git.exclude_patterns = list(
+                dict.fromkeys(config.git.exclude_patterns + extras)
+            )
 
         # Research
         if research_provider := os.getenv("SYNSC_RESEARCH_PROVIDER"):

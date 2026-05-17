@@ -42,6 +42,7 @@ def _norm_code_hit(r: dict) -> dict:
         "score": float(r.get("relevance_score", 0.0)),
         "path": r.get("file_path"),
         "line_no": r.get("start_line"),
+        "trust_score": float(r.get("trust_score") or 0.0),
         "metadata": {
             "repo_name": r.get("repo_name"),
             "language": r.get("language"),
@@ -158,8 +159,262 @@ def unified_retrieve(
         except Exception as exc:
             logger.warning("unified_retrieve: docs branch failed", error=str(exc))
 
-    hits.sort(key=lambda h: h["score"], reverse=True)
+    # Apply per-source trust boost so high-authority sources tie-break above
+    # low-authority ones at the same retrieval score. Boost is small (max
+    # +0.1) so it never overwhelms semantic relevance.
+    hits = _attach_trust_scores(hits)
+
+    # Per-branch normalization: each branch (code / paper / dataset / docs)
+    # has its own score distribution. Without normalization, the highest-
+    # numerical-score branch dominates the merged ranking, which is why
+    # conceptual queries that should surface docs were losing to mid-relevance
+    # code chunks. Min-max normalize within each branch so a 'top-5' hit in
+    # docs ranks comparably to a 'top-5' hit in code.
+    _normalize_per_branch(hits)
+
+    # Query-type-aware boost: a conceptual question ("how does X work")
+    # should surface docs / paper above code. An identifier-shaped query
+    # ("FastAPI Depends signature") should keep code-bias.
+    _apply_query_type_boost(query, hits)
+
+    # Apply cross-source cross-encoder rerank when the reranker is enabled.
+    # Falls back silently to the un-reranked order on failure so a missing
+    # model never breaks search.
+    hits = _maybe_cross_source_rerank(query, hits)
+
+    hits.sort(
+        key=lambda h: (
+            h["score"] + 0.1 * float(h.get("trust_score") or 0.0),
+            h.get("trust_score") or 0.0,
+        ),
+        reverse=True,
+    )
     return hits[:k]
+
+
+_CONCEPTUAL_STARTERS = {
+    "how", "why", "what", "when", "where", "explain", "describe",
+    "show", "tell", "compare", "difference",
+}
+# Conceptual phrases that flip the intent even when an identifier shows
+# up first. ``FastAPI OAuth2 ... with httpx to call token endpoint`` looks
+# identifier-heavy by tokens alone but is a how-to-integrate question.
+_CONCEPTUAL_PHRASES = (
+    " with ", " using ", " to call ", " to use ", " to implement ",
+    " for testing ", " to mount ", " to integrate ", " to handle ",
+    " to configure ", " to stream ", " to define ", " to add ",
+)
+_CODE_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_]")
+
+
+def _has_identifier_token(query: str) -> bool:
+    """True iff any token has ≥2 uppercase letters AND length ≥ 5.
+
+    Catches ``FastAPI``, ``OAuth2PasswordBearer``, ``AsyncClient``, ``BaseModel``
+    while ignoring three-letter acronyms like ``URL`` or ``HTTP`` that show
+    up frequently in conceptual queries.
+    """
+    for tok in re.split(r"[\s,?:.]+", query):
+        if len(tok) < 5:
+            continue
+        upper = sum(1 for c in tok if c.isupper())
+        if upper >= 2 and any(c.islower() for c in tok):
+            return True
+    return False
+
+
+def _has_conceptual_phrase(query: str) -> bool:
+    q = " " + query.lower() + " "
+    return any(p in q for p in _CONCEPTUAL_PHRASES)
+
+
+def classify_query_intent(query: str) -> str:
+    """Return ``'conceptual'``, ``'identifier'``, or ``'neutral'``.
+
+    Heuristic — runs through these checks in order:
+
+      1. Wh-/how-/explain starter → conceptual.
+      2. Dotted identifier, snake_case, or multi-char CamelCase token →
+         identifier.
+      3. Otherwise neutral.
+
+    Earlier iterations tried to detect "with X to Y" / gerund openers as
+    conceptual even with identifier tokens present, but that hurt as much
+    as it helped on bench: queries like "Stream a response body with
+    FastAPI StreamingResponse" want the StreamingResponse class, not the
+    tutorial. Sticking to the simpler classifier wins overall.
+    """
+    if not query:
+        return "neutral"
+    q = query.strip().lower()
+    first = (q.split() or [""])[0].rstrip(",?:")
+    if first in _CONCEPTUAL_STARTERS:
+        return "conceptual"
+    # Dotted call (foo.Bar) is a strong identifier signal.
+    if _CODE_IDENTIFIER_RE.search(query):
+        return "identifier"
+    # snake_case with underscores → identifier.
+    if any(tok.count("_") >= 1 and tok.islower() for tok in query.split()):
+        return "identifier"
+    # CamelCase token like ``OAuth2PasswordBearer`` → identifier.
+    if _has_identifier_token(query):
+        return "identifier"
+    return "neutral"
+
+
+def _apply_query_type_boost(query: str, hits: list[dict]) -> None:
+    """In-place: boost docs (and paper) results when the query is conceptual.
+
+    Conceptual: +0.15 to docs / paper. Identifier: +0.10 to code. Neutral:
+    no change. Boost is small enough that a clearly-better other-branch
+    result still wins, but tips ties toward the more user-helpful surface.
+    """
+    intent = classify_query_intent(query)
+    if intent == "neutral":
+        return
+    if intent == "conceptual":
+        for h in hits:
+            if h.get("source_type") in ("docs", "paper"):
+                h["score"] = float(h.get("score") or 0.0) + 0.15
+    elif intent == "identifier":
+        for h in hits:
+            if h.get("source_type") == "repo":
+                h["score"] = float(h.get("score") or 0.0) + 0.10
+
+
+def _normalize_per_branch(hits: list[dict]) -> None:
+    """In-place min-max normalize ``score`` within each source_type branch.
+
+    Cosine-similarity scales differ across embedding models (the docs branch
+    uses the paper embedder, code uses the code embedder, etc.). Without
+    normalization, sort-by-raw-score systematically biases toward the branch
+    with the larger numeric range.
+    """
+    from collections import defaultdict
+
+    by_type: dict[str, list[dict]] = defaultdict(list)
+    for h in hits:
+        by_type[h.get("source_type", "_")].append(h)
+    for stype, group in by_type.items():
+        scores = [float(h.get("score") or 0.0) for h in group]
+        if not scores:
+            continue
+        lo, hi = min(scores), max(scores)
+        span = hi - lo
+        if span <= 0:
+            for h in group:
+                h["score"] = 1.0 if hi > 0 else 0.0
+            continue
+        for h in group:
+            h["score"] = (float(h["score"]) - lo) / span
+
+
+def _maybe_cross_source_rerank(query: str, hits: list[dict]) -> list[dict]:
+    """Apply cross-encoder rerank to the merged result set when enabled.
+
+    Returns the original list on any failure so retrieval stays resilient.
+    Updates each hit's ``score`` to a blend of the normalized retrieval
+    score and the cross-encoder logit, using the same blend_alpha used by
+    the in-branch reranker for consistency.
+    """
+    try:
+        from synsc.config import get_config
+
+        cfg = get_config()
+        if not cfg.search.enable_reranker:
+            return hits
+        if len(hits) <= 2:
+            return hits
+        from synsc.services.reranker import get_reranker
+
+        reranker = get_reranker()
+        if reranker is None:
+            return hits
+        # Rerank the top 50 — anything past rank 50 is unlikely to surface.
+        head = hits[:50]
+        tail = hits[50:]
+        reranked = reranker.rerank(
+            query=query,
+            results=head,
+            content_key="text",
+            score_key="score",
+        )
+        return reranked + tail
+    except Exception as exc:
+        logger.debug("unified_retrieve: cross-source rerank failed", error=str(exc))
+        return hits
+
+
+def _attach_trust_scores(hits: list[dict]) -> list[dict]:
+    """Backfill trust_score on hits by fetching the source row.
+
+    One DB call per distinct source_id+source_type. Cheap enough at k<=100.
+    """
+    if not hits:
+        return hits
+
+    need = {
+        (h.get("source_type"), h.get("source_id"))
+        for h in hits
+        if not h.get("trust_score") and h.get("source_id")
+    }
+    if not need:
+        return hits
+
+    scores: dict[tuple[str, str], float] = {}
+    try:
+        from synsc.database.connection import get_session
+        from synsc.database.models import (
+            DocumentationSource,
+            Paper,
+            Repository,
+        )
+
+        with get_session() as session:
+            repo_ids = [sid for (stype, sid) in need if stype == "repo"]
+            paper_ids = [sid for (stype, sid) in need if stype == "paper"]
+            docs_ids = [sid for (stype, sid) in need if stype == "docs"]
+            if repo_ids:
+                for r in (
+                    session.query(Repository)
+                    .filter(Repository.repo_id.in_(repo_ids))
+                    .all()
+                ):
+                    scores[("repo", str(r.repo_id))] = _trust_score(
+                        r.repo_metadata
+                    )
+            if paper_ids:
+                for p in (
+                    session.query(Paper)
+                    .filter(Paper.paper_id.in_(paper_ids))
+                    .all()
+                ):
+                    scores[("paper", str(p.paper_id))] = _trust_score(
+                        getattr(p, "paper_metadata", None)
+                    )
+            if docs_ids:
+                for d in (
+                    session.query(DocumentationSource)
+                    .filter(DocumentationSource.docs_id.in_(docs_ids))
+                    .all()
+                ):
+                    # Docs trust is conservative — explicit metadata only,
+                    # no star/citation proxy available.
+                    md = getattr(d, "doc_metadata", None) or getattr(
+                        d, "metadata", None
+                    )
+                    scores[("docs", str(d.docs_id))] = _trust_score(md)
+    except Exception as exc:
+        logger.debug("trust: backfill failed", error=str(exc))
+        return hits
+
+    for h in hits:
+        if h.get("trust_score"):
+            continue
+        h["trust_score"] = scores.get(
+            (h.get("source_type"), h.get("source_id")), 0.0
+        )
+    return hits
 
 
 # ---------------------------------------------------------------------------
@@ -320,11 +575,19 @@ def index_source(
     if source_type == "repo":
         res = _get_indexing_service(user_id).index_repository(
             url=url,
-            branch=opts.get("branch", "main"),
+            # Pass None when caller didn't set a branch so default-branch
+            # detection runs against the GitHub API.
+            branch=opts.get("branch"),
             user_id=user_id,
             deep_index=bool(opts.get("deep_index", False)),
+            force_reindex=bool(opts.get("force_reindex", False)),
+            quality_mode=opts.get("quality_mode"),
+            include_tests=opts.get("include_tests"),
+            include_docs=opts.get("include_docs"),
+            include_examples=opts.get("include_examples"),
         )
-        return _normalize_index_response(
+
+        envelope = _normalize_index_response(
             source_type="repo",
             res=res,
             id_key="repo_id",
@@ -332,12 +595,65 @@ def index_source(
             default_status="pending",
         )
 
+        # Optional: discover + index the project's documentation site.
+        # Concept-style queries ("how does X work") win bigger on docs than
+        # raw source. Off by default to preserve current behavior; opt-in
+        # via options.auto_index_docs.
+        if envelope.get("status") in ("indexed", "updated", "already_indexed") and \
+           bool(opts.get("auto_index_docs", False)):
+            try:
+                from synsc.services.docs_autodiscover import discover_docs_url
+
+                docs_url = discover_docs_url(
+                    url, branch=opts.get("branch") or "main"
+                )
+                if docs_url:
+                    logger.info(
+                        "auto_index_docs: discovered docs site",
+                        repo=url, docs_url=docs_url,
+                    )
+                    try:
+                        # Cap to a reasonable crawl size so we don't trash
+                        # the budget on a docs site with 10k pages.
+                        docs_res = index_source(
+                            source_type="docs",
+                            url=docs_url,
+                            display_name=f"{display_name or 'docs'}-docs",
+                            options={
+                                "max_pages": int(opts.get("docs_max_pages", 150)),
+                                "req_delay_s": float(opts.get("docs_req_delay_s", 0.3)),
+                            },
+                            user_id=user_id,
+                        )
+                        envelope["docs_index"] = {
+                            "url": docs_url,
+                            "source_id": docs_res.get("source_id"),
+                            "status": docs_res.get("status"),
+                        }
+                    except Exception as exc:
+                        logger.warning(
+                            "auto_index_docs: docs indexing failed",
+                            docs_url=docs_url, error=str(exc),
+                        )
+                        envelope["docs_index"] = {
+                            "url": docs_url,
+                            "status": "error",
+                            "error": str(exc),
+                        }
+            except Exception as exc:
+                logger.warning("auto_index_docs: discovery failed", error=str(exc))
+
+        return envelope
+
     if source_type == "paper":
         if not user_id:
             raise ValueError("paper indexing requires an authenticated user")
 
         import os
         import tempfile
+        from urllib.parse import urlparse
+
+        import httpx
 
         from synsc.core.arxiv_client import (
             ArxivError,
@@ -347,9 +663,53 @@ def index_source(
         )
 
         svc = _get_paper_service(user_id)
+        url_lower = url.lower()
+        parsed = urlparse(url) if "://" in url else None
+        is_http_pdf = (
+            parsed is not None
+            and parsed.scheme in ("http", "https")
+            and (url_lower.endswith(".pdf") or "arxiv" not in url_lower
+                 and any(seg.endswith(".pdf") for seg in parsed.path.split("/")))
+        )
 
-        if os.path.isfile(url) and url.lower().endswith(".pdf"):
+        if os.path.isfile(url) and url_lower.endswith(".pdf"):
             res = svc.index_paper(pdf_path=url, source="upload")
+            ext_ref = url
+        elif is_http_pdf and "arxiv" not in url_lower:
+            # Generic PDF URL — download and index as upload-source paper.
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                pdf_path = tmp.name
+            try:
+                with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+                    resp = client.get(url)
+                    resp.raise_for_status()
+                    if not resp.content.startswith(b"%PDF"):
+                        os.unlink(pdf_path)
+                        return _normalize_index_response(
+                            source_type="paper",
+                            res={
+                                "success": False,
+                                "error": "URL did not return a PDF",
+                            },
+                            id_key="paper_id",
+                            external_ref=url,
+                        )
+                    with open(pdf_path, "wb") as f:
+                        f.write(resp.content)
+                res = svc.index_paper(
+                    pdf_path=pdf_path,
+                    source="url",
+                    arxiv_id=None,
+                    arxiv_metadata={
+                        "title": display_name or url.rsplit("/", 1)[-1],
+                        "source_url": url,
+                    },
+                )
+            finally:
+                try:
+                    os.unlink(pdf_path)
+                except OSError:
+                    pass
             ext_ref = url
         else:
             try:
@@ -418,11 +778,34 @@ def index_source(
             sitemap_url=opts.get("sitemap_url"),
             max_pages=int(opts.get("max_pages", 200)),
             req_delay_s=float(opts.get("req_delay_s", 1.0)),
+            version=opts.get("version"),
         )
         return _normalize_index_response(
             source_type="docs",
             res=res,
             id_key="docs_id",
+            external_ref=url,
+        )
+
+    # Fall through to the connector registry. Connectors raise
+    # ``NotImplementedError`` when stubbed and the HTTP layer turns that
+    # into a 501.
+    from synsc.services.connectors import get_connector
+
+    conn = get_connector(source_type)
+    if conn is not None:
+        if not user_id:
+            raise ValueError(f"{source_type} indexing requires an authenticated user")
+        result = conn.index(
+            url=url,
+            user_id=user_id,
+            options=opts,
+            display_name=display_name,
+        )
+        return _normalize_index_response(
+            source_type=source_type,
+            res=result,
+            id_key=f"{source_type}_id",
             external_ref=url,
         )
 
@@ -655,21 +1038,320 @@ def _lookup_repo_by_owner_name(
         return None
 
 
-def _lookup_docs_by_url(url: str) -> str | None:
+def _lookup_docs_by_url(url: str, version: str | None = None) -> str | None:
+    """Look up a docs source by URL (and optional version).
+
+    With ``version`` provided, returns the docs_id for that specific
+    crawl. Without, prefers a row where version IS NULL ("rolling"), then
+    falls back to the most-recently-indexed row.
+    """
     from synsc.database.connection import get_session
     from synsc.database.models import DocumentationSource
 
     try:
         with get_session() as session:
+            if version is not None:
+                row = (
+                    session.query(DocumentationSource.docs_id)
+                    .filter(
+                        DocumentationSource.url == url,
+                        DocumentationSource.version == version,
+                    )
+                    .first()
+                )
+                return row[0] if row else None
+            # Prefer NULL-version (the rolling snapshot)
+            row = (
+                session.query(DocumentationSource.docs_id)
+                .filter(
+                    DocumentationSource.url == url,
+                    DocumentationSource.version.is_(None),
+                )
+                .first()
+            )
+            if row:
+                return row[0]
+            # Fall back to most-recently-indexed version
             row = (
                 session.query(DocumentationSource.docs_id)
                 .filter(DocumentationSource.url == url)
+                .order_by(DocumentationSource.indexed_at.desc())
                 .first()
             )
             return row[0] if row else None
     except Exception as exc:
         logger.debug("resolver: docs url lookup failed", error=str(exc))
         return None
+
+
+def resolve_source_name(
+    name: str,
+    user_id: str | None = None,
+    source_types: list[str] | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Context7-style name→source resolver.
+
+    Takes a free-form library / repo / dataset / paper name (e.g. ``"fastapi"``,
+    ``"transformers"``, ``"Attention is All You Need"``) and returns ranked
+    candidates ``{source_id, source_type, display_name, external_ref, trust_score,
+    match_quality}`` so the caller can disambiguate before fetching.
+
+    Two-call pattern: ``resolve_source_name(name)`` → ``read_source(source_id)``.
+
+    Ranking signals:
+      - exact name match > prefix > substring
+      - higher ``trust_score`` (stars/citations/verified) tiebreaks
+      - user-owned sources rank above public when scores tie
+    """
+    if not name or not isinstance(name, str):
+        return []
+
+    needle = name.strip().lower()
+    wanted = set(source_types or ["repo", "paper", "dataset", "docs"])
+    out: list[dict[str, Any]] = []
+
+    if "repo" in wanted:
+        out.extend(_resolve_repos_by_name(needle, user_id, limit))
+    if "paper" in wanted and user_id:
+        out.extend(_resolve_papers_by_name(needle, user_id, limit))
+    if "dataset" in wanted and user_id:
+        out.extend(_resolve_datasets_by_name(needle, user_id, limit))
+    if "docs" in wanted and user_id:
+        out.extend(_resolve_docs_by_name(needle, user_id, limit))
+
+    out.sort(
+        key=lambda r: (
+            -r["match_quality"],
+            -float(r.get("trust_score") or 0.0),
+            r.get("display_name") or "",
+        )
+    )
+    return out[:limit]
+
+
+def _match_quality(needle: str, hay: str | None) -> int:
+    """4 = exact, 3 = prefix-of-full-string, 2 = prefix-of-some-token, 1 = substring, 0 = miss.
+
+    Distinguishes "fastapi" → ``tiangolo/fastapi`` (token-prefix=2) from
+    "api" → ``tiangolo/fastapi`` (substring only=1). Token-prefix beats
+    bare substring so users searching for a known name don't lose to
+    partial mid-word hits.
+    """
+    if not hay:
+        return 0
+    h = hay.lower()
+    if h == needle:
+        return 4
+    if h.startswith(needle):
+        return 3
+    for tok in re.split(r"[\s/_\-.]+", h):
+        if tok and tok.startswith(needle):
+            return 2
+    if needle in h:
+        return 1
+    return 0
+
+
+def _trust_score(metadata: Any | None, fallback: float = 0.0) -> float:
+    """Extract a 0..1 trust score from a JSON metadata blob.
+
+    Repos: stars normalized (log10). Papers: citation_count normalized.
+    Falls back to ``fallback`` when no signal is present.
+    """
+    if not metadata:
+        return fallback
+    if isinstance(metadata, str):
+        try:
+            import json as _json
+
+            metadata = _json.loads(metadata)
+        except Exception:
+            return fallback
+    if not isinstance(metadata, dict):
+        return fallback
+    if "trust_score" in metadata:
+        try:
+            return max(0.0, min(1.0, float(metadata["trust_score"])))
+        except Exception:
+            pass
+    stars = metadata.get("stars") or metadata.get("stargazers_count")
+    if stars is not None:
+        try:
+            import math
+
+            return min(1.0, math.log10(max(1.0, float(stars))) / 6.0)
+        except Exception:
+            pass
+    citations = metadata.get("citation_count") or metadata.get("citations")
+    if citations is not None:
+        try:
+            import math
+
+            return min(1.0, math.log10(max(1.0, float(citations))) / 5.0)
+        except Exception:
+            pass
+    return fallback
+
+
+def _resolve_repos_by_name(
+    needle: str, user_id: str | None, limit: int
+) -> list[dict[str, Any]]:
+    from synsc.database.connection import get_session
+    from synsc.database.models import Repository
+
+    try:
+        with get_session() as session:
+            q = session.query(Repository).filter(Repository.is_public == True)  # noqa: E712
+            rows = q.limit(500).all()
+            scored = []
+            for r in rows:
+                full = f"{r.owner}/{r.name}".lower()
+                quality = max(
+                    _match_quality(needle, r.name),
+                    _match_quality(needle, full),
+                )
+                if quality == 0:
+                    continue
+                scored.append(
+                    {
+                        "source_id": str(r.repo_id),
+                        "source_type": "repo",
+                        "display_name": f"{r.owner}/{r.name}",
+                        "external_ref": r.url,
+                        "match_quality": quality,
+                        "trust_score": _trust_score(r.repo_metadata),
+                        "extra": {
+                            "branch": r.branch,
+                            "description": r.description,
+                        },
+                    }
+                )
+            scored.sort(
+                key=lambda x: (-x["match_quality"], -x["trust_score"])
+            )
+            return scored[:limit]
+    except Exception as exc:
+        logger.debug("resolve_name: repo branch failed", error=str(exc))
+        return []
+
+
+def _resolve_papers_by_name(
+    needle: str, user_id: str, limit: int
+) -> list[dict[str, Any]]:
+    from synsc.database.connection import get_session
+    from synsc.database.models import Paper
+
+    try:
+        with get_session() as session:
+            rows = session.query(Paper).limit(500).all()
+            scored = []
+            for p in rows:
+                quality = max(
+                    _match_quality(needle, p.title),
+                    _match_quality(needle, p.arxiv_id),
+                )
+                if quality == 0:
+                    continue
+                scored.append(
+                    {
+                        "source_id": str(p.paper_id),
+                        "source_type": "paper",
+                        "display_name": p.title or p.arxiv_id or "Untitled",
+                        "external_ref": p.arxiv_id or "",
+                        "match_quality": quality,
+                        "trust_score": _trust_score(
+                            getattr(p, "paper_metadata", None)
+                        ),
+                        "extra": {},
+                    }
+                )
+            scored.sort(
+                key=lambda x: (-x["match_quality"], -x["trust_score"])
+            )
+            return scored[:limit]
+    except Exception as exc:
+        logger.debug("resolve_name: paper branch failed", error=str(exc))
+        return []
+
+
+def _resolve_datasets_by_name(
+    needle: str, user_id: str, limit: int
+) -> list[dict[str, Any]]:
+    from sqlalchemy import text as _text
+
+    from synsc.database.connection import get_session
+
+    try:
+        with get_session() as session:
+            rows = session.execute(
+                _text(
+                    "SELECT dataset_id, hf_id, name FROM datasets LIMIT 500"
+                )
+            ).all()
+            scored = []
+            for r in rows:
+                quality = max(
+                    _match_quality(needle, r.name),
+                    _match_quality(needle, r.hf_id),
+                )
+                if quality == 0:
+                    continue
+                scored.append(
+                    {
+                        "source_id": str(r.dataset_id),
+                        "source_type": "dataset",
+                        "display_name": r.name or r.hf_id,
+                        "external_ref": r.hf_id,
+                        "match_quality": quality,
+                        "trust_score": 0.0,
+                        "extra": {},
+                    }
+                )
+            scored.sort(
+                key=lambda x: (-x["match_quality"], -x["trust_score"])
+            )
+            return scored[:limit]
+    except Exception as exc:
+        logger.debug("resolve_name: dataset branch failed", error=str(exc))
+        return []
+
+
+def _resolve_docs_by_name(
+    needle: str, user_id: str, limit: int
+) -> list[dict[str, Any]]:
+    from synsc.database.connection import get_session
+    from synsc.database.models import DocumentationSource
+
+    try:
+        with get_session() as session:
+            rows = session.query(DocumentationSource).limit(500).all()
+            scored = []
+            for d in rows:
+                quality = max(
+                    _match_quality(needle, d.display_name),
+                    _match_quality(needle, d.url),
+                )
+                if quality == 0:
+                    continue
+                scored.append(
+                    {
+                        "source_id": str(d.docs_id),
+                        "source_type": "docs",
+                        "display_name": d.display_name or d.url,
+                        "external_ref": d.url,
+                        "match_quality": quality,
+                        "trust_score": 0.0,
+                        "extra": {},
+                    }
+                )
+            scored.sort(
+                key=lambda x: (-x["match_quality"], -x["trust_score"])
+            )
+            return scored[:limit]
+    except Exception as exc:
+        logger.debug("resolve_name: docs branch failed", error=str(exc))
+        return []
 
 
 def resolve_source_id(raw: str, user_id: str | None = None) -> tuple[str, str]:
@@ -728,7 +1410,18 @@ def resolve_source_id(raw: str, user_id: str | None = None) -> tuple[str, str]:
         )
 
     if candidate.startswith(("http://", "https://")):
-        docs_uid = _lookup_docs_by_url(candidate)
+        # Allow ``url@version`` for Context7-style pinning.
+        version: str | None = None
+        url_to_lookup = candidate
+        if "@" in candidate:
+            # Be careful: '@' can appear in URLs (auth). Only treat the
+            # final '@' as a version separator if what follows looks like
+            # a version token (no slashes / spaces).
+            head, _, tail = candidate.rpartition("@")
+            if tail and "/" not in tail and " " not in tail and len(tail) <= 64:
+                url_to_lookup = head
+                version = tail
+        docs_uid = _lookup_docs_by_url(url_to_lookup, version=version)
         if docs_uid:
             return docs_uid, "docs"
         raise ValueError(
