@@ -206,6 +206,27 @@ _CONCEPTUAL_PHRASES = (
 )
 _CODE_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_]")
 
+# Code-gen intent: imperative verbs at the start of the query that indicate
+# the user wants to write/modify code, not look something up. SWE-Agent bench
+# diagnosis: when the task is "Implement X" or "Migrate v1 → v2", official
+# docs win every time (Context7's structural strength) — code chunks lose
+# because they're examples-of-use, not how-to-write-this-from-scratch.
+# Boosting docs harder for this intent is the closest thing Delphi has to
+# Context7's docs-only retrieval without giving up code retrieval entirely.
+_CODE_GEN_STARTERS = {
+    "implement", "create", "build", "write", "add", "make", "design",
+    "migrate", "refactor", "convert", "port", "upgrade", "rewrite",
+    "fix", "patch", "resolve", "debug",
+}
+# Verb phrases that signal code-gen even when the query doesn't start with
+# the verb (e.g. "How do I implement..." which starts conceptual but is
+# really a code-gen task).
+_CODE_GEN_PHRASES = (
+    " implement ", " create a ", " build a ", " write a ", " add a ",
+    " migrate to ", " refactor ", " convert to ", " port to ",
+    " upgrade to ", " rewrite ", " set up ",
+)
+
 
 def _has_identifier_token(query: str) -> bool:
     """True iff any token has ≥2 uppercase letters AND length ≥ 5.
@@ -229,14 +250,18 @@ def _has_conceptual_phrase(query: str) -> bool:
 
 
 def classify_query_intent(query: str) -> str:
-    """Return ``'conceptual'``, ``'identifier'``, or ``'neutral'``.
+    """Return ``'code_gen'``, ``'conceptual'``, ``'identifier'``, or ``'neutral'``.
 
     Heuristic — runs through these checks in order:
 
-      1. Wh-/how-/explain starter → conceptual.
-      2. Dotted identifier, snake_case, or multi-char CamelCase token →
+      1. Imperative verb starter (implement / migrate / refactor / ...) →
+         code_gen. SWE-Agent diagnosis: these queries want docs first.
+      2. Wh-/how-/explain starter → conceptual, *unless* the query body
+         also contains a strong code-gen phrase ("how do I implement"),
+         in which case treat it as code_gen too.
+      3. Dotted identifier, snake_case, or multi-char CamelCase token →
          identifier.
-      3. Otherwise neutral.
+      4. Otherwise neutral.
 
     Earlier iterations tried to detect "with X to Y" / gerund openers as
     conceptual even with identifier tokens present, but that hurt as much
@@ -248,9 +273,21 @@ def classify_query_intent(query: str) -> str:
         return "neutral"
     q = query.strip().lower()
     first = (q.split() or [""])[0].rstrip(",?:")
+
+    # 1. Imperative verb at start ⇒ code_gen.
+    if first in _CODE_GEN_STARTERS:
+        return "code_gen"
+
+    # 2. Wh-/how-starter — check for code-gen phrase before settling on
+    # conceptual. "How do I implement X" should boost docs harder than
+    # plain "How does X work".
     if first in _CONCEPTUAL_STARTERS:
+        body = " " + q + " "
+        if any(p in body for p in _CODE_GEN_PHRASES):
+            return "code_gen"
         return "conceptual"
-    # Dotted call (foo.Bar) is a strong identifier signal.
+
+    # 3. Dotted call (foo.Bar) is a strong identifier signal.
     if _CODE_IDENTIFIER_RE.search(query):
         return "identifier"
     # snake_case with underscores → identifier.
@@ -265,12 +302,26 @@ def classify_query_intent(query: str) -> str:
 def _apply_query_type_boost(query: str, hits: list[dict]) -> None:
     """In-place: boost docs (and paper) results when the query is conceptual.
 
-    Conceptual: +0.15 to docs / paper. Identifier: +0.10 to code. Neutral:
-    no change. Boost is small enough that a clearly-better other-branch
-    result still wins, but tips ties toward the more user-helpful surface.
+    code_gen:    +0.25 docs/paper, +0.05 code  (the strongest doc bias —
+                 SWE-Agent tasks want the official how-to chunk first;
+                 code examples are useful but supporting).
+    Conceptual:  +0.15 docs/paper.
+    Identifier:  +0.10 code.
+    Neutral:     no change.
+
+    Boost is small enough that a clearly-better other-branch result still
+    wins, but tips ties toward the more user-helpful surface.
     """
     intent = classify_query_intent(query)
     if intent == "neutral":
+        return
+    if intent == "code_gen":
+        for h in hits:
+            st = h.get("source_type")
+            if st in ("docs", "paper"):
+                h["score"] = float(h.get("score") or 0.0) + 0.25
+            elif st == "repo":
+                h["score"] = float(h.get("score") or 0.0) + 0.05
         return
     if intent == "conceptual":
         for h in hits:

@@ -47,6 +47,52 @@ logger = structlog.get_logger(__name__)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
+_TRIM_TARGET_LINES = 12
+
+# Lines we never want to count as the "start" of a paste unit (only header
+# matter for trimming; comments / imports are usually preamble that an LLM
+# rewrites in its own style anyway).
+_TRIM_SKIP_PREFIXES = ("#", "//", "/*", "*", "import ", "from ", "use ", "package ")
+
+
+def _trim_to_paste_unit(content: str, language: str | None = None, max_lines: int = _TRIM_TARGET_LINES) -> str:
+    """Trim a chunk to its smallest paste-ready unit.
+
+    For snippet-mode context packs: keep the def / class / function header
+    plus a short body window so the LLM can echo the chunk verbatim into
+    its answer. If we can't find a header, we keep the first ``max_lines``
+    non-preamble lines.
+
+    Heuristic, not a parser — works well enough for the SWE-Agent bench
+    (Python / TS / Go / Rust). The full parser-driven chunker still owns
+    initial chunk boundaries; this only narrows an already-correct chunk.
+    """
+    if not content:
+        return content
+    lines = content.split("\n")
+    if len(lines) <= max_lines:
+        return content
+
+    # Find the first "header" line (def/class/function keyword).
+    header_re = re.compile(
+        r"^\s*(def |class |async def |function |func |public |private |protected |fn |interface |type )"
+    )
+    start_idx = 0
+    for i, ln in enumerate(lines):
+        if header_re.match(ln):
+            start_idx = i
+            break
+    else:
+        # No header found: skip preamble and take the first real content lines.
+        for i, ln in enumerate(lines):
+            s = ln.strip()
+            if s and not s.startswith(_TRIM_SKIP_PREFIXES):
+                start_idx = i
+                break
+
+    return "\n".join(lines[start_idx : start_idx + max_lines]).rstrip()
+
+
 def _approx_tokens(s: str) -> int:
     """Rough token count: 4 chars/token for English+code. Plenty good for
     budgeting decisions; we don't need accuracy for "should we include this
@@ -227,8 +273,25 @@ class ContextPackBuilder:
         include_docs: bool = True,
         include_examples: bool = True,
         include_configs: bool = True,
+        snippet_mode: bool = False,
     ) -> ContextPack:
+        """Build a ContextPack.
+
+        ``snippet_mode=True`` returns ONLY the primary hits trimmed to
+        paste-ready units (def/class signature + a small body window),
+        with no expansion, tests, docs, or architecture. Closes the
+        context-utilization gap on code-gen tasks where the LLM only
+        echoes short snippets verbatim — Nia's strength in the bench.
+        Auto-enabled when the query looks like code_gen.
+        """
         from synsc.services.search_service import SearchService
+        from synsc.services.source_service import classify_query_intent
+
+        # Auto-enable snippet mode for code-gen queries. Bench showed Nia
+        # winning context_utilization 0.213 vs our 0.123 because its
+        # tighter returns are pasted verbatim by the LLM.
+        if not snippet_mode and classify_query_intent(query) == "code_gen":
+            snippet_mode = True
 
         t0 = time.time()
         pack = ContextPack(
@@ -236,7 +299,7 @@ class ContextPackBuilder:
             quality_mode=quality_mode,
             token_budget=self.token_budget,
         )
-        rationale: dict[str, Any] = {"steps": []}
+        rationale: dict[str, Any] = {"steps": [], "snippet_mode": snippet_mode}
 
         # 1. Initial hybrid search.
         svc = SearchService(user_id=self.user_id)
@@ -261,6 +324,24 @@ class ContextPackBuilder:
 
         # Track which repos are in scope so expansion queries stay bounded.
         scoped_repo_ids = repo_ids or list({r["repo_id"] for r in primary})
+
+        # Snippet mode: trim to paste-ready units and skip expansion. The
+        # LLM gets ~6 small primary chunks instead of one with everything
+        # around it; bench shows the LLM is more likely to actually use
+        # this content verbatim.
+        if snippet_mode:
+            for r in primary[: max(self.max_primary, 6)]:
+                snip = self._snippet_from_result(
+                    r, role="primary", why="snippet-mode hit"
+                )
+                snip.content = _trim_to_paste_unit(snip.content, language=snip.language)
+                if not self._add_snippet(pack, snip):
+                    break
+                if pack.used_tokens_estimate > self.token_budget * 0.85:
+                    break
+            pack.rationale = rationale
+            pack.elapsed_ms = int((time.time() - t0) * 1000)
+            return pack
 
         # 2. Add primary snippets, capped.
         for r in primary[: self.max_primary]:
