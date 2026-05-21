@@ -807,6 +807,12 @@ class IndexingService:
 
             if not content:
                 continue
+            if len(content.encode("utf-8", errors="ignore")) > _MAX_INDEXED_FILE_BYTES:
+                logger.info(
+                    "skipping oversized file (would overflow tsvector limit)",
+                    file_path=path, bytes=len(content), cap=_MAX_INDEXED_FILE_BYTES,
+                )
+                continue
 
             content_hash = self.chunker.compute_hash(content)
             db_file = db_lookup.get(path)
@@ -961,6 +967,12 @@ class IndexingService:
             file_path = file_info["path"]
             content = file_info.get("content", "")
             if not content:
+                continue
+            if len(content.encode("utf-8", errors="ignore")) > _MAX_INDEXED_FILE_BYTES:
+                logger.info(
+                    "skipping oversized file (would overflow tsvector limit)",
+                    file_path=file_path, bytes=len(content), cap=_MAX_INDEXED_FILE_BYTES,
+                )
                 continue
 
             language = detect_language(file_path)
@@ -1463,6 +1475,12 @@ class IndexingService:
                 )
 
             if not content:
+                continue
+            if len(content.encode("utf-8", errors="ignore")) > _MAX_INDEXED_FILE_BYTES:
+                logger.info(
+                    "skipping oversized file (would overflow tsvector limit)",
+                    file_path=file_path, bytes=len(content), cap=_MAX_INDEXED_FILE_BYTES,
+                )
                 continue
 
             # Detect language
