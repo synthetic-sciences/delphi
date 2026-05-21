@@ -974,6 +974,18 @@ class IndexingService:
                     file_path=file_path, bytes=len(content), cap=_MAX_INDEXED_FILE_BYTES,
                 )
                 continue
+            # Postgres TEXT columns cannot store NUL (0x00) bytes — any file
+            # that contains them is almost always a misdetected binary blob
+            # (pandas ships pickled fixtures and Parquet/Arrow data, NumPy
+            # ships .npy/.npz). Skipping is the right move; even if we
+            # sanitized the NULs out, embedding/chunking a binary file
+            # produces garbage hits.
+            if "\x00" in content:
+                logger.info(
+                    "skipping binary-content file (contains NUL bytes)",
+                    file_path=file_path,
+                )
+                continue
 
             language = detect_language(file_path)
 
@@ -1480,6 +1492,18 @@ class IndexingService:
                 logger.info(
                     "skipping oversized file (would overflow tsvector limit)",
                     file_path=file_path, bytes=len(content), cap=_MAX_INDEXED_FILE_BYTES,
+                )
+                continue
+            # Postgres TEXT columns cannot store NUL (0x00) bytes — any file
+            # that contains them is almost always a misdetected binary blob
+            # (pandas ships pickled fixtures and Parquet/Arrow data, NumPy
+            # ships .npy/.npz). Skipping is the right move; even if we
+            # sanitized the NULs out, embedding/chunking a binary file
+            # produces garbage hits.
+            if "\x00" in content:
+                logger.info(
+                    "skipping binary-content file (contains NUL bytes)",
+                    file_path=file_path,
                 )
                 continue
 
