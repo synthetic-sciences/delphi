@@ -43,6 +43,16 @@ from synsc.parsing.registry import get_parser_registry
 
 logger = structlog.get_logger(__name__)
 
+# Per-file size cap before indexing. Postgres `to_tsvector` (used by the
+# GIN BM25 column on code_chunks) has a hard 1 MB limit per row. A single
+# pathologically large source file (msgspec/_core.c — ~16k lines of
+# macro-dense C; the pandas C extension; generated headers; minified
+# vendored libs) can produce one chunk whose content exceeds the cap and
+# fails the whole repo's INSERT. Skipping files >500 KB is a safe ceiling
+# that keeps every normal source file but lets us not torpedo a 2k-file
+# repo because one of them is generated. Tunable via env.
+_MAX_INDEXED_FILE_BYTES = int(os.getenv("SYNSC_MAX_INDEXED_FILE_BYTES", 500_000))
+
 
 def _build_chunk_relationships(session: Session, repo_id: str) -> int:
     """Build directed edges between chunks for relationship-aware search.
@@ -983,6 +993,20 @@ class IndexingService:
             file_path = file_info["path"]
             content = file_info.get("content", "")
             if not content:
+                continue
+            # Skip files whose raw bytes would blow Postgres's 1 MB tsvector
+            # cap. Pathological cases: vendored single-file C extensions
+            # (msgspec/_core.c is ~16k lines of macro-dense source),
+            # generated headers, minified vendored libs. They are rarely
+            # what an agent is asking about and they reliably brick the
+            # whole repo's indexing transaction.
+            if len(content.encode("utf-8", errors="ignore")) > _MAX_INDEXED_FILE_BYTES:
+                logger.info(
+                    "skipping oversized file (would overflow tsvector limit)",
+                    file_path=file_path,
+                    bytes=len(content),
+                    cap=_MAX_INDEXED_FILE_BYTES,
+                )
                 continue
 
             language = detect_language(file_path)
