@@ -104,19 +104,180 @@ def _any_looks_like_uuid(ids: list[str] | None) -> bool:
     return any(len(x) == 36 and x.count("-") == 4 for x in ids)
 
 
+# ---------------------------------------------------------------------------
+# Auto-index-on-miss
+# ---------------------------------------------------------------------------
+#
+# Delphi self-hosts its index, which means "query about library X" only works
+# if you've added X to your collection. Nia's API auto-indexes any public repo
+# on demand. To close the cold-start gap without becoming Nia (we still want
+# the index to live on your hardware), search calls can opt into
+# ``auto_index_on_miss=True``: when the query mentions a library that's known
+# to the registry below AND the user hasn't indexed it yet, the search returns
+# whatever it has now, and queues the missing repo for background indexing so
+# the *next* query against the same library lands fresh hits.
+#
+# The registry is intentionally small — the top public Python libs that show
+# up in benchmarks and in real research sessions. Easy to grow over time.
+
+LIBRARY_REGISTRY: dict[str, str] = {
+    # name (lowercase) → canonical GitHub HTTPS URL
+    "fastapi":     "https://github.com/fastapi/fastapi.git",
+    "starlette":   "https://github.com/encode/starlette.git",
+    "httpx":       "https://github.com/encode/httpx.git",
+    "pydantic":    "https://github.com/pydantic/pydantic.git",
+    "django":      "https://github.com/django/django.git",
+    "flask":       "https://github.com/pallets/flask.git",
+    "sqlalchemy":  "https://github.com/sqlalchemy/sqlalchemy.git",
+    "pandas":      "https://github.com/pandas-dev/pandas.git",
+    "numpy":       "https://github.com/numpy/numpy.git",
+    "requests":    "https://github.com/psf/requests.git",
+    "aiohttp":     "https://github.com/aio-libs/aiohttp.git",
+    "litestar":    "https://github.com/litestar-org/litestar.git",
+    "msgspec":     "https://github.com/jcrist/msgspec.git",
+    "polars":      "https://github.com/pola-rs/polars.git",
+    "typer":       "https://github.com/fastapi/typer.git",
+    "aiofiles":    "https://github.com/Tinche/aiofiles.git",
+    "structlog":   "https://github.com/hynek/structlog.git",
+}
+
+
+def _libraries_in_query(query: str) -> list[str]:
+    """Return library names from LIBRARY_REGISTRY that appear in ``query``.
+
+    Case-insensitive whole-word match so ``"fastapi"`` matches but
+    ``"fastapi-users"`` doesn't (which would be a different package).
+    """
+    if not query:
+        return []
+    q = query.lower()
+    hits: list[str] = []
+    for name in LIBRARY_REGISTRY:
+        # Word-boundary match. Library names are pure ASCII.
+        pat = re.compile(rf"(?<![a-z0-9_-]){re.escape(name)}(?![a-z0-9_-])")
+        if pat.search(q):
+            hits.append(name)
+    return hits
+
+
+def _user_indexed_library_names(user_id: str | None) -> set[str]:
+    """Return the (lowercased) display_names of repos already in the user's
+    collection. Best-effort: any failure returns empty so we never block a
+    query on this lookup."""
+    if not user_id:
+        return set()
+    try:
+        from synsc.database.connection import get_session
+        from sqlalchemy import text as _sql_text
+
+        with get_session() as session:
+            rows = session.execute(
+                _sql_text(
+                    "SELECT lower(display_name), lower(external_ref) FROM sources "
+                    "WHERE user_id = :uid"
+                ),
+                {"uid": user_id},
+            ).fetchall()
+        names: set[str] = set()
+        for dn, er in rows:
+            if dn:
+                # match on the last path segment too (e.g. "fastapi/fastapi" → "fastapi")
+                names.add(dn)
+                names.add(dn.split("/")[-1])
+            if er:
+                # extract repo slug from a git URL
+                m = re.search(r"/([^/]+?)(?:\.git)?$", er)
+                if m:
+                    names.add(m.group(1).lower())
+        return names
+    except Exception:
+        return set()
+
+
+def _queue_async_index(url: str, display_name: str, user_id: str | None) -> None:
+    """Queue a background indexing job. Best-effort fire-and-forget.
+
+    Called from the search path when the caller passes auto_index_on_miss=True
+    and the query mentions a registry library the user hasn't indexed yet.
+    """
+    if not user_id:
+        return
+    try:
+        import asyncio
+
+        # If we're inside an event loop (FastAPI request handler), schedule
+        # via create_task; otherwise spin up a one-shot loop.
+        async def _run() -> None:
+            try:
+                index_source(
+                    source_type="repo",
+                    url=url,
+                    display_name=display_name,
+                    options=None,
+                    user_id=user_id,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "auto_index_on_miss background index failed",
+                    url=url, error=str(e),
+                )
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_run())
+        except RuntimeError:
+            # No running loop — fall back to a detached thread so the search
+            # caller doesn't block.
+            import threading
+            t = threading.Thread(target=lambda: asyncio.run(_run()), daemon=True)
+            t.start()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("auto_index_on_miss: could not queue", url=url, error=str(e))
+
+
+def _maybe_auto_index_on_miss(query: str, user_id: str | None) -> list[str]:
+    """If the query mentions registry libraries the user hasn't indexed,
+    queue them in the background and return the list of queued names."""
+    mentioned = _libraries_in_query(query)
+    if not mentioned:
+        return []
+    have = _user_indexed_library_names(user_id)
+    queued: list[str] = []
+    for name in mentioned:
+        if name in have:
+            continue
+        url = LIBRARY_REGISTRY.get(name)
+        if not url:
+            continue
+        _queue_async_index(url=url, display_name=name, user_id=user_id)
+        queued.append(name)
+        logger.info("auto_index_on_miss: queued", lib=name, url=url)
+    return queued
+
+
 def unified_retrieve(
     query: str,
     source_ids: list[str] | None = None,
     source_types: list[str] | None = None,
     k: int = 10,
     user_id: str | None = None,
+    auto_index_on_miss: bool = False,
 ) -> list[dict[str, Any]]:
     """Fan out a query across code / papers / datasets, merge and sort.
 
     Each branch is best-effort: a failure (missing user_id, service error)
     is logged and the branch contributes zero hits rather than aborting
     the whole call.
+
+    When ``auto_index_on_miss=True`` and the query mentions a library from
+    ``LIBRARY_REGISTRY`` that the user hasn't indexed, the missing repo is
+    queued for background indexing. The current call returns whatever the
+    existing index can find now — same-call latency is unchanged. The next
+    query against the same library lands fresh hits once the worker drains.
     """
+    if auto_index_on_miss:
+        _maybe_auto_index_on_miss(query, user_id)
+
     types = set(source_types or ["repo", "paper", "dataset", "docs"])
     hits: list[dict] = []
 
