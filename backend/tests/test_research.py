@@ -354,3 +354,349 @@ def test_research_config_defaults():
     assert cfg.model_quick.startswith("gemini-")
     assert cfg.model_deep.startswith("gemini-")
     assert cfg.quick_rpm > cfg.deep_rpm > cfg.oracle_rpm  # tighter caps for heavier modes
+
+
+# ---------------------------------------------------------------------------
+# Anthropic provider + quota-driven fallback
+# ---------------------------------------------------------------------------
+
+
+def _make_quota_error(
+    status_code: int | None = None,
+    code: int | None = None,
+    message: str = "boom",
+) -> Exception:
+    """Build an exception that mimics SDK-raised quota/rate-limit errors.
+
+    Anthropic SDK exposes `.status_code`; Gemini's google-genai exposes `.code`.
+    Tests use both shapes to exercise `_is_quota_error`'s heuristic.
+    """
+    err = RuntimeError(message)
+    if status_code is not None:
+        err.status_code = status_code  # type: ignore[attr-defined]
+    if code is not None:
+        err.code = code  # type: ignore[attr-defined]
+    return err
+
+
+@pytest.mark.parametrize(
+    "err, expected",
+    [
+        (_make_quota_error(status_code=429), True),
+        (_make_quota_error(code=429), True),
+        (_make_quota_error(message="429 Too Many Requests"), True),
+        (_make_quota_error(message="Quota exceeded for project"), True),
+        (_make_quota_error(message="rate limit reached"), True),
+        (_make_quota_error(message="RESOURCE_EXHAUSTED"), True),
+        (_make_quota_error(status_code=500, message="internal"), False),
+        (_make_quota_error(status_code=401, message="invalid api key"), False),
+        (_make_quota_error(message="connection reset"), False),
+    ],
+)
+def test_is_quota_error_matrix(err: Exception, expected: bool):
+    from synsc.services.research_service import _is_quota_error
+
+    assert _is_quota_error(err) is expected
+
+
+def test_fallback_provider_routes_on_quota_error_and_swaps_model():
+    """Primary 429 → wrapper calls fallback with the mapped model id."""
+    from synsc.services.research_providers.base import GeneratedAnswer
+    from synsc.services.research_service import _FallbackProvider
+
+    primary = MagicMock()
+    primary.generate.side_effect = _make_quota_error(status_code=429, message="quota")
+
+    fallback = MagicMock()
+    fallback.generate.return_value = GeneratedAnswer(text="ok", tokens_in=5, tokens_out=2)
+
+    wrapper = _FallbackProvider(
+        primary=primary,
+        fallback=fallback,
+        model_map={"gemini-2.5-pro": "claude-opus-4-8"},
+    )
+
+    answer = wrapper.generate(prompt="q", context_blocks=[], model="gemini-2.5-pro")
+
+    assert answer.text == "ok"
+    primary.generate.assert_called_once_with("q", [], "gemini-2.5-pro")
+    fallback.generate.assert_called_once_with("q", [], "claude-opus-4-8")
+
+
+def test_fallback_provider_propagates_non_quota_errors():
+    """Auth / 5xx / unknown errors must surface unchanged — no silent retry."""
+    from synsc.services.research_service import _FallbackProvider
+
+    primary = MagicMock()
+    primary.generate.side_effect = RuntimeError("invalid api key")  # 401-style
+    fallback = MagicMock()
+
+    wrapper = _FallbackProvider(primary=primary, fallback=fallback, model_map={})
+
+    with pytest.raises(RuntimeError, match="invalid api key"):
+        wrapper.generate(prompt="q", context_blocks=[], model="m1")
+
+    fallback.generate.assert_not_called()
+
+
+def test_fallback_provider_passes_primary_model_when_unmapped():
+    """Unknown primary model id → fallback receives the same id (no silent rename)."""
+    from synsc.services.research_providers.base import GeneratedAnswer
+    from synsc.services.research_service import _FallbackProvider
+
+    primary = MagicMock()
+    primary.generate.side_effect = _make_quota_error(code=429)
+    fallback = MagicMock()
+    fallback.generate.return_value = GeneratedAnswer(text="ok", tokens_in=1, tokens_out=1)
+
+    wrapper = _FallbackProvider(primary=primary, fallback=fallback, model_map={})
+
+    wrapper.generate(prompt="q", context_blocks=[], model="custom-model")
+
+    fallback.generate.assert_called_once_with("q", [], "custom-model")
+
+
+def test_research_service_provider_returns_bare_primary_when_fallback_disabled(
+    monkeypatch,
+):
+    """`fallback_provider=none` → property returns primary, not the wrapper."""
+    from synsc.services.research_service import ResearchService, _FallbackProvider
+
+    svc = ResearchService()
+    monkeypatch.setattr(svc.config.research, "provider", "gemini")
+    monkeypatch.setattr(svc.config.research, "api_key", "k")
+    monkeypatch.setattr(svc.config.research, "fallback_provider", "none")
+    monkeypatch.setattr(svc.config.research, "fallback_api_key", "ignored")
+
+    with patch.object(ResearchService, "_build_provider", staticmethod(lambda *_: MagicMock())):
+        provider = svc.provider
+
+    assert not isinstance(provider, _FallbackProvider)
+
+
+def test_research_service_provider_skips_wrapper_when_fallback_key_missing(
+    monkeypatch,
+):
+    """Fallback configured but no key → no wrapper (prevents broken-on-quota state)."""
+    from synsc.services.research_service import ResearchService, _FallbackProvider
+
+    svc = ResearchService()
+    monkeypatch.setattr(svc.config.research, "provider", "gemini")
+    monkeypatch.setattr(svc.config.research, "api_key", "k")
+    monkeypatch.setattr(svc.config.research, "fallback_provider", "anthropic")
+    monkeypatch.setattr(svc.config.research, "fallback_api_key", "")
+
+    with patch.object(ResearchService, "_build_provider", staticmethod(lambda *_: MagicMock())):
+        provider = svc.provider
+
+    assert not isinstance(provider, _FallbackProvider)
+
+
+def test_research_service_provider_builds_wrapper_when_fallback_configured(
+    monkeypatch,
+):
+    """Both keys present → property returns `_FallbackProvider` with mapped models."""
+    from synsc.services.research_service import ResearchService, _FallbackProvider
+
+    svc = ResearchService()
+    monkeypatch.setattr(svc.config.research, "provider", "gemini")
+    monkeypatch.setattr(svc.config.research, "api_key", "k")
+    monkeypatch.setattr(svc.config.research, "model_quick", "gemini-2.5-flash")
+    monkeypatch.setattr(svc.config.research, "model_deep", "gemini-2.5-pro")
+    monkeypatch.setattr(svc.config.research, "fallback_provider", "anthropic")
+    monkeypatch.setattr(svc.config.research, "fallback_api_key", "ka")
+    monkeypatch.setattr(svc.config.research, "fallback_model_quick", "claude-haiku-4-5")
+    monkeypatch.setattr(svc.config.research, "fallback_model_deep", "claude-opus-4-8")
+
+    built: list[tuple[str, str]] = []
+
+    def fake_build(name: str, api_key: str):
+        built.append((name, api_key))
+        return MagicMock(name=f"{name}-provider")
+
+    with patch.object(ResearchService, "_build_provider", staticmethod(fake_build)):
+        provider = svc.provider
+
+    assert isinstance(provider, _FallbackProvider)
+    assert built == [("gemini", "k"), ("anthropic", "ka")]
+    assert provider._model_map == {
+        "gemini-2.5-flash": "claude-haiku-4-5",
+        "gemini-2.5-pro": "claude-opus-4-8",
+    }
+
+
+def test_anthropic_provider_rejects_empty_api_key():
+    from synsc.services.research_providers.anthropic import AnthropicResearchProvider
+
+    with pytest.raises(ValueError, match="non-empty api_key"):
+        AnthropicResearchProvider(api_key="")
+
+
+def test_anthropic_provider_generates_answer_via_streaming():
+    """Provider must use `messages.stream()` + `get_final_message()` and
+    return a `GeneratedAnswer` with text + usage extracted from the final
+    message."""
+    from synsc.services.research_providers.anthropic import AnthropicResearchProvider
+
+    text_block = MagicMock()
+    text_block.type = "text"
+    text_block.text = "Forty-two."
+    non_text_block = MagicMock()
+    non_text_block.type = "tool_use"  # must be filtered out
+
+    final = MagicMock()
+    final.content = [text_block, non_text_block]
+    final.usage.input_tokens = 123
+    final.usage.output_tokens = 7
+
+    stream_cm = MagicMock()
+    stream_cm.__enter__ = MagicMock(return_value=stream_cm)
+    stream_cm.__exit__ = MagicMock(return_value=False)
+    stream_cm.get_final_message.return_value = final
+
+    fake_client = MagicMock()
+    fake_client.messages.stream.return_value = stream_cm
+
+    with patch(
+        "synsc.services.research_providers.anthropic.Anthropic",
+        return_value=fake_client,
+    ) as anthropic_ctor:
+        provider = AnthropicResearchProvider(api_key="test-key")
+        answer = provider.generate(
+            prompt="What?",
+            context_blocks=[{"source_id": "s1", "chunk_id": "c1", "text": "x"}],
+            model="claude-opus-4-8",
+        )
+
+    anthropic_ctor.assert_called_once_with(api_key="test-key")
+    _, kwargs = fake_client.messages.stream.call_args
+    assert kwargs["model"] == "claude-opus-4-8"
+    assert kwargs["messages"][0]["role"] == "user"
+    assert "Question: What?" in kwargs["messages"][0]["content"]
+    assert kwargs["max_tokens"] > 0
+
+    assert isinstance(answer, GeneratedAnswer)
+    assert answer.text == "Forty-two."  # non-text block dropped
+    assert answer.tokens_in == 123
+    assert answer.tokens_out == 7
+
+
+def test_anthropic_provider_render_prompt_includes_question_and_blocks():
+    from synsc.services.research_providers.anthropic import AnthropicResearchProvider
+
+    rendered = AnthropicResearchProvider._render_prompt(
+        "What is X?",
+        [
+            {"source_id": "s1", "chunk_id": "c1", "text": "X is a thing."},
+            {"source_id": "s2", "chunk_id": "c2", "text": "X relates to Y."},
+        ],
+    )
+    assert "Question: What is X?" in rendered
+    assert "X is a thing." in rendered
+    assert "X relates to Y." in rendered
+    assert "[chunk:<chunk_id>]" in rendered
+    assert rendered.rstrip().endswith("Answer:")
+
+
+def test_anthropic_provider_tokens_default_to_zero_when_usage_missing():
+    """If the SDK final-message has no `usage`, token counts must be 0 — not
+    crash with AttributeError."""
+    from synsc.services.research_providers.anthropic import AnthropicResearchProvider
+
+    final = MagicMock()
+    final.content = []
+    final.usage = None
+
+    stream_cm = MagicMock()
+    stream_cm.__enter__ = MagicMock(return_value=stream_cm)
+    stream_cm.__exit__ = MagicMock(return_value=False)
+    stream_cm.get_final_message.return_value = final
+
+    fake_client = MagicMock()
+    fake_client.messages.stream.return_value = stream_cm
+
+    with patch(
+        "synsc.services.research_providers.anthropic.Anthropic",
+        return_value=fake_client,
+    ):
+        provider = AnthropicResearchProvider(api_key="k")
+        answer = provider.generate(prompt="q", context_blocks=[], model="claude-opus-4-8")
+
+    assert answer.text == ""
+    assert answer.tokens_in == 0
+    assert answer.tokens_out == 0
+
+
+def test_research_service_build_provider_rejects_unknown_name():
+    from synsc.services.research_service import ResearchService
+
+    with pytest.raises(ValueError, match="Unknown research provider"):
+        ResearchService._build_provider("openai", "k")
+
+
+def test_research_service_build_provider_anthropic_branch():
+    """`_build_provider("anthropic", ...)` returns an `AnthropicResearchProvider`."""
+    from synsc.services.research_providers.anthropic import AnthropicResearchProvider
+    from synsc.services.research_service import ResearchService
+
+    with patch(
+        "synsc.services.research_providers.anthropic.Anthropic",
+        return_value=MagicMock(),
+    ):
+        provider = ResearchService._build_provider("anthropic", "k")
+
+    assert isinstance(provider, AnthropicResearchProvider)
+
+
+@pytest.mark.parametrize("role", ["primary", "fallback"])
+def test_research_service_build_provider_with_role_annotates_failures(role: str):
+    """A bad provider name surfaces *which* role was misconfigured."""
+    from synsc.services.research_service import ResearchService
+
+    with pytest.raises(ValueError, match=f"{role} provider misconfigured"):
+        ResearchService._build_provider_with_role("openai", "k", role=role)
+
+
+def test_research_config_fallback_key_ignored_when_provider_disabled(monkeypatch):
+    """`ANTHROPIC_API_KEY` set in the env does not arm the fallback unless
+    `SYNSC_RESEARCH_FALLBACK_PROVIDER=anthropic` is also set.
+
+    Prevents a stray Anthropic key (e.g. used by a different tool in the
+    same shell) from silently re-arming the research fallback after a user
+    has turned it off.
+    """
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-stray")
+    monkeypatch.delenv("SYNSC_RESEARCH_FALLBACK_PROVIDER", raising=False)
+    monkeypatch.delenv("SYNSC_RESEARCH_FALLBACK_API_KEY", raising=False)
+
+    cfg = SynscConfig.from_env()
+    assert cfg.research.fallback_provider == "none"
+    assert cfg.research.fallback_api_key == ""
+
+
+def test_research_config_fallback_key_loaded_when_provider_is_anthropic(monkeypatch):
+    """When the fallback provider is explicitly Anthropic, `ANTHROPIC_API_KEY`
+    feeds `fallback_api_key`."""
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("SYNSC_RESEARCH_FALLBACK_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    monkeypatch.delenv("SYNSC_RESEARCH_FALLBACK_API_KEY", raising=False)
+
+    cfg = SynscConfig.from_env()
+    assert cfg.research.fallback_provider == "anthropic"
+    assert cfg.research.fallback_api_key == "sk-ant-x"
+
+
+def test_research_config_explicit_fallback_key_wins_over_provider_var(monkeypatch):
+    """`SYNSC_RESEARCH_FALLBACK_API_KEY` is the unconditional override."""
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("SYNSC_RESEARCH_FALLBACK_PROVIDER", "anthropic")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-provider-var")
+    monkeypatch.setenv("SYNSC_RESEARCH_FALLBACK_API_KEY", "from-explicit-var")
+
+    cfg = SynscConfig.from_env()
+    assert cfg.research.fallback_api_key == "from-explicit-var"

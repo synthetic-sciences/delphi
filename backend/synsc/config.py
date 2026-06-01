@@ -492,9 +492,17 @@ class SynscConfig(BaseModel):
             config.research.model_deep = model_deep
         if fallback_provider := os.getenv("SYNSC_RESEARCH_FALLBACK_PROVIDER"):
             config.research.fallback_provider = fallback_provider  # type: ignore
-        if fallback_key := os.getenv("ANTHROPIC_API_KEY") or os.getenv(
-            "SYNSC_RESEARCH_FALLBACK_API_KEY"
-        ):
+        # Provider-scoped env var lookup: ANTHROPIC_API_KEY only feeds the
+        # research fallback when that fallback is explicitly Anthropic, so a
+        # key set for unrelated services doesn't silently re-arm the fallback.
+        # SYNSC_RESEARCH_FALLBACK_API_KEY is the unconditional override.
+        explicit_fallback_key = os.getenv("SYNSC_RESEARCH_FALLBACK_API_KEY")
+        provider_scoped_key = (
+            os.getenv("ANTHROPIC_API_KEY")
+            if config.research.fallback_provider == "anthropic"
+            else None
+        )
+        if fallback_key := explicit_fallback_key or provider_scoped_key:
             config.research.fallback_api_key = fallback_key
         if fallback_quick := os.getenv("SYNSC_RESEARCH_FALLBACK_MODEL_QUICK"):
             config.research.fallback_model_quick = fallback_quick

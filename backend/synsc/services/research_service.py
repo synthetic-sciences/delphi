@@ -94,17 +94,33 @@ class ResearchService:
         if self._provider is not None:
             return self._provider
         cfg = self.config.research
-        primary = self._build_provider(cfg.provider, cfg.api_key)
+        primary = self._build_provider_with_role(cfg.provider, cfg.api_key, role="primary")
 
         if cfg.fallback_provider == "none" or not cfg.fallback_api_key:
             return primary
 
-        fallback = self._build_provider(cfg.fallback_provider, cfg.fallback_api_key)
+        fallback = self._build_provider_with_role(
+            cfg.fallback_provider, cfg.fallback_api_key, role="fallback",
+        )
         model_map = {
             cfg.model_quick: cfg.fallback_model_quick,
             cfg.model_deep: cfg.fallback_model_deep,
         }
         return _FallbackProvider(primary, fallback, model_map)
+
+    @classmethod
+    def _build_provider_with_role(
+        cls, name: str, api_key: str, *, role: str,
+    ) -> ResearchProvider:
+        """Wrap `_build_provider` so config errors name the role that failed.
+
+        Without the role, `ValueError: Unknown research provider: X` is
+        ambiguous when both primary and fallback are configured.
+        """
+        try:
+            return cls._build_provider(name, api_key)
+        except ValueError as err:
+            raise ValueError(f"{role} provider misconfigured: {err}") from err
 
     @staticmethod
     def _build_provider(name: str, api_key: str) -> ResearchProvider:
