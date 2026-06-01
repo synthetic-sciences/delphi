@@ -256,6 +256,13 @@ class ResearchConfig(BaseModel):
     api_key: str = Field(default="", description="API key for the configured provider")
     model_quick: str = Field(default="gemini-2.5-flash")
     model_deep: str = Field(default="gemini-2.5-pro")
+    fallback_provider: Literal["gemini", "anthropic", "none"] = Field(
+        default="none",
+        description="Secondary provider used on primary 429/quota errors. 'none' disables fallback.",
+    )
+    fallback_api_key: str = Field(default="", description="API key for the fallback provider")
+    fallback_model_quick: str = Field(default="claude-opus-4-8")
+    fallback_model_deep: str = Field(default="claude-opus-4-8")
     quick_top_k: int = Field(default=10)
     deep_top_k: int = Field(default=25)
     deep_max_hops: int = Field(default=3)
@@ -483,6 +490,16 @@ class SynscConfig(BaseModel):
             config.research.model_quick = model_quick
         if model_deep := os.getenv("SYNSC_RESEARCH_MODEL_DEEP"):
             config.research.model_deep = model_deep
+        if fallback_provider := os.getenv("SYNSC_RESEARCH_FALLBACK_PROVIDER"):
+            config.research.fallback_provider = fallback_provider  # type: ignore
+        if fallback_key := os.getenv("ANTHROPIC_API_KEY") or os.getenv(
+            "SYNSC_RESEARCH_FALLBACK_API_KEY"
+        ):
+            config.research.fallback_api_key = fallback_key
+        if fallback_quick := os.getenv("SYNSC_RESEARCH_FALLBACK_MODEL_QUICK"):
+            config.research.fallback_model_quick = fallback_quick
+        if fallback_deep := os.getenv("SYNSC_RESEARCH_FALLBACK_MODEL_DEEP"):
+            config.research.fallback_model_deep = fallback_deep
 
         # Feature flags
         if enable_code := os.getenv("ENABLE_CODE_INDEXING"):

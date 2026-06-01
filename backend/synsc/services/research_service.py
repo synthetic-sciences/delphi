@@ -12,7 +12,7 @@ from typing import Any, Literal
 import structlog
 
 from synsc.config import get_config
-from synsc.services.research_providers.base import ResearchProvider
+from synsc.services.research_providers.base import GeneratedAnswer, ResearchProvider
 
 logger = structlog.get_logger(__name__)
 
@@ -21,6 +21,62 @@ ResearchMode = Literal["quick", "deep", "oracle"]
 RetrieveFn = Callable[..., list[dict[str, Any]]]
 
 _REFINE_PREFIX = "REFINE:"
+
+_QUOTA_HINTS = (
+    "429",
+    "quota",
+    "rate limit",
+    "rate_limit",
+    "resource_exhausted",
+    "resource exhausted",
+)
+
+
+def _is_quota_error(err: BaseException) -> bool:
+    """Heuristic: identify quota/rate-limit errors across provider SDKs."""
+    code = getattr(err, "status_code", None) or getattr(err, "code", None)
+    if code == 429:
+        return True
+    msg = str(err).lower()
+    return any(hint in msg for hint in _QUOTA_HINTS)
+
+
+class _FallbackProvider:
+    """Wraps a primary ResearchProvider with a secondary one used on quota errors.
+
+    Mirrors the ResearchProvider Protocol so callers do not need to know a
+    fallback exists. Errors that are not quota-related propagate unchanged.
+    """
+
+    def __init__(
+        self,
+        primary: ResearchProvider,
+        fallback: ResearchProvider,
+        model_map: dict[str, str],
+    ):
+        self._primary = primary
+        self._fallback = fallback
+        self._model_map = model_map
+
+    def generate(
+        self,
+        prompt: str,
+        context_blocks: list[dict],
+        model: str,
+    ) -> GeneratedAnswer:
+        try:
+            return self._primary.generate(prompt, context_blocks, model)
+        except Exception as err:
+            if not _is_quota_error(err):
+                raise
+            fallback_model = self._model_map.get(model, model)
+            logger.warning(
+                "research.primary_quota_exhausted_falling_back",
+                primary_model=model,
+                fallback_model=fallback_model,
+                error=str(err)[:200],
+            )
+            return self._fallback.generate(prompt, context_blocks, fallback_model)
 
 
 class ResearchService:
@@ -38,10 +94,29 @@ class ResearchService:
         if self._provider is not None:
             return self._provider
         cfg = self.config.research
-        if cfg.provider == "gemini":
+        primary = self._build_provider(cfg.provider, cfg.api_key)
+
+        if cfg.fallback_provider == "none" or not cfg.fallback_api_key:
+            return primary
+
+        fallback = self._build_provider(cfg.fallback_provider, cfg.fallback_api_key)
+        model_map = {
+            cfg.model_quick: cfg.fallback_model_quick,
+            cfg.model_deep: cfg.fallback_model_deep,
+        }
+        return _FallbackProvider(primary, fallback, model_map)
+
+    @staticmethod
+    def _build_provider(name: str, api_key: str) -> ResearchProvider:
+        if name == "gemini":
             from synsc.services.research_providers.gemini import GeminiResearchProvider
-            return GeminiResearchProvider(api_key=cfg.api_key)
-        raise ValueError(f"Unknown research provider: {cfg.provider}")
+            return GeminiResearchProvider(api_key=api_key)
+        if name == "anthropic":
+            from synsc.services.research_providers.anthropic import (
+                AnthropicResearchProvider,
+            )
+            return AnthropicResearchProvider(api_key=api_key)
+        raise ValueError(f"Unknown research provider: {name}")
 
     @property
     def retrieve(self) -> RetrieveFn:
