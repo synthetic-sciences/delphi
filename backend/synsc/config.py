@@ -490,8 +490,15 @@ class SynscConfig(BaseModel):
             config.research.model_quick = model_quick
         if model_deep := os.getenv("SYNSC_RESEARCH_MODEL_DEEP"):
             config.research.model_deep = model_deep
-        if fallback_provider := os.getenv("SYNSC_RESEARCH_FALLBACK_PROVIDER"):
-            config.research.fallback_provider = fallback_provider  # type: ignore
+        if fallback_provider_raw := os.getenv("SYNSC_RESEARCH_FALLBACK_PROVIDER"):
+            normalized = fallback_provider_raw.strip().lower()
+            allowed_fallback = {"gemini", "anthropic", "none"}
+            if normalized not in allowed_fallback:
+                raise ValueError(
+                    f"SYNSC_RESEARCH_FALLBACK_PROVIDER must be one of "
+                    f"{sorted(allowed_fallback)}, got {fallback_provider_raw!r}",
+                )
+            config.research.fallback_provider = normalized  # type: ignore[assignment]
         # Provider-scoped env var lookup: ANTHROPIC_API_KEY only feeds the
         # research fallback when that fallback is explicitly Anthropic, so a
         # key set for unrelated services doesn't silently re-arm the fallback.

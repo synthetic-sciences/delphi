@@ -87,16 +87,20 @@ class ResearchService:
     ):
         self.config = get_config()
         self._provider = provider
+        self._cached_provider: ResearchProvider | None = None
         self._retrieve = retrieve_fn
 
     @property
     def provider(self) -> ResearchProvider:
         if self._provider is not None:
             return self._provider
+        if self._cached_provider is not None:
+            return self._cached_provider
         cfg = self.config.research
         primary = self._build_provider_with_role(cfg.provider, cfg.api_key, role="primary")
 
         if cfg.fallback_provider == "none" or not cfg.fallback_api_key:
+            self._cached_provider = primary
             return primary
 
         fallback = self._build_provider_with_role(
@@ -106,7 +110,8 @@ class ResearchService:
             cfg.model_quick: cfg.fallback_model_quick,
             cfg.model_deep: cfg.fallback_model_deep,
         }
-        return _FallbackProvider(primary, fallback, model_map)
+        self._cached_provider = _FallbackProvider(primary, fallback, model_map)
+        return self._cached_provider
 
     @classmethod
     def _build_provider_with_role(

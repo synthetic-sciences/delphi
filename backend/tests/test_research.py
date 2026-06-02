@@ -700,3 +700,92 @@ def test_research_config_explicit_fallback_key_wins_over_provider_var(monkeypatc
 
     cfg = SynscConfig.from_env()
     assert cfg.research.fallback_api_key == "from-explicit-var"
+
+
+def test_research_config_rejects_invalid_fallback_provider(monkeypatch):
+    """Unknown value in `SYNSC_RESEARCH_FALLBACK_PROVIDER` fails fast at
+    config-load with a message naming the env var and the allowed set —
+    not silently at first-call time."""
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("SYNSC_RESEARCH_FALLBACK_PROVIDER", "openai")
+
+    with pytest.raises(ValueError, match="SYNSC_RESEARCH_FALLBACK_PROVIDER"):
+        SynscConfig.from_env()
+
+
+def test_research_config_normalizes_fallback_provider_case(monkeypatch):
+    """Mixed-case env values are coerced to the canonical lowercase form so
+    the Literal-typed field stays valid."""
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("SYNSC_RESEARCH_FALLBACK_PROVIDER", " Anthropic ")
+    monkeypatch.setenv("SYNSC_RESEARCH_FALLBACK_API_KEY", "k")
+
+    cfg = SynscConfig.from_env()
+    assert cfg.research.fallback_provider == "anthropic"
+
+
+def test_research_service_caches_built_provider(monkeypatch):
+    """Repeated `.provider` access must reuse the built instance — SDK
+    clients are not cheap to recreate and may hold connection pools."""
+    from synsc.services.research_service import ResearchService
+
+    svc = ResearchService()
+    monkeypatch.setattr(svc.config.research, "provider", "gemini")
+    monkeypatch.setattr(svc.config.research, "api_key", "k")
+    monkeypatch.setattr(svc.config.research, "fallback_provider", "none")
+
+    build_count = 0
+
+    def fake_build(name, api_key):
+        nonlocal build_count
+        build_count += 1
+        return MagicMock(name=f"provider-{build_count}")
+
+    with patch.object(ResearchService, "_build_provider", staticmethod(fake_build)):
+        first = svc.provider
+        second = svc.provider
+        third = svc.provider
+
+    assert first is second is third
+    assert build_count == 1
+
+
+def test_research_service_caches_fallback_wrapper(monkeypatch):
+    """Cache also applies to the `_FallbackProvider` wrapper path so neither
+    primary nor fallback SDK clients are rebuilt on every access."""
+    from synsc.services.research_service import ResearchService, _FallbackProvider
+
+    svc = ResearchService()
+    monkeypatch.setattr(svc.config.research, "provider", "gemini")
+    monkeypatch.setattr(svc.config.research, "api_key", "k")
+    monkeypatch.setattr(svc.config.research, "fallback_provider", "anthropic")
+    monkeypatch.setattr(svc.config.research, "fallback_api_key", "ka")
+
+    build_count = 0
+
+    def fake_build(name, api_key):
+        nonlocal build_count
+        build_count += 1
+        return MagicMock(name=f"{name}-{build_count}")
+
+    with patch.object(ResearchService, "_build_provider", staticmethod(fake_build)):
+        first = svc.provider
+        second = svc.provider
+
+    assert isinstance(first, _FallbackProvider)
+    assert first is second
+    assert build_count == 2  # primary + fallback, built once each
+
+
+def test_research_service_injected_provider_bypasses_cache():
+    """An injected provider (constructor arg) is returned directly without
+    touching the cache slot — keeps test injection ergonomic."""
+    from synsc.services.research_service import ResearchService
+
+    injected = MagicMock()
+    svc = ResearchService(provider=injected)
+
+    assert svc.provider is injected
+    assert svc._cached_provider is None
