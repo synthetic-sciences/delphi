@@ -137,33 +137,40 @@ Provides deep context to AI agents through:
     )
 
     # ------------------------------------------------------------------
-    # Scoped MCP surfaces (Nia parity).
+    # Scoped MCP surfaces.
     #
     # ``SYNSC_MCP_PROFILE`` selects a subset of tools to expose. Agents
     # pay a token cost for every tool definition in the MCP handshake;
     # exposing only the relevant subset for a workflow is a free win.
     #
     # Profile values:
-    #   all     — every tool (default)
-    #   code    — repos: index/search/symbols/context/analyze
+    #   code    — repos: index / search / symbols / context / analyze (default)
     #   papers  — papers + research + datasets
     #   docs    — docs / sources / generic search / resolve
-    #   thesis  — Thesis graph tools
+    #   atlas   — Atlas graph integration (claim/hypothesis/decision/insight
+    #             ingestion + graph-aware context packs). Only useful if
+    #             you are pushing nodes/edges/artifacts into Delphi from
+    #             an Atlas workspace — see docs/atlas-integration.md.
     #   minimal — resolve_source + search + read_source (the 3-tool starter)
+    #   all     — every tool
+    #
+    # The default is ``code`` so a fresh OSS install ships a clean
+    # code-focused MCP surface without Atlas-graph tools that a
+    # standalone user can't drive.
     # ------------------------------------------------------------------
-    _profile = os.environ.get("SYNSC_MCP_PROFILE", "all").strip().lower()
+    _profile = os.environ.get("SYNSC_MCP_PROFILE", "code").strip().lower()
     _profile_groups: dict[str, set[str]] = {
-        "all": {"code", "papers", "datasets", "research", "docs", "thesis", "sources", "minimal"},
+        "all": {"code", "papers", "datasets", "research", "docs", "atlas", "sources", "minimal"},
         "code": {"code", "sources", "minimal"},
         "papers": {"papers", "research", "datasets", "sources", "minimal"},
         "docs": {"docs", "sources", "minimal"},
-        "thesis": {"thesis", "sources", "minimal"},
+        "atlas": {"atlas", "sources", "minimal"},
         "minimal": {"minimal"},
     }
-    _enabled_groups = _profile_groups.get(_profile, _profile_groups["all"])
+    _enabled_groups = _profile_groups.get(_profile, _profile_groups["code"])
     if _profile not in _profile_groups:
         logger.warning(
-            "unknown SYNSC_MCP_PROFILE, falling back to 'all'",
+            "unknown SYNSC_MCP_PROFILE, falling back to 'code'",
             profile=_profile,
         )
 
@@ -1083,9 +1090,9 @@ Provides deep context to AI agents through:
         repo_ids: list[str] | None = None,
         top_k: int = 10,
     ) -> dict[str, Any]:
-        """Joint retrieval across papers, code, and the Thesis graph.
+        """Joint retrieval across papers, code, and the Atlas graph.
 
-        Single tool call returns paper hits + code hits + Thesis-graph hits
+        Single tool call returns paper hits + code hits + Atlas-graph hits
         for a query. Built for research workflows where the agent wants to
         cite a paper, reference an implementation, and pick up prior
         decisions from the graph in one shot.
@@ -2199,7 +2206,7 @@ Provides deep context to AI agents through:
         source_types: list[str] | None = None,
         topic: str | None = None,
         tokens: int | None = None,
-        thesis_workspace_id: str | None = None,
+        atlas_workspace_id: str | None = None,
         notes: str | None = None,
     ) -> dict[str, Any]:
         """Save a named context (indexed source set + preferences).
@@ -2214,7 +2221,7 @@ Provides deep context to AI agents through:
             source_types: Default source type filter.
             topic: Default topic filter to apply on subsequent fetches.
             tokens: Default token budget.
-            thesis_workspace_id: Optional Thesis workspace to bind to.
+            atlas_workspace_id: Optional Atlas workspace to bind to.
             notes: Free-form notes — e.g., what this context is for.
         """
         from synsc.services.context_blob_service import save_context as _save
@@ -2231,7 +2238,7 @@ Provides deep context to AI agents through:
             "source_types": source_types or [],
             "topic": topic,
             "tokens": tokens,
-            "thesis_workspace_id": thesis_workspace_id,
+            "atlas_workspace_id": atlas_workspace_id,
             "notes": notes,
         }
         try:
@@ -2398,17 +2405,17 @@ Provides deep context to AI agents through:
         return result
 
     # ==========================================================================
-    # THESIS CONNECTOR TOOLS
+    # ATLAS CONNECTOR TOOLS
     # ==========================================================================
     #
-    # Thesis is the long-running research workflow system. Agents working in
-    # Thesis need: "what's already been tried", "what's been decided", "what
+    # Atlas is the long-running research workflow system. Agents working in
+    # Atlas need: "what's already been tried", "what's been decided", "what
     # tool contracts apply". The connector ports nodes / edges / artifacts /
     # executions / tool contracts into Delphi, then offers graph-aware
     # retrieval on top.
 
-    @_tool_in("thesis")
-    def thesis_register_workspace(
+    @_tool_in("atlas")
+    def atlas_register_workspace(
         external_id: str,
         name: str,
         display_name: str | None = None,
@@ -2416,8 +2423,8 @@ Provides deep context to AI agents through:
         tags: list[str] | None = None,
         is_public: bool = False,
     ) -> dict[str, Any]:
-        """Register (create or update) a Thesis workspace and link it to the user."""
-        from synsc.services.thesis_connector import ingest_workspace
+        """Register (create or update) an Atlas workspace and link it to the user."""
+        from synsc.services.atlas_connector import ingest_workspace
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2428,8 +2435,8 @@ Provides deep context to AI agents through:
             tags=tags, is_public=is_public,
         )
 
-    @_tool_in("thesis")
-    def thesis_ingest_node(
+    @_tool_in("atlas")
+    def atlas_ingest_node(
         workspace_id: str,
         external_id: str,
         node_type: str,
@@ -2444,13 +2451,13 @@ Provides deep context to AI agents through:
         is_committed: bool = False,
         created_by: str | None = None,
     ) -> dict[str, Any]:
-        """Index (or re-index) a Thesis node — claim/hypothesis/plan/decision/insight.
+        """Index (or re-index) an Atlas node — claim/hypothesis/plan/decision/insight.
 
         Embeds summary / content / rationale / outcome as separate chunks so
         a search for "rationale for choosing X" finds the rationale chunk
         instead of being diluted by the full node body.
         """
-        from synsc.services.thesis_connector import ingest_node
+        from synsc.services.atlas_connector import ingest_node
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2465,8 +2472,8 @@ Provides deep context to AI agents through:
             created_by=created_by,
         )
 
-    @_tool_in("thesis")
-    def thesis_ingest_edge(
+    @_tool_in("atlas")
+    def atlas_ingest_edge(
         workspace_id: str,
         source_external_id: str,
         target_external_id: str,
@@ -2474,7 +2481,7 @@ Provides deep context to AI agents through:
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Add a directed edge between two nodes in a workspace."""
-        from synsc.services.thesis_connector import ingest_edge
+        from synsc.services.atlas_connector import ingest_edge
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2486,8 +2493,8 @@ Provides deep context to AI agents through:
             edge_type=edge_type, metadata=metadata,
         )
 
-    @_tool_in("thesis")
-    def thesis_ingest_artifact(
+    @_tool_in("atlas")
+    def atlas_ingest_artifact(
         workspace_id: str,
         kind: str,
         node_external_id: str | None = None,
@@ -2498,7 +2505,7 @@ Provides deep context to AI agents through:
         external_id: str | None = None,
     ) -> dict[str, Any]:
         """Attach an artifact (table / plot / log / diff / metric / model)."""
-        from synsc.services.thesis_connector import ingest_artifact
+        from synsc.services.atlas_connector import ingest_artifact
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2510,8 +2517,8 @@ Provides deep context to AI agents through:
             metadata=metadata, external_id=external_id,
         )
 
-    @_tool_in("thesis")
-    def thesis_ingest_execution(
+    @_tool_in("atlas")
+    def atlas_ingest_execution(
         workspace_id: str,
         tool: str | None,
         status: str | None,
@@ -2525,7 +2532,7 @@ Provides deep context to AI agents through:
         external_id: str | None = None,
     ) -> dict[str, Any]:
         """Record an execution / tool-call against a node."""
-        from synsc.services.thesis_connector import ingest_execution
+        from synsc.services.atlas_connector import ingest_execution
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2538,8 +2545,8 @@ Provides deep context to AI agents through:
             external_id=external_id,
         )
 
-    @_tool_in("thesis")
-    def thesis_ingest_tool_contract(
+    @_tool_in("atlas")
+    def atlas_ingest_tool_contract(
         tool_name: str,
         workspace_id: str | None = None,
         display_name: str | None = None,
@@ -2551,9 +2558,9 @@ Provides deep context to AI agents through:
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
         """Register a tool-contract document so agents can fetch it via
-        ``thesis_retrieve_tool_contract``.
+        ``atlas_retrieve_tool_contract``.
         """
-        from synsc.services.thesis_connector import ingest_tool_contract
+        from synsc.services.atlas_connector import ingest_tool_contract
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2565,14 +2572,14 @@ Provides deep context to AI agents through:
             signature=signature, examples=examples, tags=tags,
         )
 
-    @_tool_in("thesis")
-    def build_thesis_context(
+    @_tool_in("atlas")
+    def build_atlas_context(
         question: str,
         node_id: str | None = None,
         workspace_ids: list[str] | None = None,
         token_budget: int = 4000,
     ) -> dict[str, Any]:
-        """Build a Thesis-aware context pack for a research question.
+        """Build an Atlas-aware context pack for a research question.
 
         Returns matched nodes (vector + BM25 + artifact-aware ranking),
         a 2-hop subgraph around the top match, relevant artifacts (tables,
@@ -2586,7 +2593,7 @@ Provides deep context to AI agents through:
             workspace_ids: Optional workspace scope.
             token_budget: Approximate target tokens for the pack body.
         """
-        from synsc.services.thesis_connector import build_thesis_context as _bld
+        from synsc.services.atlas_connector import build_atlas_context as _bld
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2596,7 +2603,7 @@ Provides deep context to AI agents through:
             workspace_ids=workspace_ids, token_budget=token_budget,
         )
 
-    @_tool_in("thesis")
+    @_tool_in("atlas")
     def summarize_relevant_subgraph(
         question: str,
         root_node_id: str | None = None,
@@ -2607,7 +2614,7 @@ Provides deep context to AI agents through:
         Useful before drilling in — agent gets shape + size + edge types
         without pulling every node body.
         """
-        from synsc.services.thesis_connector import summarize_relevant_subgraph as _sub
+        from synsc.services.atlas_connector import summarize_relevant_subgraph as _sub
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2617,7 +2624,7 @@ Provides deep context to AI agents through:
             root_node_id=root_node_id, max_depth=max_depth,
         )
 
-    @_tool_in("thesis")
+    @_tool_in("atlas")
     def find_related_nodes(
         node_id: str | None = None,
         question: str | None = None,
@@ -2625,12 +2632,12 @@ Provides deep context to AI agents through:
         edge_types: list[str] | None = None,
         top_k: int = 25,
     ) -> dict[str, Any]:
-        """Walk the Thesis graph from an anchor, BFS up to ``max_depth`` hops.
+        """Walk the Atlas graph from an anchor, BFS up to ``max_depth`` hops.
 
         Pass either ``node_id`` (an explicit anchor) or ``question`` (we
         anchor on the top semantic match). One must be supplied.
         """
-        from synsc.services.thesis_connector import find_related_nodes as _rel
+        from synsc.services.atlas_connector import find_related_nodes as _rel
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2650,14 +2657,14 @@ Provides deep context to AI agents through:
             "related": nodes,
         }
 
-    @_tool_in("thesis")
+    @_tool_in("atlas")
     def find_relevant_artifacts(
         question: str,
         workspace_ids: list[str] | None = None,
         kinds: list[str] | None = None,
         top_k: int = 10,
     ) -> dict[str, Any]:
-        """Find Thesis artifacts (tables / plots / logs) relevant to a question.
+        """Find Atlas artifacts (tables / plots / logs) relevant to a question.
 
         Args:
             question: Search query.
@@ -2665,7 +2672,7 @@ Provides deep context to AI agents through:
             kinds: Optional artifact-kind filter (e.g. ['table','metric']).
             top_k: Number of artifacts to return.
         """
-        from synsc.services.thesis_connector import find_relevant_artifacts as _art
+        from synsc.services.atlas_connector import find_relevant_artifacts as _art
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2676,8 +2683,8 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "question": question, "artifacts": artifacts}
 
-    @_tool_in("thesis")
-    def thesis_retrieve_tool_contract(
+    @_tool_in("atlas")
+    def atlas_retrieve_tool_contract(
         task: str,
         top_k: int = 5,
     ) -> dict[str, Any]:
@@ -2686,7 +2693,7 @@ Provides deep context to AI agents through:
         Returns signature + when_to_use + examples for each matched contract
         so the agent can call the tool correctly without separate lookup.
         """
-        from synsc.services.thesis_connector import retrieve_tool_contract
+        from synsc.services.atlas_connector import retrieve_tool_contract
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2696,8 +2703,8 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "task": task, "contracts": contracts}
 
-    @_tool_in("thesis")
-    def thesis_what_was_tried(
+    @_tool_in("atlas")
+    def atlas_what_was_tried(
         question: str,
         workspace_ids: list[str] | None = None,
         top_k: int = 10,
@@ -2707,7 +2714,7 @@ Provides deep context to AI agents through:
         Returns matched nodes plus their executions and outcomes — full
         "we tried Y, status was Z, here's what happened" picture.
         """
-        from synsc.services.thesis_connector import find_what_was_tried
+        from synsc.services.atlas_connector import find_what_was_tried
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2718,14 +2725,14 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @_tool_in("thesis")
-    def thesis_what_not_to_repeat(
+    @_tool_in("atlas")
+    def atlas_what_not_to_repeat(
         question: str,
         workspace_ids: list[str] | None = None,
         top_k: int = 10,
     ) -> dict[str, Any]:
         """"What should I not repeat?" — failed-outcome nodes for the question."""
-        from synsc.services.thesis_connector import find_what_not_to_repeat
+        from synsc.services.atlas_connector import find_what_not_to_repeat
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2736,13 +2743,13 @@ Provides deep context to AI agents through:
         )
         return {"success": True, **result}
 
-    @_tool_in("thesis")
-    def thesis_active_work_context(
+    @_tool_in("atlas")
+    def atlas_active_work_context(
         workspace_ids: list[str] | None = None,
         top_k: int = 10,
     ) -> dict[str, Any]:
         """Recent in-progress nodes + open executions — "what was I doing?"."""
-        from synsc.services.thesis_connector import get_active_work_context
+        from synsc.services.atlas_connector import get_active_work_context
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2751,8 +2758,8 @@ Provides deep context to AI agents through:
             user_id=user_id, workspace_ids=workspace_ids, top_k=top_k,
         )
 
-    @_tool_in("thesis")
-    def thesis_find_decisions(
+    @_tool_in("atlas")
+    def atlas_find_decisions(
         question: str,
         workspace_ids: list[str] | None = None,
         top_k: int = 5,
@@ -2762,7 +2769,7 @@ Provides deep context to AI agents through:
         Only nodes with ``node_type='decision'`` AND ``is_committed=TRUE``
         — locked-in rationale that subsequent work should respect.
         """
-        from synsc.services.thesis_connector import find_decisions
+        from synsc.services.atlas_connector import find_decisions
 
         user_id = get_authenticated_user_id()
         if not user_id:
@@ -2773,21 +2780,21 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "question": question, "decisions": decisions}
 
-    @_tool_in("thesis")
-    def thesis_search_nodes(
+    @_tool_in("atlas")
+    def atlas_search_nodes(
         query: str,
         workspace_ids: list[str] | None = None,
         node_types: list[str] | None = None,
         only_committed: bool = False,
         top_k: int = 10,
     ) -> dict[str, Any]:
-        """Hybrid search over Thesis nodes (vector + BM25 + artifact-aware)."""
-        from synsc.services.thesis_connector import search_thesis_nodes
+        """Hybrid search over Atlas nodes (vector + BM25 + artifact-aware)."""
+        from synsc.services.atlas_connector import search_atlas_nodes
 
         user_id = get_authenticated_user_id()
         if not user_id:
             return {"success": False, "error_code": "auth_required"}
-        nodes = search_thesis_nodes(
+        nodes = search_atlas_nodes(
             query=query, user_id=user_id,
             workspace_ids=workspace_ids, node_types=node_types,
             only_committed=only_committed, top_k=top_k,

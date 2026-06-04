@@ -5,7 +5,7 @@ Revises: 008_source_visibility
 Create Date: 2026-05-17
 
 Adds a BM25-style full-text column to documentation_chunks. Code, paper,
-and thesis-node chunks all got this in migration 004 / 005; docs were
+and atlas-node chunks all got this in migration 004 / 005; docs were
 vector-only, which underweights identifier-shaped queries like
 ``OAuth2PasswordBearer`` in conceptual doc retrieval.
 """

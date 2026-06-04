@@ -138,7 +138,7 @@ curl "http://localhost:8742/api/search/code?query=authentication+middleware" \
 | `index_paper` | Index from arXiv URL/ID or PDF upload. |
 | `search_papers` | Hybrid paper search with section-aware (Methods > Related Work) and citation-aware ranking, cross-encoder rerank. |
 | `extract_quoted_evidence` | Pull literal sentences from a paper that ground a claim. |
-| `joint_retrieval` | One call → paper + code + Thesis-graph hits, fused. |
+| `joint_retrieval` | One call → paper + code + Atlas-graph hits, fused. |
 | `get_citations` | Extract citation graph. |
 | `get_equations` | Extract equations with context. |
 | `generate_report` | Generate a markdown summary report. |
@@ -150,25 +150,9 @@ curl "http://localhost:8742/api/search/code?query=authentication+middleware" \
 | `index_dataset` | Index a HuggingFace dataset card. |
 | `search_datasets` | Semantic dataset search with cross-encoder rerank. |
 
-### Thesis (graph-aware research workflows)
-| Tool | Description |
-|------|-------------|
-| `thesis_register_workspace` | Register a Thesis workspace. |
-| `thesis_ingest_node` | Index a node (claim/hypothesis/plan/decision/insight). Embeds summary, content, rationale, and outcome as separate chunks. |
-| `thesis_ingest_edge` | Add a directed edge between two nodes. |
-| `thesis_ingest_artifact` | Attach a table/plot/log/diff/metric to a node. |
-| `thesis_ingest_execution` | Record a run / tool call against a node. |
-| `thesis_ingest_tool_contract` | Register tool docs (signature + when_to_use + examples). |
-| `thesis_search_nodes` | Hybrid graph search with artifact-aware + committed-decision boost. |
-| `find_related_nodes` | BFS the graph from a node or question. |
-| `find_relevant_artifacts` | Search artifacts by preview text + linked-node match. |
-| `thesis_retrieve_tool_contract` | Find tool docs applicable to a task. |
-| `summarize_relevant_subgraph` | Compact subgraph summary (shape + size + edges). |
-| `build_thesis_context` | Full Thesis-aware context pack: matched nodes + 2-hop subgraph + artifacts + tool contracts + what-was-tried + don't-repeat. |
-| `thesis_what_was_tried` | "What's already been tried for X?" — matched nodes + executions + outcomes. |
-| `thesis_what_not_to_repeat` | "What should I not repeat?" — failed-outcome nodes / failed executions. |
-| `thesis_active_work_context` | Recent in-progress nodes — "what was I doing?". |
-| `thesis_find_decisions` | Surface committed decisions related to a question. |
+### Atlas integration (optional)
+
+Delphi can ingest and retrieve over an [Atlas](https://github.com/synthetic-sciences/atlas) research graph (nodes, edges, artifacts, executions, tool contracts), with graph-aware context packs and "what was tried / don't-repeat / decision recall" surfaces. **Off by default** — these tools only make sense if you're pushing graph data into Delphi from an Atlas workspace, and they cost MCP-handshake tokens when exposed. Set `SYNSC_MCP_PROFILE=atlas` (or `all`) to turn them on. Full tool list and ingestion contracts in [`docs/atlas-integration.md`](docs/atlas-integration.md).
 
 ---
 

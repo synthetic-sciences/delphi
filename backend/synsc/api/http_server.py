@@ -2363,7 +2363,7 @@ def create_app() -> FastAPI:
                 "source_types",
                 "topic",
                 "tokens",
-                "thesis_workspace_id",
+                "atlas_workspace_id",
                 "notes",
             )
             if k in body

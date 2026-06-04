@@ -1,7 +1,7 @@
 """context_blobs
 
 Revision ID: 006_context_blobs
-Revises: 005_thesis_connector
+Revises: 005_atlas_connector
 Create Date: 2026-05-17
 
 Adds a named-context store so the same agent identity can carry an indexed
@@ -10,7 +10,7 @@ Mirrors Nia's nia.context save/load.
 
 A context is just (user_id, name, payload) where payload is a JSONB blob
 holding source_ids, source_types, default topic, default tokens, and an
-optional thesis_workspace_id.
+optional atlas_workspace_id.
 """
 from typing import Sequence, Union
 
@@ -19,7 +19,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "006_context_blobs"
-down_revision: Union[str, None] = "005_thesis_connector"
+down_revision: Union[str, None] = "005_atlas_connector"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

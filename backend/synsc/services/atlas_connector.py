@@ -1,9 +1,9 @@
-"""Thesis connector — index Thesis workspaces, nodes, edges, artifacts,
+"""Atlas connector — index Atlas workspaces, nodes, edges, artifacts,
 executions, and tool contracts into Delphi for graph-aware retrieval.
 
 Three reasons this exists:
 
-1. **Agent context for long-running research**: Thesis is a graph-of-claims
+1. **Agent context for long-running research**: Atlas is a graph-of-claims
    /hypotheses/decisions. An agent picking up a workflow needs "what's
    already been tried, what has been decided, what tool contracts apply".
    Pure-code retrieval misses all of that.
@@ -15,7 +15,7 @@ Three reasons this exists:
 3. **Artifact-aware ranking**: results from nodes that *produced* artifacts
    (tables, plots, logs) rank higher than nodes that only stated intent.
 
-The connector is push-based: callers (Thesis itself, or a sync job) call
+The connector is push-based: callers (Atlas itself, or a sync job) call
 ``ingest_workspace`` / ``ingest_node`` / ``ingest_edge`` / ``ingest_artifact``
 to stream entities in. We embed node summaries / content / rationale as
 chunks so they participate in the vector + BM25 + graph retrieval pipeline.
@@ -54,13 +54,13 @@ def ingest_workspace(
     tags: list[str] | None = None,
     is_public: bool = False,
 ) -> dict[str, Any]:
-    """Create or update a Thesis workspace and link it to the user."""
+    """Create or update an Atlas workspace and link it to the user."""
     if not user_id:
         return {"success": False, "error": "auth_required"}
     with get_session() as session:
         row = session.execute(
             text(
-                "SELECT workspace_id FROM thesis_workspaces "
+                "SELECT workspace_id FROM atlas_workspaces "
                 "WHERE external_id = :eid"
             ),
             {"eid": external_id},
@@ -69,7 +69,7 @@ def ingest_workspace(
             workspace_id = str(row[0])
             session.execute(
                 text(
-                    "UPDATE thesis_workspaces SET name=:name, "
+                    "UPDATE atlas_workspaces SET name=:name, "
                     "display_name=:dn, description=:desc, tags=:tags, "
                     "is_public=:pub, updated_at=NOW() "
                     "WHERE workspace_id=:wid"
@@ -84,7 +84,7 @@ def ingest_workspace(
             workspace_id = _new_uuid()
             session.execute(
                 text(
-                    "INSERT INTO thesis_workspaces "
+                    "INSERT INTO atlas_workspaces "
                     "(workspace_id, external_id, name, display_name, "
                     " description, indexed_by, is_public, tags) "
                     "VALUES (:wid, :eid, :name, :dn, :desc, :uid, :pub, :tags)"
@@ -99,7 +99,7 @@ def ingest_workspace(
         # Link user.
         session.execute(
             text(
-                "INSERT INTO user_thesis_workspaces (user_id, workspace_id) "
+                "INSERT INTO user_atlas_workspaces (user_id, workspace_id) "
                 "VALUES (:uid, :wid) ON CONFLICT DO NOTHING"
             ),
             {"uid": user_id, "wid": workspace_id},
@@ -135,7 +135,7 @@ def ingest_node(
 
         existing = session.execute(
             text(
-                "SELECT node_id FROM thesis_nodes "
+                "SELECT node_id FROM atlas_nodes "
                 "WHERE workspace_id = :wid AND external_id = :eid"
             ),
             {"wid": workspace_id, "eid": external_id},
@@ -145,7 +145,7 @@ def ingest_node(
             node_id = str(existing[0])
             session.execute(
                 text(
-                    "UPDATE thesis_nodes SET node_type=:nt, title=:title, "
+                    "UPDATE atlas_nodes SET node_type=:nt, title=:title, "
                     "summary=:summary, content=:content, status=:status, "
                     "outcome=:outcome, tags=:tags, "
                     "decision_rationale=:rat, commit_sha=:sha, "
@@ -165,19 +165,19 @@ def ingest_node(
             # Drop old chunks/embeddings before re-inserting.
             session.execute(
                 text(
-                    "DELETE FROM thesis_node_chunk_embeddings WHERE node_id=:nid"
+                    "DELETE FROM atlas_node_chunk_embeddings WHERE node_id=:nid"
                 ),
                 {"nid": node_id},
             )
             session.execute(
-                text("DELETE FROM thesis_node_chunks WHERE node_id=:nid"),
+                text("DELETE FROM atlas_node_chunks WHERE node_id=:nid"),
                 {"nid": node_id},
             )
         else:
             node_id = _new_uuid()
             session.execute(
                 text(
-                    "INSERT INTO thesis_nodes "
+                    "INSERT INTO atlas_nodes "
                     "(node_id, workspace_id, external_id, node_type, title, "
                     " summary, content, status, outcome, tags, "
                     " decision_rationale, commit_sha, is_committed, created_by) "
@@ -215,7 +215,7 @@ def ingest_node(
             chunk_id = _new_uuid()
             session.execute(
                 text(
-                    "INSERT INTO thesis_node_chunks "
+                    "INSERT INTO atlas_node_chunks "
                     "(chunk_id, node_id, workspace_id, chunk_index, "
                     " chunk_kind, content, token_count) "
                     "VALUES (:cid, :nid, :wid, :idx, :kind, :body, :tc)"
@@ -239,7 +239,7 @@ def ingest_node(
                         emb_str = "[" + ",".join(str(x) for x in vec.tolist()) + "]"
                         esess.execute(
                             text(
-                                "INSERT INTO thesis_node_chunk_embeddings "
+                                "INSERT INTO atlas_node_chunk_embeddings "
                                 "(embedding_id, workspace_id, node_id, "
                                 " chunk_id, embedding) "
                                 "VALUES (:eid, :wid, :nid, :cid, "
@@ -253,7 +253,7 @@ def ingest_node(
                         )
                     esess.commit()
             except Exception as e:
-                logger.warning("thesis node embed failed", error=str(e))
+                logger.warning("atlas node embed failed", error=str(e))
 
     return {"success": True, "node_id": node_id, "chunks": len(embedding_rows)}
 
@@ -277,7 +277,7 @@ def ingest_edge(
         # Resolve external ids → node_ids.
         rows = session.execute(
             text(
-                "SELECT node_id, external_id FROM thesis_nodes "
+                "SELECT node_id, external_id FROM atlas_nodes "
                 "WHERE workspace_id = :wid AND external_id IN (:s, :t)"
             ),
             {"wid": workspace_id, "s": source_external_id, "t": target_external_id},
@@ -297,7 +297,7 @@ def ingest_edge(
         edge_id = _new_uuid()
         session.execute(
             text(
-                "INSERT INTO thesis_edges "
+                "INSERT INTO atlas_edges "
                 "(edge_id, workspace_id, source_node_id, target_node_id, "
                 " edge_type, metadata) "
                 "VALUES (:eid, :wid, :sid, :tid, :et, :md) "
@@ -336,7 +336,7 @@ def ingest_artifact(
         if node_external_id:
             row = session.execute(
                 text(
-                    "SELECT node_id FROM thesis_nodes "
+                    "SELECT node_id FROM atlas_nodes "
                     "WHERE workspace_id=:wid AND external_id=:eid"
                 ),
                 {"wid": workspace_id, "eid": node_external_id},
@@ -346,7 +346,7 @@ def ingest_artifact(
         artifact_id = _new_uuid()
         session.execute(
             text(
-                "INSERT INTO thesis_artifacts "
+                "INSERT INTO atlas_artifacts "
                 "(artifact_id, workspace_id, node_id, external_id, kind, "
                 " name, preview, uri, metadata) "
                 "VALUES (:aid, :wid, :nid, :ext, :kind, :name, :preview, "
@@ -361,7 +361,7 @@ def ingest_artifact(
         )
         session.execute(
             text(
-                "UPDATE thesis_workspaces SET artifacts_count = artifacts_count + 1 "
+                "UPDATE atlas_workspaces SET artifacts_count = artifacts_count + 1 "
                 "WHERE workspace_id = :wid"
             ),
             {"wid": workspace_id},
@@ -395,7 +395,7 @@ def ingest_execution(
         if node_external_id:
             row = session.execute(
                 text(
-                    "SELECT node_id FROM thesis_nodes "
+                    "SELECT node_id FROM atlas_nodes "
                     "WHERE workspace_id=:wid AND external_id=:eid"
                 ),
                 {"wid": workspace_id, "eid": node_external_id},
@@ -405,7 +405,7 @@ def ingest_execution(
         execution_id = _new_uuid()
         session.execute(
             text(
-                "INSERT INTO thesis_executions "
+                "INSERT INTO atlas_executions "
                 "(execution_id, workspace_id, node_id, external_id, tool, "
                 " status, started_at, ended_at, duration_ms, inputs, "
                 " output_summary, error) "
@@ -446,7 +446,7 @@ def ingest_tool_contract(
             return {"success": False, "error": "access_denied"}
         existing = session.execute(
             text(
-                "SELECT contract_id FROM thesis_tool_contracts "
+                "SELECT contract_id FROM atlas_tool_contracts "
                 "WHERE tool_name = :tn "
                 "AND COALESCE(workspace_id, '') = COALESCE(:wid, '')"
             ),
@@ -456,7 +456,7 @@ def ingest_tool_contract(
             contract_id = str(existing[0])
             session.execute(
                 text(
-                    "UPDATE thesis_tool_contracts SET display_name=:dn, "
+                    "UPDATE atlas_tool_contracts SET display_name=:dn, "
                     "description=:desc, when_to_use=:when, avoid_when=:avoid, "
                     "signature=:sig, examples=:ex, tags=:tags "
                     "WHERE contract_id = :cid"
@@ -474,7 +474,7 @@ def ingest_tool_contract(
             contract_id = _new_uuid()
             session.execute(
                 text(
-                    "INSERT INTO thesis_tool_contracts "
+                    "INSERT INTO atlas_tool_contracts "
                     "(contract_id, workspace_id, tool_name, display_name, "
                     " description, when_to_use, avoid_when, signature, "
                     " examples, tags) "
@@ -499,7 +499,7 @@ def ingest_tool_contract(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
-def search_thesis_nodes(
+def search_atlas_nodes(
     *,
     query: str,
     user_id: str,
@@ -508,7 +508,7 @@ def search_thesis_nodes(
     only_committed: bool = False,
     top_k: int = 10,
 ) -> list[dict[str, Any]]:
-    """Hybrid search over Thesis nodes (vector + BM25 + artifact-aware boost).
+    """Hybrid search over Atlas nodes (vector + BM25 + artifact-aware boost).
 
     Boosts:
       - committed nodes (decisions that were locked in) get +0.05.
@@ -541,7 +541,7 @@ def search_thesis_nodes(
     sql = text(
         f"""
         WITH user_ws AS MATERIALIZED (
-            SELECT workspace_id FROM user_thesis_workspaces WHERE user_id = :uid
+            SELECT workspace_id FROM user_atlas_workspaces WHERE user_id = :uid
         ),
         candidates AS (
             SELECT tnc.chunk_id, tnc.node_id, tnc.workspace_id,
@@ -549,8 +549,8 @@ def search_thesis_nodes(
                    1 - (tne.embedding <=> CAST(:emb AS vector)) AS vec,
                    ts_rank_cd(tnc.content_tsv,
                               websearch_to_tsquery('english', :q)) AS bm25
-            FROM thesis_node_chunk_embeddings tne
-            JOIN thesis_node_chunks tnc ON tnc.chunk_id = tne.chunk_id
+            FROM atlas_node_chunk_embeddings tne
+            JOIN atlas_node_chunks tnc ON tnc.chunk_id = tne.chunk_id
             JOIN user_ws uw ON uw.workspace_id = tnc.workspace_id
             ORDER BY tne.embedding <=> CAST(:emb AS vector)
             LIMIT :top_k
@@ -561,11 +561,11 @@ def search_thesis_nodes(
                tn.status, tn.outcome, tn.is_committed,
                tn.decision_rationale, tn.tags,
                tw.name AS workspace_name, tw.external_id AS ws_external_id,
-               (SELECT COUNT(*) FROM thesis_artifacts ta
+               (SELECT COUNT(*) FROM atlas_artifacts ta
                 WHERE ta.node_id = tn.node_id) AS artifact_count
         FROM candidates c
-        JOIN thesis_nodes tn ON tn.node_id = c.node_id
-        JOIN thesis_workspaces tw ON tw.workspace_id = tn.workspace_id
+        JOIN atlas_nodes tn ON tn.node_id = c.node_id
+        JOIN atlas_workspaces tw ON tw.workspace_id = tn.workspace_id
         WHERE 1=1
         {extra}
         ORDER BY c.vec DESC
@@ -575,7 +575,7 @@ def search_thesis_nodes(
         with get_session() as session:
             rows = session.execute(sql, params).mappings().all()
     except Exception as e:
-        logger.warning("thesis search failed", error=str(e))
+        logger.warning("atlas search failed", error=str(e))
         return []
 
     if not rows:
@@ -617,7 +617,7 @@ def search_thesis_nodes(
                     "artifact_boost": artifact_boost,
                 },
                 # Citation-style stable reference:
-                "ref": f"thesis://{r['ws_external_id']}/{r['external_id']}#{r['chunk_kind']}",
+                "ref": f"atlas://{r['ws_external_id']}/{r['external_id']}#{r['chunk_kind']}",
             }
         )
     out.sort(key=lambda x: x["score"], reverse=True)
@@ -644,7 +644,7 @@ def find_related_nodes(
         return []
     # If only a question was passed, anchor on the top hit.
     if not node_id and question:
-        anchors = search_thesis_nodes(query=question, user_id=user_id, top_k=1)
+        anchors = search_atlas_nodes(query=question, user_id=user_id, top_k=1)
         if not anchors:
             return []
         node_id = anchors[0]["node_id"]
@@ -661,15 +661,15 @@ def find_related_nodes(
         f"""
         WITH RECURSIVE walk AS (
             SELECT e.target_node_id AS node_id, e.edge_type, 1 AS depth
-            FROM thesis_edges e
-            JOIN user_thesis_workspaces uw ON uw.workspace_id = e.workspace_id
+            FROM atlas_edges e
+            JOIN user_atlas_workspaces uw ON uw.workspace_id = e.workspace_id
             WHERE e.source_node_id = :nid
               AND uw.user_id = :uid
               {edge_filter}
             UNION ALL
             SELECT e.target_node_id, e.edge_type, w.depth + 1
-            FROM thesis_edges e
-            JOIN user_thesis_workspaces uw ON uw.workspace_id = e.workspace_id
+            FROM atlas_edges e
+            JOIN user_atlas_workspaces uw ON uw.workspace_id = e.workspace_id
             JOIN walk w ON e.source_node_id = w.node_id
             WHERE w.depth < {int(max_depth)}
               AND uw.user_id = :uid
@@ -680,8 +680,8 @@ def find_related_nodes(
             tn.status, tn.outcome, tn.is_committed, tn.tags,
             w.depth, w.edge_type, tw.external_id AS ws_external_id
         FROM walk w
-        JOIN thesis_nodes tn ON tn.node_id = w.node_id
-        JOIN thesis_workspaces tw ON tw.workspace_id = tn.workspace_id
+        JOIN atlas_nodes tn ON tn.node_id = w.node_id
+        JOIN atlas_workspaces tw ON tw.workspace_id = tn.workspace_id
         ORDER BY tn.node_id, w.depth ASC
         LIMIT :top_k
         """
@@ -694,7 +694,7 @@ def find_related_nodes(
         return []
     return [
         {**dict(r), "node_id": str(r["node_id"]),
-         "ref": f"thesis://{r['ws_external_id']}/{r['external_id']}"}
+         "ref": f"atlas://{r['ws_external_id']}/{r['external_id']}"}
         for r in rows
     ]
 
@@ -710,7 +710,7 @@ def find_relevant_artifacts(
     """Search artifacts by preview text + linked-node similarity.
 
     The preview column has a trigram index, so this is fast even at scale.
-    Pairs nicely with ``search_thesis_nodes`` — the artifact often answers
+    Pairs nicely with ``search_atlas_nodes`` — the artifact often answers
     "did this hypothesis pan out?".
 
     Multi-word queries: every word longer than 2 chars is OR'd together,
@@ -767,10 +767,10 @@ def find_relevant_artifacts(
                tn.external_id AS node_external_id,
                tn.title AS node_title, tn.outcome AS node_outcome,
                tw.external_id AS ws_external_id
-        FROM thesis_artifacts ta
-        JOIN user_thesis_workspaces uw ON uw.workspace_id = ta.workspace_id
-        LEFT JOIN thesis_nodes tn ON tn.node_id = ta.node_id
-        JOIN thesis_workspaces tw ON tw.workspace_id = ta.workspace_id
+        FROM atlas_artifacts ta
+        JOIN user_atlas_workspaces uw ON uw.workspace_id = ta.workspace_id
+        LEFT JOIN atlas_nodes tn ON tn.node_id = ta.node_id
+        JOIN atlas_workspaces tw ON tw.workspace_id = ta.workspace_id
         WHERE uw.user_id = :uid
           AND ({where_block})
         {extra}
@@ -788,7 +788,7 @@ def find_relevant_artifacts(
         {
             **{k: (str(v) if k.endswith("_id") and v else v) for k, v in r.items()},
             "ref": (
-                f"thesis://{r['ws_external_id']}/"
+                f"atlas://{r['ws_external_id']}/"
                 f"{r['node_external_id'] or 'orphan'}#artifact/{r['artifact_id']}"
             ),
         }
@@ -820,7 +820,7 @@ def retrieve_tool_contract(
                  similarity(coalesce(when_to_use,''), :task) * 1.2,
                  similarity(coalesce(description,''), :task)
                ) AS score
-        FROM thesis_tool_contracts
+        FROM atlas_tool_contracts
         WHERE
             tool_name ILIKE :pattern
             OR display_name ILIKE :pattern
@@ -861,7 +861,7 @@ def find_what_was_tried(
     agent gets the full "we tried Y, status was Z, here's the outcome"
     picture instead of just the claim text.
     """
-    nodes = search_thesis_nodes(
+    nodes = search_atlas_nodes(
         query=question, user_id=user_id, workspace_ids=workspace_ids,
         top_k=top_k,
     )
@@ -877,7 +877,7 @@ def find_what_was_tried(
                 f"""
                 SELECT execution_id, node_id, tool, status, started_at,
                        ended_at, duration_ms, output_summary, error
-                FROM thesis_executions
+                FROM atlas_executions
                 WHERE node_id IN ({placeholders})
                 ORDER BY started_at DESC NULLS LAST
                 """
@@ -888,7 +888,7 @@ def find_what_was_tried(
             text(
                 f"""
                 SELECT artifact_id, node_id, kind, name, preview, uri
-                FROM thesis_artifacts
+                FROM atlas_artifacts
                 WHERE node_id IN ({placeholders})
                 """
             ),
@@ -952,7 +952,7 @@ def find_what_not_to_repeat(
     }
 
 
-def build_thesis_context(
+def build_atlas_context(
     *,
     user_id: str,
     question: str,
@@ -960,12 +960,12 @@ def build_thesis_context(
     workspace_ids: list[str] | None = None,
     token_budget: int = 4000,
 ) -> dict[str, Any]:
-    """Build a Thesis-flavored context pack: matched nodes + edges +
+    """Build an Atlas-flavored context pack: matched nodes + edges +
     artifacts + tool contracts.
     """
     if not user_id:
         return {"success": False, "error": "auth_required"}
-    matched_nodes = search_thesis_nodes(
+    matched_nodes = search_atlas_nodes(
         query=question, user_id=user_id, workspace_ids=workspace_ids, top_k=8,
     )
     relations: list[dict] = []
@@ -1040,7 +1040,7 @@ def summarize_relevant_subgraph(
     if not user_id:
         return {"success": False, "error": "auth_required"}
     if not root_node_id:
-        hits = search_thesis_nodes(query=question, user_id=user_id, top_k=1)
+        hits = search_atlas_nodes(query=question, user_id=user_id, top_k=1)
         if not hits:
             return {"success": True, "subgraph": [], "nodes": 0}
         root_node_id = hits[0]["node_id"]
@@ -1059,7 +1059,7 @@ def summarize_relevant_subgraph(
             text(
                 f"""
                 SELECT source_node_id, target_node_id, edge_type
-                FROM thesis_edges
+                FROM atlas_edges
                 WHERE (source_node_id IN ({placeholders}))
                    OR (target_node_id IN ({placeholders}))
                 """
@@ -1095,7 +1095,7 @@ def find_decisions(
     rationale) related to a question. Higher-ranked than uncommitted
     speculation.
     """
-    return search_thesis_nodes(
+    return search_atlas_nodes(
         query=question, user_id=user_id,
         workspace_ids=workspace_ids,
         node_types=["decision"], only_committed=True, top_k=top_k,
@@ -1124,9 +1124,9 @@ def get_active_work_context(
         SELECT tn.node_id, tn.external_id, tn.node_type, tn.title,
                tn.summary, tn.status, tn.updated_at,
                tw.external_id AS ws_external_id
-        FROM thesis_nodes tn
-        JOIN user_thesis_workspaces uw ON uw.workspace_id = tn.workspace_id
-        JOIN thesis_workspaces tw ON tw.workspace_id = tn.workspace_id
+        FROM atlas_nodes tn
+        JOIN user_atlas_workspaces uw ON uw.workspace_id = tn.workspace_id
+        JOIN atlas_workspaces tw ON tw.workspace_id = tn.workspace_id
         WHERE uw.user_id = :uid
           AND (tn.status IN ('in_progress', 'open', 'active')
                OR tn.is_committed = FALSE)
@@ -1164,7 +1164,7 @@ def _user_can_write_workspace(
 ) -> bool:
     row = session.execute(
         text(
-            "SELECT 1 FROM user_thesis_workspaces "
+            "SELECT 1 FROM user_atlas_workspaces "
             "WHERE user_id = :uid AND workspace_id = :wid"
         ),
         {"uid": user_id, "wid": workspace_id},
@@ -1174,7 +1174,7 @@ def _user_can_write_workspace(
     # Indexer is also allowed.
     row = session.execute(
         text(
-            "SELECT 1 FROM thesis_workspaces "
+            "SELECT 1 FROM atlas_workspaces "
             "WHERE workspace_id = :wid AND indexed_by = :uid"
         ),
         {"uid": user_id, "wid": workspace_id},

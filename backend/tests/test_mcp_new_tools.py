@@ -44,24 +44,24 @@ PAPER_IMPROVEMENT_TOOLS = {
     "joint_retrieval",
 }
 
-# Phase 7: Thesis connector
-THESIS_TOOLS = {
-    "thesis_register_workspace",
-    "thesis_ingest_node",
-    "thesis_ingest_edge",
-    "thesis_ingest_artifact",
-    "thesis_ingest_execution",
-    "thesis_ingest_tool_contract",
-    "thesis_search_nodes",
+# Phase 7: Atlas connector
+ATLAS_TOOLS = {
+    "atlas_register_workspace",
+    "atlas_ingest_node",
+    "atlas_ingest_edge",
+    "atlas_ingest_artifact",
+    "atlas_ingest_execution",
+    "atlas_ingest_tool_contract",
+    "atlas_search_nodes",
     "find_related_nodes",
     "find_relevant_artifacts",
-    "thesis_retrieve_tool_contract",
+    "atlas_retrieve_tool_contract",
     "summarize_relevant_subgraph",
-    "build_thesis_context",
-    "thesis_what_was_tried",
-    "thesis_what_not_to_repeat",
-    "thesis_active_work_context",
-    "thesis_find_decisions",
+    "build_atlas_context",
+    "atlas_what_was_tried",
+    "atlas_what_not_to_repeat",
+    "atlas_active_work_context",
+    "atlas_find_decisions",
 }
 
 
@@ -80,9 +80,9 @@ def test_paper_improvement_tools_registered(server_tool_names):
     assert not missing, f"Missing paper tools: {missing}"
 
 
-def test_thesis_tools_registered(server_tool_names):
-    missing = THESIS_TOOLS - server_tool_names
-    assert not missing, f"Missing Thesis tools: {missing}"
+def test_atlas_tools_registered(server_tool_names):
+    missing = ATLAS_TOOLS - server_tool_names
+    assert not missing, f"Missing Atlas tools: {missing}"
 
 
 def test_no_tool_name_collisions(server_tool_names):

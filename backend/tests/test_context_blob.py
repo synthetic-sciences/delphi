@@ -32,7 +32,7 @@ def test_validate_payload_accepts_well_known_keys():
             "source_types": ["repo"],
             "topic": "routing",
             "tokens": 5000,
-            "thesis_workspace_id": "ws-1",
+            "atlas_workspace_id": "ws-1",
             "notes": "scratch",
         }
     )

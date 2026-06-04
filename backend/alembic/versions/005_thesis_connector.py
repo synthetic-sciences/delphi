@@ -1,25 +1,25 @@
-"""thesis_connector
+"""atlas_connector
 
-Revision ID: 005_thesis_connector
+Revision ID: 005_atlas_connector
 Revises: 004_hybrid_retrieval
 Create Date: 2026-05-10
 
-Adds the Thesis source-type so Delphi can index Thesis nodes, artifacts,
-executions, tool contracts, and graph edges. Thesis is the long-running
-research workflow system upstream — agents working in Thesis need to know
+Adds the Atlas source-type so Delphi can index Atlas nodes, artifacts,
+executions, tool contracts, and graph edges. Atlas is the long-running
+research workflow system upstream — agents working in Atlas need to know
 "what has already been tried", "what artifacts exist", and "what tool
 contracts apply to this task".
 
 Tables:
-- thesis_workspaces  : top-level project / repo of Thesis nodes.
-- thesis_nodes       : nodes in the graph (claims, hypotheses, plans, etc.).
-- thesis_node_chunks : chunked node summaries + content for embedding.
-- thesis_node_chunk_embeddings : pgvector embeddings.
-- thesis_edges       : parent/child + named edges between nodes.
-- thesis_artifacts   : tables, plots, logs, diffs produced by node executions.
-- thesis_executions  : run logs / outputs / status for a node.
-- thesis_tool_contracts : per-tool docs (signature + when_to_use + examples).
-- user_thesis_workspaces : access link.
+- atlas_workspaces  : top-level project / repo of Atlas nodes.
+- atlas_nodes       : nodes in the graph (claims, hypotheses, plans, etc.).
+- atlas_node_chunks : chunked node summaries + content for embedding.
+- atlas_node_chunk_embeddings : pgvector embeddings.
+- atlas_edges       : parent/child + named edges between nodes.
+- atlas_artifacts   : tables, plots, logs, diffs produced by node executions.
+- atlas_executions  : run logs / outputs / status for a node.
+- atlas_tool_contracts : per-tool docs (signature + when_to_use + examples).
+- user_atlas_workspaces : access link.
 """
 from typing import Sequence, Union
 
@@ -27,16 +27,16 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "005_thesis_connector"
+revision: str = "005_atlas_connector"
 down_revision: Union[str, None] = "004_hybrid_retrieval"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Workspaces — top-level grouping (Thesis project / experiment campaign).
+    # Workspaces — top-level grouping (Atlas project / experiment campaign).
     op.create_table(
-        "thesis_workspaces",
+        "atlas_workspaces",
         sa.Column("workspace_id", sa.String(length=36), primary_key=True),
         sa.Column("external_id", sa.Text(), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
@@ -58,20 +58,20 @@ def upgrade() -> None:
             "updated_at", sa.TIMESTAMP(timezone=True),
             nullable=False, server_default=sa.text("NOW()"),
         ),
-        sa.UniqueConstraint("external_id", name="uq_thesis_workspaces_external"),
+        sa.UniqueConstraint("external_id", name="uq_atlas_workspaces_external"),
     )
     op.create_index(
-        "idx_thesis_workspaces_indexed_by",
-        "thesis_workspaces", ["indexed_by"],
+        "idx_atlas_workspaces_indexed_by",
+        "atlas_workspaces", ["indexed_by"],
     )
 
-    # Nodes — claims/hypotheses/plans/decisions in the Thesis graph.
+    # Nodes — claims/hypotheses/plans/decisions in the Atlas graph.
     op.create_table(
-        "thesis_nodes",
+        "atlas_nodes",
         sa.Column("node_id", sa.String(length=36), primary_key=True),
         sa.Column(
             "workspace_id", sa.String(length=36),
-            sa.ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("external_id", sa.Text(), nullable=False),
@@ -98,25 +98,25 @@ def upgrade() -> None:
             nullable=False, server_default=sa.text("NOW()"),
         ),
         sa.UniqueConstraint("workspace_id", "external_id",
-                            name="uq_thesis_nodes_workspace_external"),
+                            name="uq_atlas_nodes_workspace_external"),
     )
-    op.create_index("idx_thesis_nodes_workspace", "thesis_nodes", ["workspace_id"])
-    op.create_index("idx_thesis_nodes_type", "thesis_nodes", ["node_type"])
-    op.create_index("idx_thesis_nodes_status", "thesis_nodes", ["status"])
-    op.create_index("idx_thesis_nodes_outcome", "thesis_nodes", ["outcome"])
+    op.create_index("idx_atlas_nodes_workspace", "atlas_nodes", ["workspace_id"])
+    op.create_index("idx_atlas_nodes_type", "atlas_nodes", ["node_type"])
+    op.create_index("idx_atlas_nodes_status", "atlas_nodes", ["status"])
+    op.create_index("idx_atlas_nodes_outcome", "atlas_nodes", ["outcome"])
 
     # Node chunks — chunked content for embedding-based retrieval.
     op.create_table(
-        "thesis_node_chunks",
+        "atlas_node_chunks",
         sa.Column("chunk_id", sa.String(length=36), primary_key=True),
         sa.Column(
             "node_id", sa.String(length=36),
-            sa.ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
             "workspace_id", sa.String(length=36),
-            sa.ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("chunk_index", sa.Integer(), nullable=False),
@@ -132,63 +132,63 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "idx_thesis_node_chunks_node", "thesis_node_chunks", ["node_id"]
+        "idx_atlas_node_chunks_node", "atlas_node_chunks", ["node_id"]
     )
     # Full-text + trigram so hybrid retrieval works on the graph too.
     op.execute(
         """
-        ALTER TABLE thesis_node_chunks
+        ALTER TABLE atlas_node_chunks
         ADD COLUMN content_tsv tsvector
         GENERATED ALWAYS AS (to_tsvector('english', coalesce(content, ''))) STORED
         """
     )
     op.execute(
-        "CREATE INDEX idx_thesis_node_chunks_tsv "
-        "ON thesis_node_chunks USING gin(content_tsv)"
+        "CREATE INDEX idx_atlas_node_chunks_tsv "
+        "ON atlas_node_chunks USING gin(content_tsv)"
     )
     op.execute(
-        "CREATE INDEX idx_thesis_node_chunks_content_trgm "
-        "ON thesis_node_chunks USING gin(content gin_trgm_ops)"
+        "CREATE INDEX idx_atlas_node_chunks_content_trgm "
+        "ON atlas_node_chunks USING gin(content gin_trgm_ops)"
     )
 
     # Embeddings — vector(768) to match the global embedding dim.
     op.execute(
         """
-        CREATE TABLE thesis_node_chunk_embeddings (
+        CREATE TABLE atlas_node_chunk_embeddings (
             embedding_id VARCHAR(36) PRIMARY KEY,
             workspace_id VARCHAR(36) NOT NULL
-                REFERENCES thesis_workspaces(workspace_id) ON DELETE CASCADE,
+                REFERENCES atlas_workspaces(workspace_id) ON DELETE CASCADE,
             node_id VARCHAR(36) NOT NULL
-                REFERENCES thesis_nodes(node_id) ON DELETE CASCADE,
+                REFERENCES atlas_nodes(node_id) ON DELETE CASCADE,
             chunk_id VARCHAR(36) NOT NULL UNIQUE
-                REFERENCES thesis_node_chunks(chunk_id) ON DELETE CASCADE,
+                REFERENCES atlas_node_chunks(chunk_id) ON DELETE CASCADE,
             embedding vector(768) NOT NULL
         )
         """
     )
     op.execute(
-        "CREATE INDEX idx_thesis_node_emb_hnsw "
-        "ON thesis_node_chunk_embeddings "
+        "CREATE INDEX idx_atlas_node_emb_hnsw "
+        "ON atlas_node_chunk_embeddings "
         "USING hnsw (embedding vector_cosine_ops)"
     )
 
     # Edges — directed graph, with edge type ('parent','blocks','derives_from',etc.)
     op.create_table(
-        "thesis_edges",
+        "atlas_edges",
         sa.Column("edge_id", sa.String(length=36), primary_key=True),
         sa.Column(
             "workspace_id", sa.String(length=36),
-            sa.ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
             "source_node_id", sa.String(length=36),
-            sa.ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
             "target_node_id", sa.String(length=36),
-            sa.ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("edge_type", sa.String(length=64), nullable=False),
@@ -199,28 +199,28 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint(
             "source_node_id", "target_node_id", "edge_type",
-            name="uq_thesis_edges_triple",
+            name="uq_atlas_edges_triple",
         ),
     )
     op.create_index(
-        "idx_thesis_edges_source", "thesis_edges", ["source_node_id", "edge_type"]
+        "idx_atlas_edges_source", "atlas_edges", ["source_node_id", "edge_type"]
     )
     op.create_index(
-        "idx_thesis_edges_target", "thesis_edges", ["target_node_id", "edge_type"]
+        "idx_atlas_edges_target", "atlas_edges", ["target_node_id", "edge_type"]
     )
 
     # Artifacts — tables, plots, logs, diffs produced by node executions.
     op.create_table(
-        "thesis_artifacts",
+        "atlas_artifacts",
         sa.Column("artifact_id", sa.String(length=36), primary_key=True),
         sa.Column(
             "workspace_id", sa.String(length=36),
-            sa.ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
             "node_id", sa.String(length=36),
-            sa.ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
             nullable=True,
         ),
         sa.Column("external_id", sa.Text(), nullable=True),
@@ -236,28 +236,28 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "idx_thesis_artifacts_workspace", "thesis_artifacts", ["workspace_id"]
+        "idx_atlas_artifacts_workspace", "atlas_artifacts", ["workspace_id"]
     )
-    op.create_index("idx_thesis_artifacts_node", "thesis_artifacts", ["node_id"])
-    op.create_index("idx_thesis_artifacts_kind", "thesis_artifacts", ["kind"])
+    op.create_index("idx_atlas_artifacts_node", "atlas_artifacts", ["node_id"])
+    op.create_index("idx_atlas_artifacts_kind", "atlas_artifacts", ["kind"])
     op.execute(
-        "CREATE INDEX idx_thesis_artifacts_preview_trgm "
-        "ON thesis_artifacts USING gin(preview gin_trgm_ops) "
+        "CREATE INDEX idx_atlas_artifacts_preview_trgm "
+        "ON atlas_artifacts USING gin(preview gin_trgm_ops) "
         "WHERE preview IS NOT NULL"
     )
 
     # Executions — run logs / status / outputs for a node.
     op.create_table(
-        "thesis_executions",
+        "atlas_executions",
         sa.Column("execution_id", sa.String(length=36), primary_key=True),
         sa.Column(
             "workspace_id", sa.String(length=36),
-            sa.ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
             "node_id", sa.String(length=36),
-            sa.ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
             nullable=True,
         ),
         sa.Column("external_id", sa.Text(), nullable=True),
@@ -271,19 +271,19 @@ def upgrade() -> None:
         sa.Column("error", sa.Text(), nullable=True),
     )
     op.create_index(
-        "idx_thesis_executions_node", "thesis_executions", ["node_id"]
+        "idx_atlas_executions_node", "atlas_executions", ["node_id"]
     )
     op.create_index(
-        "idx_thesis_executions_status", "thesis_executions", ["status"]
+        "idx_atlas_executions_status", "atlas_executions", ["status"]
     )
 
     # Tool contracts — per-tool documentation (signature + when_to_use).
     op.create_table(
-        "thesis_tool_contracts",
+        "atlas_tool_contracts",
         sa.Column("contract_id", sa.String(length=36), primary_key=True),
         sa.Column(
             "workspace_id", sa.String(length=36),
-            sa.ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
             nullable=True,
         ),
         sa.Column("tool_name", sa.String(length=255), nullable=False),
@@ -300,22 +300,22 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "idx_thesis_tool_contracts_tool",
-        "thesis_tool_contracts", ["tool_name"],
+        "idx_atlas_tool_contracts_tool",
+        "atlas_tool_contracts", ["tool_name"],
     )
     op.execute(
-        "CREATE INDEX idx_thesis_tool_when_trgm "
-        "ON thesis_tool_contracts USING gin(when_to_use gin_trgm_ops) "
+        "CREATE INDEX idx_atlas_tool_when_trgm "
+        "ON atlas_tool_contracts USING gin(when_to_use gin_trgm_ops) "
         "WHERE when_to_use IS NOT NULL"
     )
 
     # User access link.
     op.create_table(
-        "user_thesis_workspaces",
+        "user_atlas_workspaces",
         sa.Column("user_id", sa.String(length=36), nullable=False),
         sa.Column(
             "workspace_id", sa.String(length=36),
-            sa.ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+            sa.ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column(
@@ -327,40 +327,40 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("user_thesis_workspaces")
-    op.execute("DROP INDEX IF EXISTS idx_thesis_tool_when_trgm")
+    op.drop_table("user_atlas_workspaces")
+    op.execute("DROP INDEX IF EXISTS idx_atlas_tool_when_trgm")
     op.drop_index(
-        "idx_thesis_tool_contracts_tool", table_name="thesis_tool_contracts"
+        "idx_atlas_tool_contracts_tool", table_name="atlas_tool_contracts"
     )
-    op.drop_table("thesis_tool_contracts")
-    op.drop_index("idx_thesis_executions_status", table_name="thesis_executions")
-    op.drop_index("idx_thesis_executions_node", table_name="thesis_executions")
-    op.drop_table("thesis_executions")
-    op.execute("DROP INDEX IF EXISTS idx_thesis_artifacts_preview_trgm")
-    op.drop_index("idx_thesis_artifacts_kind", table_name="thesis_artifacts")
-    op.drop_index("idx_thesis_artifacts_node", table_name="thesis_artifacts")
+    op.drop_table("atlas_tool_contracts")
+    op.drop_index("idx_atlas_executions_status", table_name="atlas_executions")
+    op.drop_index("idx_atlas_executions_node", table_name="atlas_executions")
+    op.drop_table("atlas_executions")
+    op.execute("DROP INDEX IF EXISTS idx_atlas_artifacts_preview_trgm")
+    op.drop_index("idx_atlas_artifacts_kind", table_name="atlas_artifacts")
+    op.drop_index("idx_atlas_artifacts_node", table_name="atlas_artifacts")
     op.drop_index(
-        "idx_thesis_artifacts_workspace", table_name="thesis_artifacts"
+        "idx_atlas_artifacts_workspace", table_name="atlas_artifacts"
     )
-    op.drop_table("thesis_artifacts")
-    op.drop_index("idx_thesis_edges_target", table_name="thesis_edges")
-    op.drop_index("idx_thesis_edges_source", table_name="thesis_edges")
-    op.drop_table("thesis_edges")
-    op.execute("DROP INDEX IF EXISTS idx_thesis_node_emb_hnsw")
-    op.execute("DROP TABLE IF EXISTS thesis_node_chunk_embeddings")
-    op.execute("DROP INDEX IF EXISTS idx_thesis_node_chunks_content_trgm")
-    op.execute("DROP INDEX IF EXISTS idx_thesis_node_chunks_tsv")
-    op.execute("ALTER TABLE thesis_node_chunks DROP COLUMN IF EXISTS content_tsv")
+    op.drop_table("atlas_artifacts")
+    op.drop_index("idx_atlas_edges_target", table_name="atlas_edges")
+    op.drop_index("idx_atlas_edges_source", table_name="atlas_edges")
+    op.drop_table("atlas_edges")
+    op.execute("DROP INDEX IF EXISTS idx_atlas_node_emb_hnsw")
+    op.execute("DROP TABLE IF EXISTS atlas_node_chunk_embeddings")
+    op.execute("DROP INDEX IF EXISTS idx_atlas_node_chunks_content_trgm")
+    op.execute("DROP INDEX IF EXISTS idx_atlas_node_chunks_tsv")
+    op.execute("ALTER TABLE atlas_node_chunks DROP COLUMN IF EXISTS content_tsv")
     op.drop_index(
-        "idx_thesis_node_chunks_node", table_name="thesis_node_chunks"
+        "idx_atlas_node_chunks_node", table_name="atlas_node_chunks"
     )
-    op.drop_table("thesis_node_chunks")
-    op.drop_index("idx_thesis_nodes_outcome", table_name="thesis_nodes")
-    op.drop_index("idx_thesis_nodes_status", table_name="thesis_nodes")
-    op.drop_index("idx_thesis_nodes_type", table_name="thesis_nodes")
-    op.drop_index("idx_thesis_nodes_workspace", table_name="thesis_nodes")
-    op.drop_table("thesis_nodes")
+    op.drop_table("atlas_node_chunks")
+    op.drop_index("idx_atlas_nodes_outcome", table_name="atlas_nodes")
+    op.drop_index("idx_atlas_nodes_status", table_name="atlas_nodes")
+    op.drop_index("idx_atlas_nodes_type", table_name="atlas_nodes")
+    op.drop_index("idx_atlas_nodes_workspace", table_name="atlas_nodes")
+    op.drop_table("atlas_nodes")
     op.drop_index(
-        "idx_thesis_workspaces_indexed_by", table_name="thesis_workspaces"
+        "idx_atlas_workspaces_indexed_by", table_name="atlas_workspaces"
     )
-    op.drop_table("thesis_workspaces")
+    op.drop_table("atlas_workspaces")

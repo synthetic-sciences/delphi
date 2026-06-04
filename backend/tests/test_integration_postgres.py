@@ -101,17 +101,17 @@ def test_trigram_indexes_present(session):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Migration 005 — Thesis connector
+# Migration 005 — Atlas connector
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
-def test_thesis_tables_present(session):
+def test_atlas_tables_present(session):
     from sqlalchemy import text
     expected = {
-        "thesis_workspaces", "thesis_nodes", "thesis_node_chunks",
-        "thesis_node_chunk_embeddings", "thesis_edges",
-        "thesis_artifacts", "thesis_executions", "thesis_tool_contracts",
-        "user_thesis_workspaces",
+        "atlas_workspaces", "atlas_nodes", "atlas_node_chunks",
+        "atlas_node_chunk_embeddings", "atlas_edges",
+        "atlas_artifacts", "atlas_executions", "atlas_tool_contracts",
+        "user_atlas_workspaces",
     }
     rows = session.execute(
         text(
@@ -121,15 +121,15 @@ def test_thesis_tables_present(session):
     ).all()
     found = {r[0] for r in rows}
     missing = expected - found
-    assert not missing, f"Missing Thesis tables: {missing}"
+    assert not missing, f"Missing Atlas tables: {missing}"
 
 
-def test_thesis_node_chunks_has_tsv(session):
+def test_atlas_node_chunks_has_tsv(session):
     from sqlalchemy import text
     row = session.execute(
         text(
             "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = 'thesis_node_chunks' "
+            "WHERE table_name = 'atlas_node_chunks' "
             "AND column_name = 'content_tsv'"
         )
     ).first()
@@ -137,11 +137,11 @@ def test_thesis_node_chunks_has_tsv(session):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Thesis connector — ingest + retrieve end-to-end
+# Atlas connector — ingest + retrieve end-to-end
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
-def test_thesis_ingest_workspace_and_node(user_id, session, monkeypatch):
+def test_atlas_ingest_workspace_and_node(user_id, session, monkeypatch):
     # Mock the embedding generator with a *deterministic* fake — same text
     # → same vector — so vector-similarity anchoring is reproducible.
     class _FakeEmbed:
@@ -154,16 +154,16 @@ def test_thesis_ingest_workspace_and_node(user_id, session, monkeypatch):
         def generate_single(self, text):
             return self._vec(text)
     # Patch *where the name is used* — conftest already session-patched the
-    # defining module, but thesis_connector imports the name at module load,
+    # defining module, but atlas_connector imports the name at module load,
     # so the binding is local to that module.
     fake = _FakeEmbed()
     monkeypatch.setattr(
-        "synsc.services.thesis_connector.get_embedding_generator",
+        "synsc.services.atlas_connector.get_embedding_generator",
         lambda: fake,
     )
 
-    from synsc.services.thesis_connector import (
-        ingest_workspace, ingest_node, search_thesis_nodes,
+    from synsc.services.atlas_connector import (
+        ingest_workspace, ingest_node, search_atlas_nodes,
     )
 
     ws = ingest_workspace(
@@ -191,7 +191,7 @@ def test_thesis_ingest_workspace_and_node(user_id, session, monkeypatch):
     assert n["chunks"] >= 2  # summary + content + rationale each become chunks
 
     # Search should find it.
-    hits = search_thesis_nodes(
+    hits = search_atlas_nodes(
         user_id=user_id, query="how does layer normalization work",
         workspace_ids=[ws["workspace_id"]], top_k=5,
     )
@@ -199,27 +199,27 @@ def test_thesis_ingest_workspace_and_node(user_id, session, monkeypatch):
     top = hits[0]
     assert top["title"] == "Layer norm improves convergence"
     # Citation-style ref is present.
-    assert top["ref"].startswith("thesis://")
+    assert top["ref"].startswith("atlas://")
     # Committed boost was applied.
     assert top["components"]["committed_boost"] > 0
 
 
-def test_thesis_what_not_to_repeat(user_id, monkeypatch):
+def test_atlas_what_not_to_repeat(user_id, monkeypatch):
     class _FakeEmbed:
         def generate(self, texts):
             return np.random.rand(len(texts), 768).astype("float32")
         def generate_single(self, text):
             return np.random.rand(768).astype("float32")
     # Patch *where the name is used* — conftest already session-patched the
-    # defining module, but thesis_connector imports the name at module load,
+    # defining module, but atlas_connector imports the name at module load,
     # so the binding is local to that module.
     fake = _FakeEmbed()
     monkeypatch.setattr(
-        "synsc.services.thesis_connector.get_embedding_generator",
+        "synsc.services.atlas_connector.get_embedding_generator",
         lambda: fake,
     )
 
-    from synsc.services.thesis_connector import (
+    from synsc.services.atlas_connector import (
         ingest_workspace, ingest_node,
         find_what_was_tried, find_what_not_to_repeat,
     )
@@ -259,7 +259,7 @@ def test_thesis_what_not_to_repeat(user_id, monkeypatch):
     assert "Adding RoPE helps" not in titles
 
 
-def test_thesis_find_related_nodes_via_question(user_id, monkeypatch):
+def test_atlas_find_related_nodes_via_question(user_id, monkeypatch):
     class _FakeEmbed:
         """Deterministic: same text → same vector — so the anchor pick is
         reproducible across runs.
@@ -273,15 +273,15 @@ def test_thesis_find_related_nodes_via_question(user_id, monkeypatch):
         def generate_single(self, text):
             return self._vec(text)
     # Patch *where the name is used* — conftest already session-patched the
-    # defining module, but thesis_connector imports the name at module load,
+    # defining module, but atlas_connector imports the name at module load,
     # so the binding is local to that module.
     fake = _FakeEmbed()
     monkeypatch.setattr(
-        "synsc.services.thesis_connector.get_embedding_generator",
+        "synsc.services.atlas_connector.get_embedding_generator",
         lambda: fake,
     )
 
-    from synsc.services.thesis_connector import (
+    from synsc.services.atlas_connector import (
         ingest_workspace, ingest_node, ingest_edge, find_related_nodes,
     )
 
@@ -329,7 +329,7 @@ def test_thesis_find_related_nodes_via_question(user_id, monkeypatch):
     #    which is stable here but the *specific* node picked depends on
     #    the (deterministic) hash-based fake. Just assert the call works
     #    end-to-end without raising. The anchor-selection is exercised by
-    #    test_thesis_ingest_workspace_and_node above.
+    #    test_atlas_ingest_workspace_and_node above.
     related2 = find_related_nodes(
         user_id=user_id, question="attention scales",
         max_depth=2, top_k=10,
@@ -337,22 +337,22 @@ def test_thesis_find_related_nodes_via_question(user_id, monkeypatch):
     assert isinstance(related2, list)
 
 
-def test_thesis_artifact_ingest_and_search(user_id, monkeypatch):
+def test_atlas_artifact_ingest_and_search(user_id, monkeypatch):
     class _FakeEmbed:
         def generate(self, texts):
             return np.random.rand(len(texts), 768).astype("float32")
         def generate_single(self, text):
             return np.random.rand(768).astype("float32")
     # Patch *where the name is used* — conftest already session-patched the
-    # defining module, but thesis_connector imports the name at module load,
+    # defining module, but atlas_connector imports the name at module load,
     # so the binding is local to that module.
     fake = _FakeEmbed()
     monkeypatch.setattr(
-        "synsc.services.thesis_connector.get_embedding_generator",
+        "synsc.services.atlas_connector.get_embedding_generator",
         lambda: fake,
     )
 
-    from synsc.services.thesis_connector import (
+    from synsc.services.atlas_connector import (
         ingest_workspace, ingest_node, ingest_artifact,
         find_relevant_artifacts,
     )
@@ -378,18 +378,18 @@ def test_thesis_artifact_ingest_and_search(user_id, monkeypatch):
     )
     assert len(artifacts) >= 1
     assert artifacts[0]["kind"] == "table"
-    assert artifacts[0]["ref"].startswith("thesis://")
+    assert artifacts[0]["ref"].startswith("atlas://")
 
 
-def test_thesis_tool_contract_ingest_and_retrieve(user_id):
-    from synsc.services.thesis_connector import (
+def test_atlas_tool_contract_ingest_and_retrieve(user_id):
+    from synsc.services.atlas_connector import (
         ingest_tool_contract, retrieve_tool_contract,
     )
     res = ingest_tool_contract(
         user_id=user_id,
-        tool_name="thesis_search_nodes",
-        display_name="Search Thesis nodes",
-        description="Hybrid search over Thesis nodes",
+        tool_name="atlas_search_nodes",
+        display_name="Search Atlas nodes",
+        description="Hybrid search over Atlas nodes",
         when_to_use="When the agent needs to find prior hypotheses or claims",
     )
     assert res["success"] is True
@@ -398,4 +398,4 @@ def test_thesis_tool_contract_ingest_and_retrieve(user_id):
         user_id=user_id, task="find prior hypotheses", top_k=5,
     )
     assert len(contracts) >= 1
-    assert contracts[0]["tool_name"] == "thesis_search_nodes"
+    assert contracts[0]["tool_name"] == "atlas_search_nodes"

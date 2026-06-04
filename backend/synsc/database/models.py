@@ -818,22 +818,22 @@ class UserDocumentationSource(Base):
 
 
 # ==============================================================================
-# THESIS CONNECTOR MODELS
+# ATLAS CONNECTOR MODELS
 # ==============================================================================
 
 
-class ThesisWorkspace(Base):
-    """A Thesis workspace — a project / experiment campaign of nodes.
+class AtlasWorkspace(Base):
+    """A Atlas workspace — a project / experiment campaign of nodes.
 
-    Indexed via the Thesis connector (ports nodes, artifacts, executions,
+    Indexed via the Atlas connector (ports nodes, artifacts, executions,
     tool contracts into Delphi for graph-aware retrieval). The connector
     is push-based: callers register a workspace and stream entities in.
     """
 
-    __tablename__ = "thesis_workspaces"
+    __tablename__ = "atlas_workspaces"
     __table_args__ = (
-        UniqueConstraint("external_id", name="uq_thesis_workspaces_external"),
-        Index("idx_thesis_workspaces_indexed_by", "indexed_by"),
+        UniqueConstraint("external_id", name="uq_atlas_workspaces_external"),
+        Index("idx_atlas_workspaces_indexed_by", "indexed_by"),
     )
 
     workspace_id: Mapped[str] = mapped_column(
@@ -854,19 +854,19 @@ class ThesisWorkspace(Base):
     )
 
 
-class ThesisNode(Base):
-    """A node in the Thesis graph — claim/hypothesis/plan/decision/insight."""
+class AtlasNode(Base):
+    """A node in the Atlas graph — claim/hypothesis/plan/decision/insight."""
 
-    __tablename__ = "thesis_nodes"
+    __tablename__ = "atlas_nodes"
     __table_args__ = (
         UniqueConstraint(
             "workspace_id", "external_id",
-            name="uq_thesis_nodes_workspace_external",
+            name="uq_atlas_nodes_workspace_external",
         ),
-        Index("idx_thesis_nodes_workspace", "workspace_id"),
-        Index("idx_thesis_nodes_type", "node_type"),
-        Index("idx_thesis_nodes_status", "status"),
-        Index("idx_thesis_nodes_outcome", "outcome"),
+        Index("idx_atlas_nodes_workspace", "workspace_id"),
+        Index("idx_atlas_nodes_type", "node_type"),
+        Index("idx_atlas_nodes_status", "status"),
+        Index("idx_atlas_nodes_outcome", "outcome"),
     )
 
     node_id: Mapped[str] = mapped_column(
@@ -874,7 +874,7 @@ class ThesisNode(Base):
     )
     workspace_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
         nullable=False,
     )
     external_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -895,12 +895,12 @@ class ThesisNode(Base):
     )
 
 
-class ThesisNodeChunk(Base):
-    """Chunked content of a Thesis node (summary / content / rationale / outcome)."""
+class AtlasNodeChunk(Base):
+    """Chunked content of an Atlas node (summary / content / rationale / outcome)."""
 
-    __tablename__ = "thesis_node_chunks"
+    __tablename__ = "atlas_node_chunks"
     __table_args__ = (
-        Index("idx_thesis_node_chunks_node", "node_id"),
+        Index("idx_atlas_node_chunks_node", "node_id"),
     )
 
     chunk_id: Mapped[str] = mapped_column(
@@ -908,12 +908,12 @@ class ThesisNodeChunk(Base):
     )
     node_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+        ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
         nullable=False,
     )
     workspace_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
         nullable=False,
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -923,17 +923,17 @@ class ThesisNodeChunk(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
-class ThesisEdge(Base):
-    """Directed edge between nodes in the Thesis graph."""
+class AtlasEdge(Base):
+    """Directed edge between nodes in the Atlas graph."""
 
-    __tablename__ = "thesis_edges"
+    __tablename__ = "atlas_edges"
     __table_args__ = (
         UniqueConstraint(
             "source_node_id", "target_node_id", "edge_type",
-            name="uq_thesis_edges_triple",
+            name="uq_atlas_edges_triple",
         ),
-        Index("idx_thesis_edges_source", "source_node_id", "edge_type"),
-        Index("idx_thesis_edges_target", "target_node_id", "edge_type"),
+        Index("idx_atlas_edges_source", "source_node_id", "edge_type"),
+        Index("idx_atlas_edges_target", "target_node_id", "edge_type"),
     )
 
     edge_id: Mapped[str] = mapped_column(
@@ -941,17 +941,17 @@ class ThesisEdge(Base):
     )
     workspace_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
         nullable=False,
     )
     source_node_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+        ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
         nullable=False,
     )
     target_node_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+        ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
         nullable=False,
     )
     edge_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -959,14 +959,14 @@ class ThesisEdge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
-class ThesisArtifact(Base):
+class AtlasArtifact(Base):
     """An artifact (table/plot/log/diff/metric) attached to a node."""
 
-    __tablename__ = "thesis_artifacts"
+    __tablename__ = "atlas_artifacts"
     __table_args__ = (
-        Index("idx_thesis_artifacts_workspace", "workspace_id"),
-        Index("idx_thesis_artifacts_node", "node_id"),
-        Index("idx_thesis_artifacts_kind", "kind"),
+        Index("idx_atlas_artifacts_workspace", "workspace_id"),
+        Index("idx_atlas_artifacts_node", "node_id"),
+        Index("idx_atlas_artifacts_kind", "kind"),
     )
 
     artifact_id: Mapped[str] = mapped_column(
@@ -974,12 +974,12 @@ class ThesisArtifact(Base):
     )
     workspace_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
         nullable=False,
     )
     node_id: Mapped[str | None] = mapped_column(
         String(36),
-        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+        ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
     )
     external_id: Mapped[str | None] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -990,13 +990,13 @@ class ThesisArtifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
-class ThesisExecution(Base):
+class AtlasExecution(Base):
     """An execution / run log for a node."""
 
-    __tablename__ = "thesis_executions"
+    __tablename__ = "atlas_executions"
     __table_args__ = (
-        Index("idx_thesis_executions_node", "node_id"),
-        Index("idx_thesis_executions_status", "status"),
+        Index("idx_atlas_executions_node", "node_id"),
+        Index("idx_atlas_executions_status", "status"),
     )
 
     execution_id: Mapped[str] = mapped_column(
@@ -1004,12 +1004,12 @@ class ThesisExecution(Base):
     )
     workspace_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
         nullable=False,
     )
     node_id: Mapped[str | None] = mapped_column(
         String(36),
-        ForeignKey("thesis_nodes.node_id", ondelete="CASCADE"),
+        ForeignKey("atlas_nodes.node_id", ondelete="CASCADE"),
     )
     external_id: Mapped[str | None] = mapped_column(Text)
     tool: Mapped[str | None] = mapped_column(Text)
@@ -1022,12 +1022,12 @@ class ThesisExecution(Base):
     error: Mapped[str | None] = mapped_column(Text)
 
 
-class ThesisToolContract(Base):
+class AtlasToolContract(Base):
     """Per-tool docs: signature + when_to_use + examples."""
 
-    __tablename__ = "thesis_tool_contracts"
+    __tablename__ = "atlas_tool_contracts"
     __table_args__ = (
-        Index("idx_thesis_tool_contracts_tool", "tool_name"),
+        Index("idx_atlas_tool_contracts_tool", "tool_name"),
     )
 
     contract_id: Mapped[str] = mapped_column(
@@ -1035,7 +1035,7 @@ class ThesisToolContract(Base):
     )
     workspace_id: Mapped[str | None] = mapped_column(
         String(36),
-        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
     )
     tool_name: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str | None] = mapped_column(Text)
@@ -1048,15 +1048,15 @@ class ThesisToolContract(Base):
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
-class UserThesisWorkspace(Base):
-    """User access link for Thesis workspaces."""
+class UserAtlasWorkspace(Base):
+    """User access link for Atlas workspaces."""
 
-    __tablename__ = "user_thesis_workspaces"
+    __tablename__ = "user_atlas_workspaces"
 
     user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     workspace_id: Mapped[str] = mapped_column(
         String(36),
-        ForeignKey("thesis_workspaces.workspace_id", ondelete="CASCADE"),
+        ForeignKey("atlas_workspaces.workspace_id", ondelete="CASCADE"),
         primary_key=True,
     )
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -1162,7 +1162,7 @@ class ContextBlob(Base):
 
     Mirrors Nia's nia.context save/load. The blob is a JSONB payload with
     indexed source_ids, source_types, default topic/tokens, and an
-    optional thesis_workspace_id.
+    optional atlas_workspace_id.
     """
 
     __tablename__ = "context_blobs"

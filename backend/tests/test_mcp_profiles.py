@@ -22,17 +22,17 @@ def test_profile_all_exposes_everything(monkeypatch):
     names = _names_for_profile(monkeypatch, "all")
     assert "index_repository" in names
     assert "index_paper" in names
-    assert "thesis_search_nodes" in names
+    assert "atlas_search_nodes" in names
     assert "research" in names
     assert "resolve_source" in names
 
 
-def test_profile_code_excludes_thesis_and_papers(monkeypatch):
+def test_profile_code_excludes_atlas_and_papers(monkeypatch):
     names = _names_for_profile(monkeypatch, "code")
     assert "index_repository" in names
     assert "search_code" in names
     assert "resolve_source" in names  # sources still on (cross-cutting)
-    assert not any(n.startswith("thesis_") for n in names)
+    assert not any(n.startswith("atlas_") for n in names)
     assert "index_paper" not in names
     assert "research" not in names
 
@@ -43,13 +43,13 @@ def test_profile_papers_includes_research(monkeypatch):
     assert "search_papers" in names
     assert "research" in names
     assert "index_repository" not in names
-    assert not any(n.startswith("thesis_") for n in names)
+    assert not any(n.startswith("atlas_") for n in names)
 
 
-def test_profile_thesis_only_thesis_and_sources(monkeypatch):
-    names = _names_for_profile(monkeypatch, "thesis")
-    assert any(n.startswith("thesis_") for n in names)
-    assert "build_thesis_context" in names
+def test_profile_atlas_only_atlas_and_sources(monkeypatch):
+    names = _names_for_profile(monkeypatch, "atlas")
+    assert any(n.startswith("atlas_") for n in names)
+    assert "build_atlas_context" in names
     assert "search" in names  # sources cross-cut
     assert "index_repository" not in names
     assert "index_paper" not in names
@@ -68,4 +68,4 @@ def test_profile_minimal_is_tiny(monkeypatch):
 def test_profile_unknown_falls_back_to_all(monkeypatch):
     names = _names_for_profile(monkeypatch, "nonexistent")
     assert "index_repository" in names
-    assert "thesis_search_nodes" in names
+    assert "atlas_search_nodes" in names

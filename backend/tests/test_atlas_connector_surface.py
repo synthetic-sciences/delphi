@@ -1,4 +1,4 @@
-"""Surface-area + auth-gating tests for the Thesis connector.
+"""Surface-area + auth-gating tests for the Atlas connector.
 
 We can't run the DB-backed paths without a live Postgres+pgvector, but we
 can check:
@@ -13,7 +13,7 @@ import inspect
 
 import pytest
 
-from synsc.services import thesis_connector as tc
+from synsc.services import atlas_connector as tc
 
 
 def test_module_exports_full_api():
@@ -27,20 +27,20 @@ def test_module_exports_full_api():
         "ingest_execution",
         "ingest_tool_contract",
         # Retrieval
-        "search_thesis_nodes",
+        "search_atlas_nodes",
         "find_related_nodes",
         "find_relevant_artifacts",
         "retrieve_tool_contract",
         # Workflow tools
         "find_what_was_tried",
         "find_what_not_to_repeat",
-        "build_thesis_context",
+        "build_atlas_context",
         "summarize_relevant_subgraph",
         "find_decisions",
         "get_active_work_context",
     ]
     for fn_name in required:
-        assert hasattr(tc, fn_name), f"thesis_connector missing {fn_name}"
+        assert hasattr(tc, fn_name), f"atlas_connector missing {fn_name}"
         fn = getattr(tc, fn_name)
         assert callable(fn), f"{fn_name} is not callable"
 
@@ -91,15 +91,15 @@ def test_ingest_execution_rejects_missing_user():
 
 def test_ingest_tool_contract_rejects_missing_user():
     res = tc.ingest_tool_contract(
-        user_id=None, tool_name="thesis_search_nodes",
+        user_id=None, tool_name="atlas_search_nodes",
     )
     assert res["success"] is False
 
 
-def test_search_thesis_nodes_empty_inputs():
+def test_search_atlas_nodes_empty_inputs():
     """Empty query → empty list, no DB call attempted."""
-    assert tc.search_thesis_nodes(query="", user_id="u1") == []
-    assert tc.search_thesis_nodes(query="x", user_id="") == []
+    assert tc.search_atlas_nodes(query="", user_id="u1") == []
+    assert tc.search_atlas_nodes(query="x", user_id="") == []
 
 
 def test_find_related_nodes_requires_anchor():
@@ -124,8 +124,8 @@ def test_find_related_nodes_question_signature_accepted():
     assert "node_id" in sig.parameters
 
 
-def test_build_thesis_context_rejects_missing_user():
-    res = tc.build_thesis_context(user_id=None, question="x")
+def test_build_atlas_context_rejects_missing_user():
+    res = tc.build_atlas_context(user_id=None, question="x")
     assert res["success"] is False
     assert res["error"] == "auth_required"
 

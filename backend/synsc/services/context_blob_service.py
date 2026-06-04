@@ -28,7 +28,7 @@ _WELL_KNOWN_KEYS = {
     "source_types",
     "topic",
     "tokens",
-    "thesis_workspace_id",
+    "atlas_workspace_id",
     "mcp_profile",
     "notes",
 }

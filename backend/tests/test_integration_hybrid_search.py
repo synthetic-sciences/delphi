@@ -70,7 +70,7 @@ def fake_embeddings(monkeypatch):
     for target in (
         "synsc.embeddings.generator.get_embedding_generator",
         "synsc.services.search_service.get_embedding_generator",
-        "synsc.services.thesis_connector.get_embedding_generator",
+        "synsc.services.atlas_connector.get_embedding_generator",
     ):
         try:
             monkeypatch.setattr(target, lambda inst=instance: inst)

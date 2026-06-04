@@ -307,11 +307,11 @@ def joint_retrieval(
     repo_ids: list[str] | None = None,
     top_k: int = 10,
 ) -> dict[str, Any]:
-    """One-shot: paper hits, code hits, and Thesis-graph hits, fused.
+    """One-shot: paper hits, code hits, and Atlas-graph hits, fused.
 
     Useful for research workflows where the agent needs to cite a paper,
     reference an implementation, and pick up prior decisions from the
-    Thesis graph in a single response.
+    Atlas graph in a single response.
     """
     from synsc.embeddings.generator import get_embedding_generator
     from synsc.services.search_service import SearchService
@@ -336,10 +336,10 @@ def joint_retrieval(
     # Graph hits — best-effort, may not be installed.
     graph_hits: list[dict] = []
     try:
-        from synsc.services.thesis_connector import (
-            search_thesis_nodes,
+        from synsc.services.atlas_connector import (
+            search_atlas_nodes,
         )
-        graph_hits = search_thesis_nodes(query=query, user_id=user_id, top_k=top_k)
+        graph_hits = search_atlas_nodes(query=query, user_id=user_id, top_k=top_k)
     except Exception:
         pass
 
