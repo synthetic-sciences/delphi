@@ -97,8 +97,11 @@ docs/*
 # …but keep the curated public references tracked.
 !docs/env-advanced.md
 !docs/gpu.md
+!docs/cold-start.md
+!docs/deployment-lite.md
 !frontend/src/app/docs/
 CLAUDE.md
 
 # ─── Local-only scratch (bench results, work notes, etc.) ────
 ignore/
+delphi.md

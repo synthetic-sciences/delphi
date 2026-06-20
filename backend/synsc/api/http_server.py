@@ -1204,6 +1204,31 @@ def create_app() -> FastAPI:
             logger.error("Indexing failed", error=str(e))
             return SafeJSONResponse(content={"success": False, "error": "Repository indexing failed. Check server logs for details."}, status_code=500)
 
+    @app.get("/v1/catalog", tags=["Code"])
+    def catalog_search(
+        q: str | None = None,
+        category: str | None = None,
+        limit: int = 25,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """Search the curated source catalog (library name -> indexable source)."""
+        from synsc.services.catalog import CatalogService
+
+        service = CatalogService()
+        if q:
+            results = service.search(q, limit=limit, category=category)
+        else:
+            results = service.list_entries(category=category)[:limit]
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "query": q,
+                "categories": service.categories(),
+                "count": len(results),
+                "results": results,
+            }
+        )
+
     @app.post("/v1/repositories/index/local", tags=["Code"])
     @limiter.limit(INDEX_LIMIT)
     async def index_local_folder(
