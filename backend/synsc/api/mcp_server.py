@@ -356,6 +356,78 @@ Provides deep context to AI agents through:
             )
         return result
 
+    @_tool_in("code", "sources", "minimal")
+    def catalog_search(query: str, limit: int = 10, category: str | None = None) -> dict[str, Any]:
+        """Resolve a library/framework name to an indexable source (cold start).
+
+        Delphi ships a curated catalog of popular libraries (React, FastAPI,
+        Postgres, PyTorch, Kubernetes, ...). Use this when the user names a
+        library but hasn't indexed it yet — it returns the canonical source URL
+        so you can index it without the user hunting for a repo link. Works with
+        zero indexed sources.
+
+        Args:
+            query: Library/framework name or keyword (e.g. "nextjs", "vector db").
+            limit: Max results (default 10).
+            category: Optional filter (frontend, backend, database, ai-ml, ...).
+
+        Returns:
+            Dict with matching catalog entries (name, kind, url, description).
+        """
+        from synsc.services.catalog import CatalogService
+
+        results = CatalogService().search(query, limit=limit, category=category)
+        return {"success": True, "query": query, "count": len(results), "results": results}
+
+    @_tool_in("code")
+    async def quick_index(name: str, quality_mode: str | None = None) -> dict[str, Any]:
+        """Resolve a library name via the catalog and index it in one step.
+
+        Convenience for cold start: ``quick_index("fastapi")`` looks up FastAPI
+        in the curated catalog and indexes its repository. If the name doesn't
+        resolve, returns catalog suggestions instead.
+
+        Args:
+            name: Library/framework name (e.g. "react", "langchain").
+            quality_mode: 'agent' (default for MCP), 'balanced', or 'fast'.
+
+        Returns:
+            The index result, or suggestions if the name was ambiguous/unknown.
+        """
+        import asyncio
+
+        from synsc.config import get_config
+        from synsc.services.catalog import CatalogService
+        from synsc.services.indexing_service import IndexingService
+
+        entry = CatalogService().resolve(name)
+        if entry is None:
+            return {
+                "success": False,
+                "error_code": "not_in_catalog",
+                "message": f"'{name}' is not in the catalog. Try catalog_search or index_repository with a URL.",
+                "suggestions": CatalogService().search(name, limit=5),
+            }
+        if entry["kind"] != "repository":
+            return {
+                "success": False,
+                "error_code": "not_indexable_repo",
+                "message": f"'{entry['name']}' is a {entry['kind']} source; use index_source for it.",
+                "entry": entry,
+            }
+        if quality_mode is None:
+            quality_mode = get_config().quality.mcp_default_mode
+        service = IndexingService()
+        user_id = get_authenticated_user_id()
+        result = await asyncio.to_thread(
+            service.index_repository, entry["url"], None, user_id=user_id,
+            quality_mode=quality_mode,
+        )
+        if isinstance(result, dict):
+            result.setdefault("resolved_from", entry["name"])
+            result.setdefault("source_url", entry["url"])
+        return result
+
     @_tool_in("code")
     def list_repositories(limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """List all indexed repositories.
