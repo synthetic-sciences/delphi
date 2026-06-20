@@ -1606,6 +1606,74 @@ def create_app() -> FastAPI:
         return SafeJSONResponse(content=result)
 
     # ==========================================================================
+    # Code Dependency Graph (callers / callees / blast radius)
+    # ==========================================================================
+
+    @app.get("/v1/repositories/{repo_id}/callers", tags=["Code"])
+    def code_callers(
+        repo_id: str,
+        symbol: str,
+        limit: int = 50,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """Direct callers of a symbol (who calls this?)."""
+        from synsc.services.code_graph_service import CodeGraphService
+
+        result = CodeGraphService(user_id=auth.user_id).who_calls(repo_id, symbol, limit=limit)
+        return SafeJSONResponse(content=result)
+
+    @app.get("/v1/repositories/{repo_id}/callees", tags=["Code"])
+    def code_callees(
+        repo_id: str,
+        symbol: str,
+        limit: int = 100,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """What a symbol calls — internal symbols plus external names."""
+        from synsc.services.code_graph_service import CodeGraphService
+
+        result = CodeGraphService(user_id=auth.user_id).get_callees(repo_id, symbol, limit=limit)
+        return SafeJSONResponse(content=result)
+
+    @app.get("/v1/repositories/{repo_id}/impact", tags=["Code"])
+    def code_impact(
+        repo_id: str,
+        symbol: str,
+        max_depth: int = 3,
+        max_nodes: int = 100,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """Blast radius — transitive callers impacted if a symbol changes."""
+        from synsc.services.code_graph_service import CodeGraphService
+
+        result = CodeGraphService(user_id=auth.user_id).blast_radius(
+            repo_id, symbol, max_depth=max_depth, max_nodes=max_nodes
+        )
+        return SafeJSONResponse(content=result)
+
+    @app.post("/v1/repositories/{repo_id}/graph", tags=["Code"])
+    def code_build_graph(
+        repo_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """(Re)build the code-dependency graph for a repository."""
+        from synsc.services.code_graph_service import CodeGraphService
+
+        result = CodeGraphService(user_id=auth.user_id).build_for_repo(repo_id)
+        return SafeJSONResponse(content=result)
+
+    @app.get("/v1/repositories/{repo_id}/graph/stats", tags=["Code"])
+    def code_graph_stats(
+        repo_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """Edge / resolution counts for a repository's code graph."""
+        from synsc.services.code_graph_service import CodeGraphService
+
+        result = CodeGraphService(user_id=auth.user_id).graph_stats(repo_id)
+        return SafeJSONResponse(content=result)
+
+    # ==========================================================================
     # Paper Endpoints (Research Context)
     # ==========================================================================
 

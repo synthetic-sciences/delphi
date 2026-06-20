@@ -305,6 +305,32 @@ CREATE INDEX IF NOT EXISTS idx_symbols_qualified ON symbols(qualified_name);
 
 
 -- ============================================================================
+-- SYMBOL REFERENCES (code-dependency graph: calls / imports)
+-- Directed edges for caller/callee lookup and blast-radius impact analysis.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS symbol_references (
+    reference_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    repo_id UUID NOT NULL REFERENCES repositories(repo_id) ON DELETE CASCADE,
+    source_symbol_id UUID REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+    target_symbol_id UUID REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+    source_file_id UUID,
+    callee_name TEXT NOT NULL,
+    reference_type TEXT NOT NULL DEFAULT 'calls',
+    line INTEGER,
+    is_resolved BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT uq_symbol_reference_edge
+        UNIQUE (source_symbol_id, target_symbol_id, callee_name, reference_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_symbol_refs_repo ON symbol_references(repo_id);
+CREATE INDEX IF NOT EXISTS idx_symbol_refs_source ON symbol_references(source_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_symbol_refs_target ON symbol_references(target_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_symbol_refs_callee ON symbol_references(repo_id, callee_name);
+
+
+-- ============================================================================
 -- PART 10: PAPERS (Research Paper Context)
 -- ============================================================================
 -- Papers are globally deduplicated by pdf_hash

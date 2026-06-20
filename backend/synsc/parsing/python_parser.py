@@ -4,7 +4,7 @@ from typing import Any
 
 import structlog
 import tree_sitter_python as tspython
-from tree_sitter import Language, Parser, Node, Tree
+from tree_sitter import Language, Node, Parser, Tree
 
 from synsc.parsing.base import BaseParser
 from synsc.parsing.models import CodeRegion, ExtractedSymbol
@@ -64,7 +64,20 @@ class PythonParser(BaseParser):
         self._visit_node(tree.root_node, lines, symbols, parent_name=None)
         
         return symbols
-    
+
+    def extract_calls(self, content: str) -> list:
+        """Extract call sites for the code-dependency graph."""
+        from synsc.parsing.call_graph_util import extract_scoped_calls
+
+        tree = self.parse(content)
+        return extract_scoped_calls(
+            tree.root_node,
+            function_nodes=frozenset({"function_definition"}),
+            container_nodes=frozenset({"class_definition"}),
+            call_nodes=frozenset({"call"}),
+            name_field="name",
+        )
+
     def _visit_node(
         self,
         node: Node,
@@ -179,12 +192,13 @@ class PythonParser(BaseParser):
                 name = self._get_node_text(child)
             elif child.type == "parameters":
                 parameters = self._extract_parameters(child)
-            elif child.type == "type":
+            # Plain return type, or a node following the `->` annotation arrow.
+            elif child.type == "type" or (
+                child.prev_sibling
+                and child.prev_sibling.type == "->"
+                and child.type != "->"
+            ):
                 return_type = self._get_node_text(child)
-            # Handle return type annotation after ->
-            elif child.type == "->" or (child.prev_sibling and child.prev_sibling.type == "->"):
-                if child.type != "->":
-                    return_type = self._get_node_text(child)
         
         # Get decorators
         decorators = self._extract_decorators(decorated_node or node)
@@ -360,9 +374,9 @@ class PythonParser(BaseParser):
         for child in node.children:
             if child.type in ("identifier", "name"):
                 param_name = self._get_node_text(child)
-            elif child.type not in ("=",):
-                if param_name:  # Already got name, this is the default
-                    default = self._get_node_text(child)
+            elif child.type not in ("=",) and param_name:
+                # Already got name, this is the default
+                default = self._get_node_text(child)
         
         if param_name:
             return {"name": param_name, "type": None, "default": default}
@@ -435,14 +449,10 @@ class PythonParser(BaseParser):
                             if expr.type == "string":
                                 text = self._get_node_text(expr)
                                 # Strip triple quotes
-                                if text.startswith('"""') and text.endswith('"""'):
-                                    return text[3:-3].strip()
-                                elif text.startswith("'''") and text.endswith("'''"):
+                                if text.startswith('"""') and text.endswith('"""') or text.startswith("'''") and text.endswith("'''"):
                                     return text[3:-3].strip()
                                 # Single line string docstring
-                                elif text.startswith('"') and text.endswith('"'):
-                                    return text[1:-1].strip()
-                                elif text.startswith("'") and text.endswith("'"):
+                                elif text.startswith('"') and text.endswith('"') or text.startswith("'") and text.endswith("'"):
                                     return text[1:-1].strip()
                         # Only check first statement
                         break
@@ -476,10 +486,12 @@ class PythonParser(BaseParser):
             sig_lines.append(line)
             # Check if this line ends the signature (ends with : not inside string)
             stripped = line.rstrip()
-            if stripped.endswith(":"):
-                # Make sure we're not in a multi-line string or something
-                if "def " in "\n".join(sig_lines) or not sig_lines[0].strip().startswith("def"):
-                    break
+            # Make sure we're not in a multi-line string or something
+            if stripped.endswith(":") and (
+                "def " in "\n".join(sig_lines)
+                or not sig_lines[0].strip().startswith("def")
+            ):
+                break
         
         signature = "\n".join(sig_lines).rstrip()
         

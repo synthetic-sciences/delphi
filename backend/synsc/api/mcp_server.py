@@ -659,6 +659,76 @@ Provides deep context to AI agents through:
         return {"success": True, **result}
 
     @_tool_in("code")
+    def find_callers(repo_id: str, symbol: str, limit: int = 50) -> dict[str, Any]:
+        """Find the direct callers of a function/method (code-dependency graph).
+
+        Answers "who calls this?" — the inverse of reading a function body.
+        Resolve ``symbol`` by symbol_id, qualified name (``Class.method``), or
+        bare name.
+
+        Args:
+            repo_id: Repository identifier (UUID).
+            symbol: Symbol id, qualified name, or name to find callers of.
+            limit: Max callers to return (default 50).
+        """
+        from synsc.services.code_graph_service import CodeGraphService
+
+        return CodeGraphService(user_id=get_authenticated_user_id()).who_calls(
+            repo_id, symbol, limit=limit
+        )
+
+    @_tool_in("code")
+    def find_callees(repo_id: str, symbol: str, limit: int = 100) -> dict[str, Any]:
+        """Find what a function/method calls — internal symbols and external names.
+
+        Args:
+            repo_id: Repository identifier (UUID).
+            symbol: Symbol id, qualified name, or name.
+            limit: Max edges to consider (default 100).
+        """
+        from synsc.services.code_graph_service import CodeGraphService
+
+        return CodeGraphService(user_id=get_authenticated_user_id()).get_callees(
+            repo_id, symbol, limit=limit
+        )
+
+    @_tool_in("code")
+    def impact_analysis(
+        repo_id: str, symbol: str, max_depth: int = 3, max_nodes: int = 100
+    ) -> dict[str, Any]:
+        """Blast radius — "what breaks if I change this function?"
+
+        Walks transitive callers up to ``max_depth`` hops and returns the
+        impacted symbols with their hop distance. Use before editing a shared
+        function to understand the ripple before you touch it.
+
+        Args:
+            repo_id: Repository identifier (UUID).
+            symbol: Symbol id, qualified name, or name to analyze.
+            max_depth: Transitive caller depth to traverse (default 3).
+            max_nodes: Cap on impacted symbols returned (default 100).
+        """
+        from synsc.services.code_graph_service import CodeGraphService
+
+        return CodeGraphService(user_id=get_authenticated_user_id()).blast_radius(
+            repo_id, symbol, max_depth=max_depth, max_nodes=max_nodes
+        )
+
+    @_tool_in("code")
+    def build_code_graph(repo_id: str) -> dict[str, Any]:
+        """(Re)build the code-dependency graph for a repository.
+
+        Normally built automatically after indexing. Call this to rebuild on
+        demand (e.g. for a repo indexed before the graph feature existed).
+
+        Args:
+            repo_id: Repository identifier (UUID).
+        """
+        from synsc.services.code_graph_service import CodeGraphService
+
+        return CodeGraphService(user_id=get_authenticated_user_id()).build_for_repo(repo_id)
+
+    @_tool_in("code")
     def remove_from_collection(repo_id: str) -> dict[str, Any]:
         """Remove a repository from your collection without deleting it.
 

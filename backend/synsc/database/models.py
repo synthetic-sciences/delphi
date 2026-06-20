@@ -431,6 +431,52 @@ class Symbol(Base):
         self.decorators = decorators  # jsonb column
 
 
+class SymbolReference(Base):
+    """A directed edge in the code-dependency graph.
+
+    Represents one symbol referencing another — primarily ``calls`` (function A
+    calls function B) but also ``imports``. ``target_symbol_id`` is resolved by
+    name within the same repository; when resolution fails the edge is still
+    recorded with ``is_resolved=False`` and the raw ``callee_name``, which
+    surfaces external/library calls in impact analysis.
+
+    These edges power caller/callee lookup and blast-radius ("what breaks if I
+    change this function?") — the code-intelligence surface that distinguishes
+    Delphi from pure-retrieval context servers.
+    """
+
+    __tablename__ = "symbol_references"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_symbol_id", "target_symbol_id", "callee_name", "reference_type",
+            name="uq_symbol_reference_edge",
+        ),
+        Index("idx_symbol_refs_repo", "repo_id"),
+        Index("idx_symbol_refs_source", "source_symbol_id"),
+        Index("idx_symbol_refs_target", "target_symbol_id"),
+        Index("idx_symbol_refs_callee", "repo_id", "callee_name"),
+    )
+
+    reference_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    repo_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("repositories.repo_id", ondelete="CASCADE"), nullable=False
+    )
+    source_symbol_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("symbols.symbol_id", ondelete="CASCADE")
+    )
+    target_symbol_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("symbols.symbol_id", ondelete="CASCADE")
+    )
+    source_file_id: Mapped[str | None] = mapped_column(String(36))
+    callee_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    reference_type: Mapped[str] = mapped_column(String(20), default="calls", nullable=False)
+    line: Mapped[int | None] = mapped_column(Integer)
+    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
 # ==============================================================================
 # RESEARCH PAPER MODELS
 # ==============================================================================

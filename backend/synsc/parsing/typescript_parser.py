@@ -3,9 +3,9 @@
 from typing import Any
 
 import structlog
-import tree_sitter_typescript as ts_typescript
 import tree_sitter_javascript as ts_javascript
-from tree_sitter import Language, Parser, Node, Tree
+import tree_sitter_typescript as ts_typescript
+from tree_sitter import Language, Node, Parser, Tree
 
 from synsc.parsing.base import BaseParser
 from synsc.parsing.models import CodeRegion, ExtractedSymbol
@@ -77,6 +77,25 @@ class TypeScriptParser(BaseParser):
         self._visit_node(tree.root_node, lines, symbols, parent_name=None)
         
         return symbols
+
+    def extract_calls(self, content: str) -> list:
+        """Extract call sites for the code-dependency graph."""
+        from synsc.parsing.call_graph_util import extract_scoped_calls
+
+        tree = self.parse(content)
+        return extract_scoped_calls(
+            tree.root_node,
+            function_nodes=frozenset(
+                {
+                    "function_declaration",
+                    "method_definition",
+                    "generator_function_declaration",
+                }
+            ),
+            container_nodes=frozenset({"class_declaration", "abstract_class_declaration"}),
+            call_nodes=frozenset({"call_expression", "new_expression"}),
+            name_field="name",
+        )
     
     def _visit_node(
         self,
@@ -330,7 +349,6 @@ class TypeScriptParser(BaseParser):
         parameters: list[dict[str, Any]] = []
         return_type: str | None = None
         is_async = False
-        is_static = False
         
         for child in node.children:
             if child.type == "property_identifier":
@@ -341,8 +359,6 @@ class TypeScriptParser(BaseParser):
                 return_type = self._get_type_annotation(child)
             elif child.type == "async":
                 is_async = True
-            elif child.type == "static":
-                is_static = True
         
         if not name:
             return None
@@ -509,9 +525,12 @@ class TypeScriptParser(BaseParser):
                 name = self._get_node_text(child)
             elif child.type == "type_annotation":
                 param_type = self._get_type_annotation(child)
-            elif child.type not in (":", "=", "?"):
-                if name and child.type not in ("type_annotation",):
-                    default = self._get_node_text(child)
+            elif (
+                child.type not in (":", "=", "?")
+                and name
+                and child.type not in ("type_annotation",)
+            ):
+                default = self._get_node_text(child)
         
         if name:
             return {"name": name + ("?" if optional else ""), "type": param_type, "default": default}

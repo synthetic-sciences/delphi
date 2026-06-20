@@ -509,6 +509,8 @@ class IndexingService:
                                         except Exception:
                                             logger.warning("Failed to rebuild relationships (non-critical)", exc_info=True)
 
+                                        self._build_code_graph_safe(existing.repo_id, report_progress)
+
                                         elapsed_time = (time.time() - start_time) * 1000
                                         return {
                                             "success": True,
@@ -737,6 +739,8 @@ class IndexingService:
             except Exception:
                 logger.warning("Failed to build chunk relationships (non-critical)", exc_info=True)
 
+            self._build_code_graph_safe(result["repo_id"], report_progress)
+
             elapsed_time = (time.time() - start_time) * 1000
 
             logger.info(
@@ -774,6 +778,28 @@ class IndexingService:
                 "error": str(e),
                 "message": f"Failed to index repository: {e}",
             }
+
+    def _build_code_graph_safe(self, repo_id: str, report_progress=None) -> None:
+        """Build the code-dependency graph post-index (best-effort, non-critical).
+
+        Runs in its own session after relationships are built. Failures are
+        logged but never fail the index — the graph is an enhancement layer.
+        """
+        try:
+            if report_progress is not None:
+                report_progress("code_graph", "Building code dependency graph...", 98)
+            from synsc.database.connection import get_engine
+            from synsc.services.code_graph_service import CodeGraphService
+
+            get_engine().dispose()
+            with get_session() as graph_session:
+                stats = CodeGraphService().build_for_repo(repo_id, session=graph_session)
+                graph_session.commit()
+            logger.info("Built code graph", repo_id=repo_id, **{
+                k: stats[k] for k in ("edges", "resolved", "unresolved") if k in stats
+            })
+        except Exception:
+            logger.warning("Failed to build code graph (non-critical)", exc_info=True)
 
     # ── Diff-aware re-indexing ─────────────────────────────────────────────
 
