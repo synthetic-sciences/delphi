@@ -45,6 +45,10 @@ EXTENSION_MAP: dict[str, str] = {
     ".hpp": "cpp",
     ".cc": "cpp",
     ".cxx": "cpp",
+    ".hh": "cpp",
+    ".hxx": "cpp",
+    ".c++": "cpp",
+    ".h++": "cpp",
     
     # C#
     ".cs": "csharp",
