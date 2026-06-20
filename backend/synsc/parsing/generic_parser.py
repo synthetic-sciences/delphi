@@ -15,6 +15,7 @@ import structlog
 from tree_sitter import Node, Parser, Tree
 
 from synsc.parsing.base import BaseParser
+from synsc.parsing.call_graph_util import CallSite, extract_scoped_calls
 from synsc.parsing.language_specs import (
     BODY_NODE_TYPES,
     NAME_NODE_TYPES,
@@ -26,17 +27,6 @@ from synsc.parsing.models import CodeRegion, ExtractedSymbol
 logger = structlog.get_logger(__name__)
 
 _MAX_SIGNATURE_CHARS = 400
-
-
-class CallSite:
-    """A single call discovered inside a function body."""
-
-    __slots__ = ("caller", "callee", "line")
-
-    def __init__(self, caller: str, callee: str, line: int) -> None:
-        self.caller = caller
-        self.callee = callee
-        self.line = line
 
 
 class GenericTreeSitterParser(BaseParser):
@@ -354,80 +344,16 @@ class GenericTreeSitterParser(BaseParser):
         if not self.spec.call_nodes:
             return []
         tree = self.parse(content)
-        calls: list[CallSite] = []
-        self._collect_calls(tree.root_node, calls, scope=[], parent_stack=[])
-        return calls
-
-    def _collect_calls(
-        self,
-        node: Node,
-        calls: list[CallSite],
-        scope: list[str],
-        parent_stack: list[str],
-    ) -> None:
-        node_type = node.type
-        pushed_scope = False
-        pushed_parent = False
-
-        if node_type in self.spec.function_nodes:
-            parent = parent_stack[-1] if parent_stack else None
-            if self.spec.method_receiver and node_type == "method_declaration":
-                receiver = self._go_receiver_type(node)
-                if receiver:
-                    parent = receiver
-            name = self._function_name(node)
-            if name:
-                qualified = f"{parent}.{name}" if parent else name
-                scope.append(qualified)
-                parent_stack.append(name)
-                pushed_scope = True
-                pushed_parent = True
-        elif node_type in self._container_map:
-            name = self._node_name(node)
-            if name:
-                parent_stack.append(name)
-                pushed_parent = True
-        elif node_type in self.spec.scope_nodes:
-            name = self._scope_name(node)
-            if name:
-                parent_stack.append(name)
-                pushed_parent = True
-
-        if node_type in self.spec.call_nodes:
-            callee = self._callee_name(node)
-            if callee:
-                caller = scope[-1] if scope else "<module>"
-                calls.append(CallSite(caller, callee, node.start_point[0] + 1))
-
-        for child in node.children:
-            self._collect_calls(child, calls, scope, parent_stack)
-
-        if pushed_scope:
-            scope.pop()
-        if pushed_parent:
-            parent_stack.pop()
-
-    def _callee_name(self, node: Node) -> str:
-        func = node.child_by_field_name("function")
-        if func is None:
-            func = node.child_by_field_name("name")
-        if func is None:
-            # Macro invocation / generic: first identifier-ish child.
-            for child in node.children:
-                if child.type in NAME_NODE_TYPES or child.type.endswith("identifier"):
-                    func = child
-                    break
-        if func is None:
-            return ""
-        text = self._text(func)
-        # Reduce ``a.b.c`` / ``a::b`` / ``$obj->method`` to the final component.
-        for sep in ("->", "::", "."):
-            if sep in text:
-                text = text.split(sep)[-1]
-        text = text.strip().strip("$&*")
-        if not text or not (text[0].isalpha() or text[0] == "_"):
-            return ""
-        return text
+        return extract_scoped_calls(
+            tree.root_node,
+            function_nodes=self.spec.function_nodes,
+            container_nodes=frozenset(self._container_map),
+            scope_nodes=self.spec.scope_nodes,
+            call_nodes=self.spec.call_nodes,
+            name_field=self.spec.name_field,
+            declarator_fallback=self.spec.declarator_fallback,
+            method_receiver=self.spec.method_receiver,
+        )
 
     def extract_imports(self, content: str) -> list[str]:
         if not self.spec.import_nodes:
