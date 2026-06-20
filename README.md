@@ -122,15 +122,26 @@ curl "http://localhost:8742/api/search/code?query=authentication+middleware" \
 | Tool | Description |
 |------|-------------|
 | `index_repository` | Index a GitHub repository. Accepts `quality_mode`, `include_tests`, `include_docs`, `include_examples`, `deep_index`, `force_reindex`. Branch is optional — the default branch is auto-detected. |
+| `index_local_folder` | Index a **local directory** straight from disk (no GitHub needed) — private/work code and work-in-progress. |
+| `quick_index` | Resolve a library name via the curated catalog and index it in one step (`quick_index("fastapi")`). |
+| `catalog_search` | Resolve a library/framework name to an indexable source — works with **zero** indexed sources (cold start). |
 | `search_code` | Hybrid code search (vector + BM25 + symbol + path + trigram, fused). |
-| `search_symbols` | Find functions, classes, methods by name. |
+| `search_symbols` | Find functions, classes, methods by name. Structural extraction for **16 languages** (Python, JS/TS, Go, Rust, Java, C, C++, C#, Ruby, PHP + Kotlin/Swift/Scala/Lua/Elixir/shell via regex). |
 | `get_symbol` | Full symbol details *plus the reconstructed source body* (no separate `get_file` call needed). |
+| `find_callers` | Who calls this symbol? (code-dependency graph) |
+| `find_callees` | What does this symbol call — internal symbols + external names. |
+| `impact_analysis` | Blast radius — transitive callers: "what breaks if I change this function?" |
+| `build_code_graph` | (Re)build the call graph for a repo (built automatically after indexing). |
+| `check_freshness` | Is this index stale? Compares against remote HEAD (git) or re-hashes files (local). |
+| `list_stale_sources` | List indexed repos whose index has drifted from its source. |
 | `get_file` | Retrieve file content from an indexed repo. |
 | `get_context` | Fetch a chunk plus adjacent chunks, enclosing function/class body, and same-class siblings. |
 | `build_context_pack` | Agent-ready pack: primary hits + enclosing bodies + adjacent chunks + same-class siblings + imports + linked tests/docs/examples/configs + symbol details + architecture summary, with a token budgeter and a re-query planner. |
 | `get_directory_structure` | Browse repository file tree. |
 | `analyze_repository` | Deep code analysis and architecture overview. |
 | `classify_failure` | Tag a "Delphi failed because" event with a stable failure-mode code. |
+
+> **Code intelligence:** after indexing, Delphi builds a symbol-level call graph so agents can reason about structure (`find_callers`, `impact_analysis`), not just retrieve text. **Cold start:** a curated catalog maps popular library names to sources so `catalog_search`/`quick_index` work before you've indexed anything. **Freshness:** `check_freshness` flags stale indexes. See [`docs/cold-start.md`](docs/cold-start.md).
 
 ### Papers
 | Tool | Description |
@@ -225,6 +236,31 @@ All configuration is via environment variables. See [`env.example`](env.example)
 | `EMBEDDING_DEVICE` | auto | `cpu`, `cuda`, or `mps` |
 | `SYNSC_ENABLE_RERANKER` | `false` | Enable cross-encoder reranking |
 | `HF_TOKEN` | — | HuggingFace token for dataset indexing |
+
+## Lite deployment
+
+For a laptop, CI, or air-gapped box, the **lite stack** (Postgres + API only)
+skips the ~1.2 GB embedding-model download via `EMBEDDING_PROVIDER=hash` and
+boots in seconds — hybrid retrieval's lexical + symbol branches still carry most
+of the quality. See [`docs/deployment-lite.md`](docs/deployment-lite.md).
+
+```bash
+docker compose -f docker-compose.lite.yml up --build
+```
+
+## Benchmark
+
+Retrieval quality and token economy are measured, not asserted. The reproducible,
+database-free harness in [`bench/`](bench/) scores recall@k, precision@k, nDCG,
+MRR, and token cost across naive grep, smart grep, BM25, symbol lookup, and
+Delphi's hybrid fusion:
+
+```bash
+uv run --project backend python bench/run.py
+```
+
+Point it at your own corpus with `--corpus` / `--tasks`. Methodology and sample
+numbers are in [`bench/README.md`](bench/README.md).
 
 ## Development
 

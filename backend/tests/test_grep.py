@@ -146,7 +146,9 @@ def test_post_grep_endpoint_invalid_regex_returns_400(client, monkeypatch):
     assert "invalid regex" in r.json()["detail"]
 
 
-def test_mcp_grep_source_tool_is_registered():
+def test_mcp_grep_source_tool_is_registered(monkeypatch):
+    # grep_source lives in the `docs` profile; force the full surface.
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     from synsc.api.mcp_server import create_server
 
     server = create_server()
@@ -182,6 +184,7 @@ def test_mcp_grep_source_invalid_regex_returns_structured_error(monkeypatch):
     monkeypatch.delenv("SYNSC_API_KEY", raising=False)
     monkeypatch.setattr(mcp_mod, "_current_api_key", mcp_mod.contextvars.ContextVar("test_key", default=None))
     monkeypatch.setattr(mcp_mod, "_current_user_id", mcp_mod.contextvars.ContextVar("test_uid", default=None))
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
 
     server = mcp_mod.create_server()
     tool = server._tool_manager._tools["grep_source"]

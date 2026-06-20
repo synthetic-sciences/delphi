@@ -168,6 +168,7 @@ def _isolate_mcp_auth(monkeypatch):
 
 def test_mcp_get_paper_passes_section_to_service(monkeypatch):
     _isolate_mcp_auth(monkeypatch)
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     from synsc.api.mcp_server import create_server
     from synsc.services import paper_service as ps_mod
 
@@ -190,6 +191,7 @@ def test_mcp_get_paper_passes_section_to_service(monkeypatch):
 
 def test_mcp_get_paper_invalid_regex_returns_structured_error(monkeypatch):
     _isolate_mcp_auth(monkeypatch)
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     from synsc.api.mcp_server import create_server
     from synsc.services import paper_service as ps_mod
 
