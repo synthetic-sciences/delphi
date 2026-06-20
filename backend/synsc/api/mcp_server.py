@@ -787,6 +787,33 @@ Provides deep context to AI agents through:
         return CodeGraphService(user_id=get_authenticated_user_id()).build_for_repo(repo_id)
 
     @_tool_in("code")
+    def check_freshness(repo_id: str) -> dict[str, Any]:
+        """Check whether a repository's index is stale (drifted from its source).
+
+        For GitHub repos, compares the indexed commit against the current remote
+        HEAD. For local folders, diffs current file hashes against what was
+        indexed (added/modified/deleted). Use this before trusting an index, or
+        to decide when to re-index.
+
+        Args:
+            repo_id: Repository identifier (UUID).
+        """
+        from synsc.services.freshness_service import FreshnessService
+
+        return FreshnessService(user_id=get_authenticated_user_id()).check_repository(repo_id)
+
+    @_tool_in("code")
+    def list_stale_sources(limit: int = 50) -> dict[str, Any]:
+        """List indexed repositories whose index has drifted from its source.
+
+        Args:
+            limit: Max repositories to check (default 50).
+        """
+        from synsc.services.freshness_service import FreshnessService
+
+        return FreshnessService(user_id=get_authenticated_user_id()).list_stale(limit=limit)
+
+    @_tool_in("code")
     def remove_from_collection(repo_id: str) -> dict[str, Any]:
         """Remove a repository from your collection without deleting it.
 
