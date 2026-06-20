@@ -1716,6 +1716,32 @@ def create_app() -> FastAPI:
         result = CodeGraphService(user_id=auth.user_id).graph_stats(repo_id)
         return SafeJSONResponse(content=result)
 
+    @app.get("/v1/freshness/stale", tags=["Code"])
+    def repositories_stale(
+        limit: int = 50,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """List repositories whose index has drifted from its source.
+
+        Uses a dedicated path (not /v1/repositories/stale) to avoid colliding
+        with the GET /v1/repositories/{repo_id} route.
+        """
+        from synsc.services.freshness_service import FreshnessService
+
+        result = FreshnessService(user_id=auth.user_id).list_stale(limit=limit)
+        return SafeJSONResponse(content=result)
+
+    @app.get("/v1/repositories/{repo_id}/freshness", tags=["Code"])
+    def repository_freshness(
+        repo_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """Check whether a repository's index is stale (drifted from source)."""
+        from synsc.services.freshness_service import FreshnessService
+
+        result = FreshnessService(user_id=auth.user_id).check_repository(repo_id)
+        return SafeJSONResponse(content=result)
+
     # ==========================================================================
     # Paper Endpoints (Research Context)
     # ==========================================================================

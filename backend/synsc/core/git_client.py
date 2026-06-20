@@ -108,6 +108,36 @@ class GitClient:
             pass
         return self.git_config.default_branch
 
+    def get_remote_commit_sha(
+        self, owner: str, name: str, branch: str, github_token: str | None = None
+    ) -> str | None:
+        """Return the current HEAD commit SHA of a branch on GitHub.
+
+        Used for freshness/drift detection: compare against the SHA captured at
+        index time to tell whether the index is behind the remote. Returns
+        ``None`` on any error (network, auth, missing branch) so callers degrade
+        gracefully rather than raise.
+        """
+        try:
+            headers = {"Accept": "application/vnd.github+json"}
+            if github_token:
+                headers["Authorization"] = f"Bearer {github_token}"
+            resp = _requests.get(
+                f"https://api.github.com/repos/{owner}/{name}/commits/{branch}",
+                headers=headers,
+                timeout=8,
+            )
+            if resp.status_code == 200:
+                sha = resp.json().get("sha")
+                if sha:
+                    return str(sha)
+        except Exception as e:
+            logger.debug(
+                "Failed to fetch remote commit sha",
+                owner=owner, name=name, branch=branch, error=str(e),
+            )
+        return None
+
     def get_repo_dir(self, owner: str, name: str, branch: str) -> Path:
         """Get the local directory for a repository.
         
