@@ -168,6 +168,18 @@ def _research_rate_check(api_key: str, mode: str, rpm: int) -> bool:
 # =============================================================================
 
 
+class IndexLocalFolderRequest(BaseModel):
+    """Request to index a local directory (no git clone)."""
+    path: str = Field(..., description="Absolute or ~-relative path to a local directory")
+    name: str | None = Field(default=None, description="Display name (defaults to folder basename)")
+    deep_index: bool = Field(default=False, description="Force AST chunking per function/class")
+    force_reindex: bool = Field(default=False, description="Re-index even if content is unchanged")
+    quality_mode: str | None = Field(default=None, description="'fast' | 'balanced' | 'agent'")
+    include_tests: bool | None = Field(default=None)
+    include_docs: bool | None = Field(default=None)
+    include_examples: bool | None = Field(default=None)
+
+
 class IndexRepositoryRequest(BaseModel):
     """Request to index a repository."""
     url: str = Field(..., description="GitHub repository URL or shorthand (owner/repo)")
@@ -1191,6 +1203,37 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error("Indexing failed", error=str(e))
             return SafeJSONResponse(content={"success": False, "error": "Repository indexing failed. Check server logs for details."}, status_code=500)
+
+    @app.post("/v1/repositories/index/local", tags=["Code"])
+    @limiter.limit(INDEX_LIMIT)
+    async def index_local_folder(
+        request: Request,
+        body: IndexLocalFolderRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """Index a local directory for semantic code search (no GitHub)."""
+        logger.info("API: Indexing local folder", path=body.path, user_id=auth.user_id)
+        try:
+            from synsc.services.indexing_service import IndexingService
+            service = IndexingService()
+            result = await asyncio.to_thread(
+                service.index_local_folder,
+                body.path,
+                user_id=auth.user_id,
+                name=body.name,
+                deep_index=body.deep_index,
+                force_reindex=body.force_reindex,
+                quality_mode=body.quality_mode,
+                include_tests=body.include_tests,
+                include_docs=body.include_docs,
+                include_examples=body.include_examples,
+            )
+            _cache_invalidate_user(auth.user_id)
+            _log_activity(auth.user_id, "index_local_folder", "repository", metadata={"path": body.path})
+            return SafeJSONResponse(content=result)
+        except Exception as e:
+            logger.error("Local folder indexing failed", error=str(e))
+            return SafeJSONResponse(content={"success": False, "error": "Local folder indexing failed. Check server logs for details."}, status_code=500)
 
     @app.post("/v1/repositories/index/stream", tags=["Code"])
     @limiter.limit(INDEX_LIMIT)

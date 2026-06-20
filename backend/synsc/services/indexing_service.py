@@ -37,7 +37,7 @@ from synsc.database.models import (
     Symbol,
     UserRepository,
 )
-from synsc.embeddings.generator import EmbeddingGenerator, get_embedding_generator
+from synsc.embeddings.generator import get_embedding_generator
 from synsc.indexing.vector_store import get_vector_store
 from synsc.parsing.registry import get_parser_registry
 
@@ -779,6 +779,201 @@ class IndexingService:
                 "message": f"Failed to index repository: {e}",
             }
 
+    def index_local_folder(
+        self,
+        path: str,
+        user_id: str | None = None,
+        name: str | None = None,
+        deep_index: bool = False,
+        force_reindex: bool = False,
+        quality_mode: str | None = None,
+        include_tests: bool | None = None,
+        include_docs: bool | None = None,
+        include_examples: bool | None = None,
+        progress_callback: Callable | None = None,
+    ) -> dict:
+        """Index a local directory — no git clone, reads files straight from disk.
+
+        Reuses the full indexing pipeline (file walk, symbol extraction, AST
+        chunking, embeddings, chunk relationships, code graph). The folder is
+        stored as a private source keyed by a ``local://`` URL so it dedupes per
+        absolute path and never collides with a GitHub repo.
+
+        Args:
+            path: Absolute or ~-relative path to a local directory.
+            user_id: Owner (private source). Falls back to the local dev user.
+            name: Display name. Defaults to the folder's basename.
+            deep_index: Force AST chunking (implied by quality_mode='agent').
+            force_reindex: Re-index even if content is unchanged.
+            quality_mode: 'fast' | 'balanced' | 'agent' (default from config).
+            include_tests/docs/examples: Per-category overrides.
+            progress_callback: Optional progress reporter.
+
+        Returns:
+            Dict with repo_id and indexing stats (mirrors index_repository).
+        """
+        import hashlib as _hashlib
+
+        start_time = time.time()
+        abs_path = Path(path).expanduser().resolve()
+        if not abs_path.exists() or not abs_path.is_dir():
+            return {
+                "success": False,
+                "status": "error",
+                "error": f"not_a_directory: {abs_path}",
+                "message": f"Local path does not exist or is not a directory: {abs_path}",
+            }
+
+        effective_mode = quality_mode or self.config.quality.quality_mode
+        if effective_mode == "agent":
+            deep_index = True
+        self.git_client.set_quality_mode(effective_mode)
+        self.chunker = CodeChunker(quality_mode=effective_mode)
+        self._effective_quality_mode = effective_mode
+        self._include_tests = include_tests
+        self._include_docs = include_docs
+        self._include_examples = include_examples
+
+        effective_user_id = user_id or self.user_id
+        if not effective_user_id:
+            if not self.config.api.require_auth:
+                effective_user_id = "00000000-0000-0000-0000-000000000001"
+            else:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": "auth_required",
+                    "message": "Authentication required to index a local folder.",
+                }
+
+        def report_progress(stage: str, message: str, progress: float = 0, **kwargs):
+            if progress_callback:
+                with contextlib.suppress(Exception):
+                    progress_callback(stage, message, progress, **kwargs)
+
+        try:
+            owner = "local"
+            repo_name = name or abs_path.name or "local-folder"
+            branch = "local"
+            # local:// URL makes the source dedupe per absolute path and keeps
+            # it isolated from GitHub repos under the UNIQUE(url, branch) key.
+            url = f"local://{abs_path}"
+
+            report_progress("listing", "Scanning local folder...", 20)
+            files = self.git_client.list_files(abs_path, include_content=True)
+            if not files:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": "no_indexable_files",
+                    "message": (
+                        f"No indexable files found in {abs_path}. "
+                        "Try quality_mode='agent' or check include patterns."
+                    ),
+                }
+            report_progress("listed", f"Found {len(files)} files", 35, files_count=len(files))
+
+            # Content signature → cheap unchanged-detection across re-runs.
+            digest = _hashlib.sha256()
+            for f in sorted(files, key=lambda x: x["path"]):
+                digest.update(f["path"].encode("utf-8", "ignore"))
+                digest.update(b"\0")
+                digest.update((f.get("content") or "").encode("utf-8", "ignore"))
+                digest.update(b"\0")
+            commit_sha = digest.hexdigest()
+
+            with get_session() as session:
+                existing = (
+                    session.query(Repository)
+                    .filter(Repository.url == url, Repository.branch == branch)
+                    .first()
+                )
+                if existing and not force_reindex and existing.commit_sha == commit_sha:
+                    self._add_repo_to_user_collection(session, existing.repo_id, effective_user_id)
+                    session.commit()
+                    return {
+                        "success": True,
+                        "status": "unchanged",
+                        "repo_id": str(existing.repo_id),
+                        "name": repo_name,
+                        "path": str(abs_path),
+                        "files_indexed": existing.files_count,
+                        "chunks_created": existing.chunks_count,
+                        "symbols_extracted": existing.symbols_count,
+                        "message": "Local folder already indexed and unchanged.",
+                    }
+                # Changed or force: wipe the prior version so we re-index clean
+                # (FK cascade removes files/chunks/symbols/edges).
+                if existing:
+                    session.delete(existing)
+                    session.flush()
+
+                report_progress("indexing", "Processing files and extracting symbols...", 40)
+                result = self._index_files(
+                    session=session,
+                    url=url,
+                    owner=owner,
+                    name=repo_name,
+                    branch=branch,
+                    commit_sha=commit_sha,
+                    repo_path=abs_path,
+                    files=files,
+                    user_id=effective_user_id,
+                    is_public=False,
+                    progress_callback=progress_callback,
+                    deep_index=deep_index,
+                    quality_mode=effective_mode,
+                )
+                self._add_repo_to_user_collection(session, result["repo_id"], effective_user_id)
+                report_progress("committing", "Saving to database...", 95)
+                session.commit()
+
+            self.vector_store.save()
+
+            try:
+                report_progress("relationships", "Building chunk relationships...", 96)
+                from synsc.database.connection import get_engine
+                get_engine().dispose()
+                with get_session() as rel_session:
+                    _build_chunk_relationships(rel_session, result["repo_id"])
+                    rel_session.commit()
+            except Exception:
+                logger.warning("Failed to build chunk relationships (non-critical)", exc_info=True)
+
+            self._build_code_graph_safe(result["repo_id"], report_progress)
+
+            elapsed_time = (time.time() - start_time) * 1000
+            logger.info(
+                "Local folder indexing complete",
+                path=str(abs_path),
+                files=result["files_count"],
+                chunks=result["chunks_count"],
+                symbols=result.get("symbols_count", 0),
+                time_ms=round(elapsed_time),
+            )
+            return {
+                "success": True,
+                "status": "indexed",
+                "repo_id": str(result["repo_id"]),
+                "name": repo_name,
+                "path": str(abs_path),
+                "branch": branch,
+                "files_indexed": result["files_count"],
+                "chunks_created": result["chunks_count"],
+                "symbols_extracted": result.get("symbols_count", 0),
+                "is_public": False,
+                "indexing_time_ms": elapsed_time,
+                "message": f"Local folder indexed successfully ({result['files_count']} files).",
+            }
+        except Exception as e:
+            logger.error("Failed to index local folder", error=str(e), path=str(abs_path))
+            return {
+                "success": False,
+                "status": "error",
+                "error": str(e),
+                "message": f"Failed to index local folder: {e}",
+            }
+
     def _build_code_graph_safe(self, repo_id: str, report_progress=None) -> None:
         """Build the code-dependency graph post-index (best-effort, non-critical).
 
@@ -921,7 +1116,7 @@ class IndexingService:
         session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '0'"))
 
         # 3. Purge deleted + modified files
-        files_to_purge = [f for f in deleted] + [
+        files_to_purge = list(deleted) + [
             session.query(RepositoryFile)
             .filter(RepositoryFile.repo_id == repo_id, RepositoryFile.file_path == fi["path"])
             .first()
