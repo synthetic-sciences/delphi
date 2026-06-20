@@ -1,0 +1,86 @@
+[
+  {
+    "id": "validate-tokens",
+    "query": "where are session tokens validated",
+    "relevant_files": ["auth/tokens.py"],
+    "relevant_symbols": ["validate_token"],
+    "category": "definition"
+  },
+  {
+    "id": "hash-passwords",
+    "query": "how are user passwords hashed",
+    "relevant_files": ["auth/password.py"],
+    "relevant_symbols": ["hash_password"],
+    "category": "definition"
+  },
+  {
+    "id": "authenticate-user",
+    "query": "function that authenticates a user with username and password",
+    "relevant_files": ["auth/login.py"],
+    "relevant_symbols": ["authenticate_user"],
+    "category": "definition"
+  },
+  {
+    "id": "db-connection",
+    "query": "database connection pooling setup",
+    "relevant_files": ["db/connection.py"],
+    "relevant_symbols": ["get_connection"],
+    "category": "concept"
+  },
+  {
+    "id": "cache-eviction",
+    "query": "cache eviction least recently used logic",
+    "relevant_files": ["cache/store.py"],
+    "relevant_symbols": ["evict"],
+    "category": "concept"
+  },
+  {
+    "id": "enqueue-job",
+    "query": "how to enqueue a background job",
+    "relevant_files": ["workers/queue.py"],
+    "relevant_symbols": ["enqueue_job"],
+    "category": "definition"
+  },
+  {
+    "id": "slugify",
+    "query": "slugify a string into a url safe slug",
+    "relevant_files": ["utils/strings.py"],
+    "relevant_symbols": ["slugify"],
+    "category": "definition"
+  },
+  {
+    "id": "register-routes",
+    "query": "where are http routes registered",
+    "relevant_files": ["api/routes.py"],
+    "relevant_symbols": ["register_routes"],
+    "category": "concept"
+  },
+  {
+    "id": "send-email",
+    "query": "send an email notification to a user",
+    "relevant_files": ["services/notify.go"],
+    "relevant_symbols": ["SendEmail"],
+    "category": "cross-language"
+  },
+  {
+    "id": "frontend-login",
+    "query": "frontend client login request post",
+    "relevant_files": ["frontend/api_client.js"],
+    "relevant_symbols": ["postLogin"],
+    "category": "cross-language"
+  },
+  {
+    "id": "user-model",
+    "query": "user account data model",
+    "relevant_files": ["db/models.py"],
+    "relevant_symbols": ["User"],
+    "category": "definition"
+  },
+  {
+    "id": "create-app",
+    "query": "create the application server and wire routes",
+    "relevant_files": ["api/server.py"],
+    "relevant_symbols": ["create_app"],
+    "category": "concept"
+  }
+]
