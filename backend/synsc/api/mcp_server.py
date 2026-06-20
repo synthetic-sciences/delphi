@@ -299,6 +299,64 @@ Provides deep context to AI agents through:
         return result
 
     @_tool_in("code")
+    async def index_local_folder(
+        path: str,
+        name: str | None = None,
+        deep_index: bool = False,
+        force_reindex: bool = False,
+        quality_mode: str | None = None,
+        include_tests: bool | None = None,
+        include_docs: bool | None = None,
+        include_examples: bool | None = None,
+    ) -> dict[str, Any]:
+        """Index a local directory for semantic code search (no GitHub needed).
+
+        Reads files straight from disk and runs the full pipeline: symbol
+        extraction, AST chunking, embeddings, chunk relationships, and the code
+        graph. Indexed as a private source keyed by absolute path. Use this for
+        work-in-progress code, private/work repos, or anything not on GitHub.
+
+        Args:
+            path: Absolute or ~-relative path to a local directory.
+            name: Display name (defaults to the folder's basename).
+            deep_index: Force AST chunking per function/class (implied by agent mode).
+            force_reindex: Re-index even if folder content is unchanged.
+            quality_mode: 'agent' (default for MCP), 'balanced', or 'fast'.
+            include_tests/docs/examples: Force include/exclude by category.
+
+        Returns:
+            Dict with repo_id, files_indexed, chunks_created, symbols_extracted.
+        """
+        import asyncio
+
+        from synsc.config import get_config
+        from synsc.services.indexing_service import IndexingService
+
+        if quality_mode is None:
+            quality_mode = get_config().quality.mcp_default_mode
+
+        service = IndexingService()
+        user_id = get_authenticated_user_id()
+        result = await asyncio.to_thread(
+            service.index_local_folder,
+            path,
+            user_id=user_id,
+            name=name,
+            deep_index=deep_index,
+            force_reindex=force_reindex,
+            quality_mode=quality_mode,
+            include_tests=include_tests,
+            include_docs=include_docs,
+            include_examples=include_examples,
+        )
+        if user_id:
+            _log_activity(
+                user_id, "index_local_folder", resource_type="repository",
+                metadata={"path": path, "quality_mode": quality_mode},
+            )
+        return result
+
+    @_tool_in("code")
     def list_repositories(limit: int = 50, offset: int = 0) -> dict[str, Any]:
         """List all indexed repositories.
 
