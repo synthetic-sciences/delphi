@@ -1,0 +1,55 @@
+# Lite stack — the smallest useful Delphi.
+#
+# Postgres + API only. No worker, no frontend, and EMBEDDING_PROVIDER=hash so
+# there is NO ~1.2 GB model download and no heavy RAM at boot — it comes up in
+# seconds. Retrieval falls back to the lexical + exact-symbol + trigram branches
+# of hybrid search (which already carry most of the quality; see bench/), plus a
+# zero-cost feature-hash vector. Switch EMBEDDING_PROVIDER back to `local`
+# (or wire up gemini/openai) when you want full semantic recall.
+#
+#   docker compose -f docker-compose.lite.yml up --build
+#
+# Indexing runs synchronously through the API (no worker needed) for the lite
+# profile; large async batch indexing is what the full stack's worker is for.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-synsc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synsc}
+      POSTGRES_DB: ${POSTGRES_DB:-synsc}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/supabase/setup_local.sql:/docker-entrypoint-initdb.d/01-setup.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synsc} -d ${POSTGRES_DB:-synsc}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      target: api
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-synsc}:${POSTGRES_PASSWORD:-synsc}@postgres:5432/${POSTGRES_DB:-synsc}
+      SYNSC_API_HOST: "0.0.0.0"
+      SYNSC_API_PORT: "8742"
+      SYNSC_LOG_FORMAT: json
+      # Lite knobs: zero-download embeddings + reranker off for a small footprint.
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hash}
+      SYNSC_ENABLE_RERANKER: "false"
+      EMBEDDING_DEVICE: cpu
+    ports:
+      - "${SYNSC_API_HOST_PORT:-8742}:8742"
+
+volumes:
+  pgdata:

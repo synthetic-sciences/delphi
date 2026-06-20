@@ -9,10 +9,12 @@ dimensions and produce L2-normalized vectors.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
-from typing import Iterable
+import re
+from collections.abc import Iterable
 
 import numpy as np
 import requests
@@ -20,6 +22,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 DEFAULT_DIM = 768
+
+_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SUBWORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
 
 
 def _l2_normalize(vec: list[float]) -> list[float]:
@@ -102,6 +107,81 @@ class _HttpEmbeddingProvider:
 
     def embed_query(self, query: str) -> np.ndarray:
         return self.generate_single(query)
+
+
+# ---------------------------------------------------------------------------
+# Hash (zero-download, dependency-free) — for lite/CI/air-gapped deployments
+# ---------------------------------------------------------------------------
+
+
+class HashEmbeddingProvider:
+    """A deterministic feature-hashing embedder — no model, no download.
+
+    Hashes token (and identifier-subword) occurrences into a fixed 768-dim
+    vector, signed to reduce collisions, then L2-normalizes. Cosine similarity
+    therefore reflects shared-token overlap: a lightweight, semantic-free vector
+    that still complements the lexical/symbol branches of hybrid retrieval.
+
+    The point is footprint: ``EMBEDDING_PROVIDER=hash`` skips the ~1.2 GB
+    sentence-transformers model download and its RAM, so Delphi boots in seconds
+    on a laptop, in CI, or air-gapped. You trade embedding-level semantic recall
+    for zero setup; BM25 + exact-symbol + trigram retrieval still carry most of
+    the quality (see bench/). Switch to a real model when you want semantic
+    recall.
+    """
+
+    name = "hash"
+    dimension = DEFAULT_DIM
+    batch_size = 256
+    device = "cpu"
+
+    def __init__(self) -> None:
+        self.model_name = f"hashing-vectorizer-{self.dimension}"
+        logger.info(
+            "Using hash embedding provider (no model download, %d-dim)",
+            self.dimension,
+        )
+
+    @staticmethod
+    def _tokens(text: str) -> Iterable[str]:
+        for tok in _TOKEN_RE.findall(text.lower()):
+            yield tok
+            subs = _SUBWORD_RE.findall(tok)
+            if len(subs) > 1:
+                yield from (s.lower() for s in subs)
+
+    def _vectorize(self, text: str) -> np.ndarray:
+        vec = np.zeros(self.dimension, dtype=np.float32)
+        for tok in self._tokens(text):
+            digest = hashlib.blake2b(tok.encode("utf-8"), digest_size=8).digest()
+            h = int.from_bytes(digest, "little")
+            idx = h % self.dimension
+            sign = 1.0 if (h >> 63) & 1 else -1.0
+            vec[idx] += sign
+        norm = float(np.linalg.norm(vec))
+        if norm > 0:
+            vec /= norm
+        return vec
+
+    def generate(self, texts: list[str]) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, self.dimension), dtype=np.float32)
+        return np.vstack([self._vectorize(t) for t in texts])
+
+    def generate_batched(self, texts: list[str], batch_size: int | None = None) -> np.ndarray:
+        return self.generate(texts)
+
+    def generate_single(self, text: str) -> np.ndarray:
+        return self._vectorize(text)
+
+    def embed_batch(self, texts: list[str]) -> np.ndarray:
+        return self.generate(texts)
+
+    def embed_text(self, text: str) -> np.ndarray:
+        return self._vectorize(text)
+
+    def embed_query(self, query: str) -> np.ndarray:
+        return self._vectorize(query)
 
 
 # ---------------------------------------------------------------------------

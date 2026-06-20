@@ -6,10 +6,8 @@ factory dispatches to API-based providers (Gemini, OpenAI) when
 vector to match the pgvector schema.
 """
 
-import os
 import logging
-import time
-from typing import Optional, Union
+import os
 
 import numpy as np
 
@@ -249,6 +247,7 @@ def get_embedding_generator():
     - `gemini`       → GEMINI_API_KEY
     - `openai`       → OPENAI_API_KEY
     - `huggingface`  → HF_TOKEN  (model picked via EMBEDDING_MODEL)
+    - `hash`/`lite`  → no model download (feature-hashed vectors; lite/CI mode)
     """
     global _embedding_generator
     if _embedding_generator is not None:
@@ -268,6 +267,10 @@ def get_embedding_generator():
         from synsc.embeddings.providers import HuggingFaceEmbeddingProvider
         logger.info("Initializing HuggingFace embedding provider")
         _embedding_generator = HuggingFaceEmbeddingProvider()
+    elif provider in ("hash", "lite", "lexical"):
+        from synsc.embeddings.providers import HashEmbeddingProvider
+        logger.info("Initializing hash embedding provider (zero-download lite mode)")
+        _embedding_generator = HashEmbeddingProvider()
     else:
         if provider not in ("", "local"):
             logger.warning("Unknown EMBEDDING_PROVIDER=%r, falling back to local", provider)
