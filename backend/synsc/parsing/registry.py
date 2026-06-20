@@ -73,6 +73,38 @@ class ParserRegistry:
             )
         except Exception as e:
             logger.warning("Failed to initialize TypeScript parser", error=str(e))
+
+        # Spec-driven tree-sitter parsers (Go, Rust, Java, C, C++, C#, Ruby, PHP).
+        # Each is skipped gracefully if its grammar wheel isn't installed.
+        from synsc.parsing.generic_parser import GenericTreeSitterParser
+        from synsc.parsing.language_specs import SPECS
+
+        for lang, spec in SPECS.items():
+            try:
+                self.register(GenericTreeSitterParser(spec))
+                logger.info("Generic parser registered", language=lang)
+            except ImportError as e:
+                logger.warning(
+                    "Grammar unavailable, skipping language", language=lang, error=str(e)
+                )
+            except Exception as e:
+                logger.warning("Failed to initialize parser", language=lang, error=str(e))
+
+        # Regex fallback parsers for languages without a tree-sitter grammar
+        # (Kotlin, Swift, Scala, Lua, Elixir, shell). Only registered for
+        # languages not already covered by an AST parser above.
+        from synsc.parsing.regex_parser import REGEX_SPECS, RegexParser
+
+        for lang, rspec in REGEX_SPECS.items():
+            if lang in self._parsers:
+                continue
+            try:
+                self.register(RegexParser(rspec))
+                logger.info("Regex parser registered", language=lang)
+            except Exception as e:
+                logger.warning(
+                    "Failed to initialize regex parser", language=lang, error=str(e)
+                )
     
     def register(self, parser: BaseParser) -> None:
         """Register a parser.
