@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 
 def _names_for_profile(monkeypatch, profile: str) -> list[str]:
     monkeypatch.setenv("SYNSC_MCP_PROFILE", profile)
@@ -65,7 +63,11 @@ def test_profile_minimal_is_tiny(monkeypatch):
     assert "delete_paper" not in names
 
 
-def test_profile_unknown_falls_back_to_all(monkeypatch):
+def test_profile_unknown_falls_back_to_code(monkeypatch):
+    # An unknown profile falls back to the default `code` surface (a fresh OSS
+    # install ships code-focused tools, not the full Atlas/papers surface).
     names = _names_for_profile(monkeypatch, "nonexistent")
     assert "index_repository" in names
-    assert "atlas_search_nodes" in names
+    assert "search_code" in names
+    assert not any(n.startswith("atlas_") for n in names)
+    assert "index_paper" not in names

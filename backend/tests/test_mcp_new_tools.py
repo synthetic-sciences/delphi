@@ -13,8 +13,13 @@ import pytest
 
 
 @pytest.fixture
-def server_tool_names():
-    """Spin up the MCP server in test mode and return the registered tool names."""
+def server_tool_names(monkeypatch):
+    """Spin up the MCP server in test mode and return the registered tool names.
+
+    Force the ``all`` profile so the full tool surface is registered — the
+    default profile is ``code``, which intentionally prunes papers/atlas/etc.
+    """
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     with patch("synsc.embeddings.generator.get_embedding_generator"):
         from synsc.api.mcp_server import create_server
 

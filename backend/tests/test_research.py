@@ -278,8 +278,9 @@ def test_research_per_mode_rate_check_blocks_after_quota():
     assert _research_rate_check(api_key, "deep", rpm=1) is False
 
 
-def test_mcp_research_tool_is_registered():
+def test_mcp_research_tool_is_registered(monkeypatch):
     """The MCP server exposes a `research` tool with the expected signature."""
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     from synsc.api.mcp_server import create_server
 
     server = create_server()
@@ -296,9 +297,10 @@ def test_mcp_research_tool_is_registered():
     assert list(params) == ["query", "mode", "source_ids", "source_types", "k"]
 
 
-def test_mcp_research_tool_rejects_invalid_mode():
+def test_mcp_research_tool_rejects_invalid_mode(monkeypatch):
     """Calling the tool function directly with a bad mode returns a stable
     structured error rather than raising."""
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     from synsc.api.mcp_server import create_server
 
     server = create_server()
@@ -318,6 +320,7 @@ def test_mcp_research_tool_returns_structured_error_when_provider_unconfigured(
     from synsc.api.mcp_server import create_server
     from synsc.config import get_config
 
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     monkeypatch.setattr(get_config().research, "provider", "gemini")
     monkeypatch.setattr(get_config().research, "api_key", "")
 
@@ -332,10 +335,11 @@ def test_mcp_research_tool_returns_structured_error_when_provider_unconfigured(
     assert "GEMINI_API_KEY" in result["message"]
 
 
-def test_mcp_research_tool_description_mentions_provider_requirement():
+def test_mcp_research_tool_description_mentions_provider_requirement(monkeypatch):
     """The tool docstring (which becomes the MCP description shown to the LLM
     at tool-list time) must flag the provider-key requirement so the agent
     knows the tool may be unavailable on a fresh Delphi instance."""
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     from synsc.api.mcp_server import create_server
 
     server = create_server()
