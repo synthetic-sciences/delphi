@@ -905,7 +905,7 @@ class ContextPackBuilder:
                        r.files_count, r.symbols_count,
                        r.commit_sha, r.indexed_at
                 FROM repositories r
-                WHERE r.repo_id = ANY(:repo_ids)
+                WHERE r.repo_id = ANY(CAST(:repo_ids AS uuid[]))
                 """
             ),
             {"repo_ids": repo_ids},
@@ -922,7 +922,7 @@ class ContextPackBuilder:
                         split_part(file_path, '/', 1) AS dir,
                         count(*) AS files
                     FROM repository_files
-                    WHERE repo_id = :rid
+                    WHERE repo_id = CAST(:rid AS uuid)
                     GROUP BY dir
                     ORDER BY files DESC
                     LIMIT 12
