@@ -2,6 +2,7 @@
 
 import PageShell from "@/components/PageShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import Modal from "@/components/Modal";
 import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -234,7 +235,7 @@ export default function DatasetsPage() {
           <h1 className="text-2xl font-medium lowercase mb-1">datasets</h1>
           <p className="text-sm text-[#8a7a72] lowercase">huggingface datasets indexed via api & mcp</p>
         </div>
-        <button
+        <button type="button"
           onClick={() => { resetModal(); setShowAddModal(true); }}
           className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
         >
@@ -272,7 +273,7 @@ export default function DatasetsPage() {
             <p className="text-xs text-[#a09488] lowercase mb-4">
               add huggingface datasets to search their documentation with ai agents.
             </p>
-            <button
+            <button type="button"
               onClick={() => { resetModal(); setShowAddModal(true); }}
               className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
             >
@@ -333,14 +334,16 @@ export default function DatasetsPage() {
                     href={`https://huggingface.co/datasets/${dataset.hf_id}`}
                     target="_blank"
                     rel="noopener noreferrer"
+                    aria-label={`View ${dataset.name} on Hugging Face`}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#2e2522] transition-colors"
                     title="View on HuggingFace"
                   >
                     <ExternalLink size={14} />
                   </a>
-                  <button
+                  <button type="button"
                     onClick={() => setConfirmDelete(dataset.dataset_id)}
                     disabled={actionLoading === dataset.dataset_id}
+                    aria-label={`Remove ${dataset.name}`}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Remove dataset"
                   >
@@ -355,7 +358,7 @@ export default function DatasetsPage() {
 
       {/* Minimized Indexing Indicator */}
       {isMinimized && isIndexing && (
-        <button
+        <button type="button"
           onClick={() => { setIsMinimized(false); setShowAddModal(true); }}
           className="fixed bottom-6 right-6 z-50 flex items-center gap-3 pl-4 pr-3 py-3 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl shadow-black/10 hover:border-[#c5b5a5] transition-all group cursor-pointer max-w-xs"
         >
@@ -370,26 +373,28 @@ export default function DatasetsPage() {
 
       {/* Add Dataset Modal — rendered via portal so backdrop-blur works */}
       {showAddModal && !isMinimized && createPortal(
-        <div className="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center">
-          <div
-            className="modal-backdrop absolute inset-0 bg-[#2e2522]/55 backdrop-blur-sm"
-            onClick={() => {
-              if (isIndexing) {
-                setIsMinimized(true);
-                setShowAddModal(false);
-              } else {
-                setShowAddModal(false);
-                resetModal();
-              }
-            }}
-          />
-          <div className="modal-panel relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+        <Modal
+          labelledBy="add-dataset-title"
+          containerClassName="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center"
+          backdropClassName="backdrop-blur-sm"
+          panelClassName="w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl"
+          onClose={() => {
+            if (isIndexing) {
+              setIsMinimized(true);
+              setShowAddModal(false);
+            } else {
+              setShowAddModal(false);
+              resetModal();
+            }
+          }}
+        >
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-medium lowercase">add dataset</h2>
+              <h2 id="add-dataset-title" className="text-lg font-medium lowercase">add dataset</h2>
               <div className="flex items-center gap-1">
                 {isIndexing && (
-                  <button
+                  <button type="button"
                     onClick={() => { setIsMinimized(true); setShowAddModal(false); }}
+                    aria-label="Minimize dataset indexing"
                     className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#b58a73] transition-colors"
                     title="Minimize — indexing continues in the background"
                   >
@@ -397,8 +402,9 @@ export default function DatasetsPage() {
                   </button>
                 )}
                 {!isIndexing && (
-                  <button
+                  <button type="button"
                     onClick={() => { setShowAddModal(false); resetModal(); }}
+                    aria-label="Close add dataset dialog"
                     className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
                   >
                     <X size={15} />
@@ -410,17 +416,17 @@ export default function DatasetsPage() {
             {/* Form */}
             {!isIndexing && !indexSuccess && (
               <div className="mb-6">
-                <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+                <label htmlFor="hugging-face-dataset" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                   huggingface dataset id or url
                 </label>
                 <input
+                  id="hugging-face-dataset"
                   type="text"
                   value={hfInput}
                   onChange={(e) => setHfInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") indexDataset(); }}
                   placeholder="e.g., imdb or https://huggingface.co/datasets/openai/gsm8k"
                   className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
-                  autoFocus
                 />
                 <p className="text-[10px] text-[#a09488] mt-2">
                   paste a dataset id or huggingface url
@@ -467,13 +473,13 @@ export default function DatasetsPage() {
             {/* Footer buttons */}
             {!isIndexing && !indexSuccess && (
               <div className="flex justify-end gap-3">
-                <button
+                <button type="button"
                   onClick={() => { setShowAddModal(false); resetModal(); }}
                   className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
                 >
                   cancel
                 </button>
-                <button
+                <button type="button"
                   onClick={indexDataset}
                   disabled={!hfInput.trim()}
                   className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -482,8 +488,7 @@ export default function DatasetsPage() {
                 </button>
               </div>
             )}
-          </div>
-        </div>,
+        </Modal>,
         document.body
       )}
 

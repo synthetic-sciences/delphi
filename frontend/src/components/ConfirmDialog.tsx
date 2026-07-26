@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle } from "lucide-react";
+import Modal from "@/components/Modal";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -27,30 +28,18 @@ export default function ConfirmDialog({
 }: ConfirmDialogProps) {
   const confirmRef = useRef<HTMLButtonElement>(null);
 
-  // Focus confirm button when dialog opens
-  useEffect(() => {
-    if (open) confirmRef.current?.focus();
-  }, [open]);
-
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return;
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [open, onCancel]);
-
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed top-11 left-52 right-0 bottom-0 z-[70] flex items-center justify-center">
-      <div
-        className="modal-backdrop absolute inset-0 bg-[#2e2522]/55 backdrop-blur-sm"
-        onClick={onCancel}
-      />
-      <div className="modal-panel relative w-full max-w-sm mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+    <Modal
+      labelledBy="confirmation-dialog-title"
+      describedBy="confirmation-dialog-message"
+      onClose={onCancel}
+      initialFocusRef={confirmRef}
+      containerClassName="fixed top-11 left-52 right-0 bottom-0 z-[70] flex items-center justify-center"
+      backdropClassName="backdrop-blur-sm"
+      panelClassName="w-full max-w-sm mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl"
+    >
         {/* Icon + Title */}
         <div className="flex items-start gap-3 mb-4">
           <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
@@ -59,20 +48,20 @@ export default function ConfirmDialog({
             <AlertTriangle size={18} className={destructive ? "text-red-500" : "text-[#b58a73]"} />
           </div>
           <div>
-            <h3 className="text-sm font-medium text-[#2e2522] lowercase">{title}</h3>
-            <p className="text-xs text-[#8a7a72] mt-1 lowercase leading-relaxed">{message}</p>
+            <h3 id="confirmation-dialog-title" className="text-sm font-medium text-[#2e2522] lowercase">{title}</h3>
+            <p id="confirmation-dialog-message" className="text-xs text-[#8a7a72] mt-1 lowercase leading-relaxed">{message}</p>
           </div>
         </div>
 
         {/* Actions */}
         <div className="flex justify-end gap-2 mt-6">
-          <button
+          <button type="button"
             onClick={onCancel}
             className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
           >
             {cancelLabel}
           </button>
-          <button
+          <button type="button"
             ref={confirmRef}
             onClick={onConfirm}
             className={`px-4 py-2 text-sm font-medium rounded-lg lowercase transition-colors ${
@@ -84,8 +73,7 @@ export default function ConfirmDialog({
             {confirmLabel}
           </button>
         </div>
-      </div>
-    </div>,
+    </Modal>,
     document.body
   );
 }

@@ -242,7 +242,7 @@ export default function ActivityPage() {
         {/* Time Filter */}
         <div className="flex items-center gap-1 p-1 rounded-lg bg-[#faf5ef] border border-[#dfcdbf]">
           {timeFilters.map((t) => (
-            <button
+            <button type="button"
               key={t}
               onClick={() => setTimeFilter(t)}
               className={`px-3 py-1.5 rounded text-xs lowercase transition-colors ${

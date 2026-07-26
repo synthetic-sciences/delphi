@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import PageShell from "@/components/PageShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import Modal from "@/components/Modal";
 import {
   Search, GitBranch, Plus, Trash2, RefreshCw, X,
   FolderGit2, FileCode, Box, Minimize2, Maximize2,
@@ -641,7 +642,7 @@ export default function RepositoriesPage() {
           <h1 className="text-2xl font-medium lowercase mb-1">repositories</h1>
           <p className="text-sm text-[#8a7a72] lowercase">manage your indexed repositories</p>
         </div>
-        <button
+        <button type="button"
           onClick={() => { resetModal(); setShowIndexModal(true); setActiveJobId(null); }}
           className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
         >
@@ -699,7 +700,7 @@ export default function RepositoriesPage() {
                 : "try a different search term."}
             </p>
             {repos.length === 0 && (
-              <button
+              <button type="button"
                 onClick={() => { resetModal(); setShowIndexModal(true); setActiveJobId(null); }}
                 className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
               >
@@ -754,7 +755,7 @@ export default function RepositoriesPage() {
                 {/* Actions */}
                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   {!repo.deep_indexed && (
-                    <button
+                    <button type="button"
                       onClick={() => reindexRepo(repo, true)}
                       className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs text-[#b58a73] hover:bg-[#b58a73]/10 transition-colors"
                       title="Deep index — full AST chunking per function/class"
@@ -763,16 +764,18 @@ export default function RepositoriesPage() {
                       <span className="lowercase">deep index</span>
                     </button>
                   )}
-                  <button
+                  <button type="button"
                     onClick={() => reindexRepo(repo)}
+                    aria-label={`Re-index ${repo.owner}/${repo.name}`}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#b58a73] transition-colors"
                     title="Re-index (check for updates)"
                   >
                     <RefreshCw size={14} />
                   </button>
-                  <button
+                  <button type="button"
                     onClick={() => setConfirmDelete(repo.repo_id)}
                     disabled={actionLoading === repo.repo_id}
+                    aria-label={`Delete ${repo.owner}/${repo.name}`}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Delete repository"
                   >
@@ -789,7 +792,7 @@ export default function RepositoriesPage() {
       {minimizedJobs.length > 0 && createPortal(
         <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-xs">
           {minimizedJobs.map((job) => (
-            <button
+            <button type="button"
               key={job.id}
               onClick={() => expandJob(job.id)}
               className="flex items-center gap-3 pl-4 pr-3 py-3 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl shadow-black/10 hover:border-[#c5b5a5] transition-all group cursor-pointer"
@@ -809,7 +812,7 @@ export default function RepositoriesPage() {
 
               {/* Mini progress ring */}
               <div className="relative w-9 h-9 flex-shrink-0">
-                <svg className="w-9 h-9 -rotate-90" viewBox="0 0 36 36">
+                <svg aria-hidden="true" className="w-9 h-9 -rotate-90" viewBox="0 0 36 36">
                   <circle
                     cx="18" cy="18" r="15"
                     fill="none" stroke="#dfcdbf" strokeWidth="3"
@@ -837,27 +840,28 @@ export default function RepositoriesPage() {
 
       {/* Index Repository Modal — rendered via portal so backdrop-blur works */}
       {showIndexModal && createPortal(
-        <div className="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center">
-          {/* Backdrop: blur + dim the content area only (sidebar excluded) */}
-          <div
-            className="modal-backdrop absolute inset-0 bg-[#2e2522]/55 backdrop-blur-sm"
-            onClick={() => {
-              if (activeJob?.isIndexing) {
-                minimizeJob(activeJob.id);
-              } else {
-                setShowIndexModal(false);
-                resetModal();
-              }
-            }}
-          />
-          <div className="modal-panel relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl max-h-[90vh] overflow-y-auto">
+        <Modal
+          labelledBy="index-repository-title"
+          containerClassName="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center"
+          backdropClassName="backdrop-blur-sm"
+          panelClassName="w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl max-h-[90vh] overflow-y-auto"
+          onClose={() => {
+            if (activeJob?.isIndexing) {
+              minimizeJob(activeJob.id);
+            } else {
+              setShowIndexModal(false);
+              resetModal();
+            }
+          }}
+        >
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-medium lowercase">index repository</h2>
+              <h2 id="index-repository-title" className="text-lg font-medium lowercase">index repository</h2>
               <div className="flex items-center gap-1">
                 {/* Minimize button — visible during indexing */}
                 {activeJob?.isIndexing && (
-                  <button
+                  <button type="button"
                     onClick={() => minimizeJob(activeJob.id)}
+                    aria-label="Minimize repository indexing"
                     className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#b58a73] transition-colors"
                     title="Minimize — indexing continues in the background"
                   >
@@ -866,8 +870,9 @@ export default function RepositoriesPage() {
                 )}
                 {/* Close button — visible when not indexing */}
                 {!activeJob?.isIndexing && (
-                  <button
+                  <button type="button"
                     onClick={() => { setShowIndexModal(false); resetModal(); }}
+                    aria-label="Close index repository dialog"
                     className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
                   >
                     <X size={15} />
@@ -896,13 +901,14 @@ export default function RepositoriesPage() {
                 {/* GitHub repo dropdown — only when user has a token */}
                 {hasToken && (
                   <div className="mb-4">
-                    <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+                    <label htmlFor="github-repository-search" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                       select private repo
                     </label>
                     <div>
                       <div className="relative">
                         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#a09488] z-10" />
                         <input
+                          id="github-repository-search"
                           type="text"
                           value={ghSearch}
                           onChange={(e) => { setGhSearch(e.target.value); setManualMode(false); }}
@@ -927,7 +933,7 @@ export default function RepositoriesPage() {
                             </div>
                           ) : (
                             ghRepos.map((repo) => (
-                              <button
+                              <button type="button"
                                 key={repo.full_name}
                                 onClick={() => selectRepo(repo)}
                                 className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-[#e5d5c5] transition-colors text-left"
@@ -961,33 +967,36 @@ export default function RepositoriesPage() {
 
                 {/* Manual URL input */}
                 <div className="mb-4">
-                  <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+                  <label htmlFor="repository-url" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                     {hasToken ? "enter repository url" : "repository url or shorthand"}
                   </label>
                   <input
+                    id="repository-url"
                     type="text"
                     value={repoUrl}
                     onChange={(e) => setRepoUrl(e.target.value)}
                     onFocus={() => setManualMode(true)}
                     placeholder="facebook/react or https://github.com/facebook/react"
                     className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
-                    autoFocus={!hasToken}
                   />
                 </div>
 
                 {/* Branch */}
                 <div className="mb-6" ref={branchDropdownRef}>
-                  <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+                  <span id="repository-branch-label" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                     branch
-                  </label>
+                  </span>
                   <div className="relative">
                     <button
                       type="button"
+                      aria-labelledby="repository-branch-label repository-branch-value"
+                      aria-expanded={branchDropdownOpen}
+                      aria-controls="repository-branch-options"
                       onClick={() => !branchesLoading && setBranchDropdownOpen(!branchDropdownOpen)}
                       className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-left flex items-center gap-2 hover:border-[#c5b5a5] focus:outline-none focus:border-[#c5b5a5] transition-colors"
                     >
                       <GitBranch size={12} className="text-[#a09488] flex-shrink-0" />
-                      <span className="text-[#2e2522] lowercase truncate flex-1">{branch}</span>
+                      <span id="repository-branch-value" className="text-[#2e2522] lowercase truncate flex-1">{branch}</span>
                       {branchesLoading ? (
                         <RefreshCw size={12} className="text-[#a09488] animate-spin flex-shrink-0" />
                       ) : (
@@ -996,7 +1005,7 @@ export default function RepositoriesPage() {
                     </button>
 
                     {branchDropdownOpen && branches.length > 0 && (
-                      <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] shadow-xl shadow-black/10">
+                      <div id="repository-branch-options" className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] shadow-xl shadow-black/10">
                         {branches.map((b) => (
                           <button
                             key={b}
@@ -1030,15 +1039,18 @@ export default function RepositoriesPage() {
                 {/* Deep index toggle */}
                 <div className="mb-6 flex items-center justify-between">
                   <div>
-                    <label className="block text-xs text-[#8a7a72] uppercase tracking-wider">
+                    <span id="deep-indexing-label" className="block text-xs text-[#8a7a72] uppercase tracking-wider">
                       deep indexing
-                    </label>
+                    </span>
                     <p className="text-[10px] text-[#a09488] mt-0.5">
                       full AST chunking per function/class — slower, higher quality
                     </p>
                   </div>
                   <button
                     type="button"
+                    role="switch"
+                    aria-checked={deepIndex}
+                    aria-labelledby="deep-indexing-label"
                     onClick={() => setDeepIndex(!deepIndex)}
                     className={`relative flex-shrink-0 w-9 h-5 rounded-full transition-colors ${
                       deepIndex ? "bg-[#b58a73]" : "bg-[#dfcdbf] border border-[#c5b5a5]"
@@ -1112,13 +1124,13 @@ export default function RepositoriesPage() {
             {/* Footer buttons */}
             {!activeJob?.isIndexing && !activeJob?.success && (
               <div className="flex justify-end gap-3">
-                <button
+                <button type="button"
                   onClick={() => { setShowIndexModal(false); resetModal(); }}
                   className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
                 >
                   cancel
                 </button>
-                <button
+                <button type="button"
                   onClick={indexRepository}
                   disabled={!repoUrl.trim() || branchesLoading}
                   className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1127,8 +1139,7 @@ export default function RepositoriesPage() {
                 </button>
               </div>
             )}
-          </div>
-        </div>,
+        </Modal>,
         document.body
       )}
 

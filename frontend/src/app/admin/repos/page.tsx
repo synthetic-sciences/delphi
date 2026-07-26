@@ -384,7 +384,7 @@ export default function AdminReposPage() {
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       {/* Deep index button — only if NOT already deep indexed */}
                       {!repo.deep_indexed && (
-                        <button
+                        <button type="button"
                           onClick={() => reindexRepo(repo, true)}
                           disabled={isActive}
                           className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs text-[#b58a73] hover:bg-[#b58a73]/10 transition-colors disabled:opacity-50"
@@ -395,18 +395,20 @@ export default function AdminReposPage() {
                         </button>
                       )}
                       {/* Update index */}
-                      <button
+                      <button type="button"
                         onClick={() => reindexRepo(repo, false)}
                         disabled={isActive}
+                        aria-label={`Update index for ${repo.owner}/${repo.name}`}
                         className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#b58a73] transition-colors disabled:opacity-50"
                         title="Update index — check for latest commits"
                       >
                         <RefreshCw size={14} />
                       </button>
                       {/* Hard delete */}
-                      <button
+                      <button type="button"
                         onClick={() => setConfirmDelete(repo.repo_id)}
                         disabled={isActive}
+                        aria-label={`Delete ${repo.owner}/${repo.name}`}
                         className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                         title="Permanently delete repository and all data"
                       >
@@ -436,7 +438,7 @@ export default function AdminReposPage() {
                             />
                           </div>
                         </div>
-                        <button
+                        <button type="button"
                           onClick={() => setActiveAction(null)}
                           className="text-[10px] text-[#a09488] hover:text-[#2e2522] lowercase"
                         >
@@ -451,7 +453,7 @@ export default function AdminReposPage() {
                     <div className="px-4 pb-4 -mt-1">
                       <div className="flex items-center gap-3">
                         <span className="text-xs text-red-500 lowercase flex-1">{activeAction.error}</span>
-                        <button
+                        <button type="button"
                           onClick={() => setActiveAction(null)}
                           className="text-[10px] text-[#a09488] hover:text-[#2e2522] lowercase"
                         >
