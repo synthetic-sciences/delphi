@@ -1,6 +1,6 @@
 # `@synsci/delphi`
 
-One-command installer for [Delphi](https://github.com/synthetic-sciences/delhpi) — a self-hosted MCP server that gives AI coding agents semantic context across code repositories, research papers, and HuggingFace datasets.
+One-command installer for [Delphi](https://github.com/synthetic-sciences/delphi) — a self-hosted MCP server that gives AI coding agents semantic context across code repositories, research papers, and HuggingFace datasets.
 
 ## Install
 
@@ -41,8 +41,8 @@ delphi uninstall    # tear down + drop data volume
 | Var | Default | Purpose |
 |---|---|---|
 | `SYNSCI_DELPHI_HOME` | `~/.synsci/delphi` | Install dir for source + state |
-| `SYNSCI_DELPHI_REPO` | `https://github.com/synthetic-sciences/delhpi.git` | Source repo |
-| `SYNSCI_DELPHI_REF` | `main` | Branch / tag to pull |
+| `SYNSCI_DELPHI_REPO` | `https://github.com/synthetic-sciences/delphi.git` | Source repo |
+| `SYNSCI_DELPHI_REF` | remote default | Branch / tag to pull |
 | `SYNSCI_DELPHI_API_URL` | `http://localhost:8742` | API URL |
 
 ## License

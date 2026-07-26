@@ -4,7 +4,7 @@ import { run } from "./system.js";
 import { ROOT, SOURCE_DIR } from "./paths.js";
 import { log } from "./log.js";
 
-const REPO_URL = process.env.SYNSCI_DELPHI_REPO || "https://github.com/synthetic-sciences/delhpi.git";
+const REPO_URL = process.env.SYNSCI_DELPHI_REPO || "https://github.com/synthetic-sciences/delphi.git";
 // If unset, we let `git clone` use the remote's default branch (HEAD), which
 // is more robust than hard-coding `main`/`master` since they differ per repo.
 const REPO_REF = process.env.SYNSCI_DELPHI_REF || "";
