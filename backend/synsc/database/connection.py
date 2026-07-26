@@ -3,13 +3,14 @@
 This module manages connections to the local PostgreSQL database with pgvector.
 """
 
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 import structlog
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.engine.url import make_url
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import QueuePool
 
@@ -19,6 +20,7 @@ logger = structlog.get_logger(__name__)
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
+EXPECTED_ALEMBIC_REVISION = "013_visibility_contracts"
 
 
 def get_engine() -> Engine:
@@ -69,6 +71,28 @@ def get_session_factory() -> sessionmaker[Session]:
     return _SessionLocal
 
 
+def _verify_migration_revision(conn: Connection) -> None:
+    """Fail unless the connected database is at this package's schema head."""
+    try:
+        result = conn.execute(text("SELECT version_num FROM alembic_version"))
+        version_rows = result.fetchall()
+    except SQLAlchemyError as exc:
+        raise RuntimeError(
+            "Alembic version table is missing. Run 'alembic upgrade head' before starting Delphi."
+        ) from exc
+
+    actual_revisions = tuple(row[0] for row in version_rows)
+    if actual_revisions != (EXPECTED_ALEMBIC_REVISION,):
+        actual = ", ".join(actual_revisions) or "unversioned"
+        raise RuntimeError(
+            f"Database schema is at revision {actual}, but Delphi expects "
+            f"{EXPECTED_ALEMBIC_REVISION}. Run 'alembic upgrade head' before "
+            "starting Delphi."
+        )
+
+    logger.info("Alembic migration version", version=EXPECTED_ALEMBIC_REVISION)
+
+
 def init_db() -> None:
     """Initialize the database connection and verify setup.
 
@@ -76,22 +100,20 @@ def init_db() -> None:
     - Connection to PostgreSQL works
     - pgvector extension is enabled
     - Required tables exist
+    - Alembic is at the schema revision expected by this package
     """
     engine = get_engine()
 
     try:
         with engine.connect() as conn:
             # Check if pgvector is available
-            result = conn.execute(
-                text("SELECT extname FROM pg_extension WHERE extname = 'vector'")
-            )
+            result = conn.execute(text("SELECT extname FROM pg_extension WHERE extname = 'vector'"))
             row = result.fetchone()
             if row:
                 logger.info("PostgreSQL connected with pgvector extension")
             else:
                 raise RuntimeError(
-                    "pgvector extension not found! "
-                    "Run setup_local.sql or use Docker Compose."
+                    "pgvector extension not found! Run setup_local.sql or use Docker Compose."
                 )
 
             # Verify key tables exist
@@ -104,7 +126,14 @@ def init_db() -> None:
             )
             tables = [row[0] for row in result.fetchall()]
 
-            required_tables = ['users', 'api_keys', 'repositories', 'user_repositories', 'code_chunks', 'chunk_embeddings']
+            required_tables = [
+                "users",
+                "api_keys",
+                "repositories",
+                "user_repositories",
+                "code_chunks",
+                "chunk_embeddings",
+            ]
             missing = set(required_tables) - set(tables)
 
             if missing:
@@ -115,30 +144,10 @@ def init_db() -> None:
 
             logger.info("Database verified", tables=tables)
 
-            # Check Alembic migration status (non-fatal)
-            try:
-                alembic_result = conn.execute(
-                    text(
-                        "SELECT version_num FROM alembic_version "
-                        "ORDER BY version_num DESC LIMIT 1"
-                    )
-                )
-                version_row = alembic_result.fetchone()
-                if version_row:
-                    logger.info("Alembic migration version", version=version_row[0])
-                else:
-                    logger.warning(
-                        "Alembic version table exists but is empty — "
-                        "run 'alembic upgrade head' to stamp the baseline"
-                    )
-            except Exception:
-                logger.warning(
-                    "Alembic version table not found — "
-                    "run 'alembic upgrade head' to initialize migrations"
-                )
+            _verify_migration_revision(conn)
 
     except Exception as e:
-        logger.error("Failed to connect to database", error=str(e))
+        logger.error("Database initialization failed", error=str(e))
         raise
 
 

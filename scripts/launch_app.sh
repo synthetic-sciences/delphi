@@ -89,7 +89,9 @@ cleanup() {
     wait 2>/dev/null
     echo -e "${GREEN}All services stopped.${NC}"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Docker-compose mode
 if [ "$USE_DOCKER" = true ]; then
@@ -109,6 +111,12 @@ else
     echo -e "${DIM}  cp env.example .env${NC}"
     echo ""
     echo -e "${DIM}Loading defaults...${NC}"
+fi
+
+if [ -n "${DATABASE_URL:-}" ]; then
+    DATABASE_URL_WAS_SET=true
+else
+    DATABASE_URL_WAS_SET=false
 fi
 
 # Set defaults
@@ -141,17 +149,56 @@ fi
 
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
 
+DATABASE_READY_HOST="$POSTGRES_HOST"
+DATABASE_READY_PORT="$POSTGRES_PORT"
+if [ "$DATABASE_URL_WAS_SET" = true ]; then
+    DATABASE_ENDPOINT="$(
+        DATABASE_URL="$DATABASE_URL" "$BACKEND_DIR/.venv/bin/python" - <<'PY'
+import os
+
+from sqlalchemy.engine import make_url
+
+url = make_url(os.environ["DATABASE_URL"])
+host = url.host or url.query.get("host", "")
+port = url.port or url.query.get("port", 5432)
+print(f"{host}|{port}")
+PY
+    )"
+    IFS='|' read -r DATABASE_READY_HOST DATABASE_READY_PORT <<< "$DATABASE_ENDPOINT"
+fi
+
+database_is_ready() {
+    if [ -n "$DATABASE_READY_HOST" ]; then
+        pg_isready -h "$DATABASE_READY_HOST" -p "$DATABASE_READY_PORT" -q 2>/dev/null
+    else
+        pg_isready -p "$DATABASE_READY_PORT" -q 2>/dev/null
+    fi
+}
+
+DATABASE_READY_DISPLAY="${DATABASE_READY_HOST:-local socket}:${DATABASE_READY_PORT}"
+
 echo -e "${DIM}Checking PostgreSQL...${NC}"
-if ! pg_isready -h localhost -p 5432 -q 2>/dev/null; then
-    echo -e "${YELLOW}PostgreSQL not running locally. Starting via Docker...${NC}"
-    docker compose up -d postgres
+if ! database_is_ready; then
+    if [ "$DATABASE_URL_WAS_SET" = false ] && \
+        [[ "$DATABASE_READY_HOST" = "localhost" || "$DATABASE_READY_HOST" = "127.0.0.1" ]]; then
+        echo -e "${YELLOW}PostgreSQL not running locally. Starting via Docker...${NC}"
+        docker compose up -d postgres
+    else
+        echo -e "${YELLOW}PostgreSQL is unavailable at ${DATABASE_READY_DISPLAY}.${NC}"
+    fi
+
     echo -e "${DIM}Waiting for PostgreSQL...${NC}"
-    for i in {1..30}; do
-        if pg_isready -h localhost -p 5432 -q 2>/dev/null; then
+    for _ in {1..30}; do
+        if database_is_ready; then
             break
         fi
         sleep 1
     done
+fi
+
+if ! database_is_ready; then
+    echo -e "${RED}PostgreSQL did not become ready at ${DATABASE_READY_DISPLAY}.${NC}"
+    exit 1
 fi
 echo -e "${GREEN}PostgreSQL ready.${NC}"
 
@@ -160,8 +207,7 @@ echo -e "${GREEN}PostgreSQL ready.${NC}"
 # of the setup_local.sql baseline (which Alembic 001 stamps idempotently).
 
 echo -e "${DIM}Applying database migrations...${NC}"
-(cd "$BACKEND_DIR" && uv run alembic upgrade head) || \
-    echo -e "${YELLOW}Migrations failed or skipped. Continuing — fix and rerun if endpoints 500.${NC}"
+(cd "$BACKEND_DIR" && uv run alembic upgrade head)
 
 # ── Services ─────────────────────────────────────────────────────────────────
 

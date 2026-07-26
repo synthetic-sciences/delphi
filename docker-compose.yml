@@ -50,6 +50,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      api:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-synsc}:${POSTGRES_PASSWORD:-synsc}@postgres:5432/${POSTGRES_DB:-synsc}
       SYNSC_LOG_FORMAT: json
