@@ -14,47 +14,44 @@ stays for back-compat but is now a derived view:
                          add to their collection (link-share)
 
 Default for existing rows: copied from is_public (true -> public,
-false -> private).
-"""
-from typing import Sequence, Union
+false -> private). New papers default to private; the other source types
+default to public.
 
-import sqlalchemy as sa
+The migration deliberately uses idempotent DDL because setup_local.sql is a
+baseline that may already contain the columns when Alembic upgrades it.
+"""
+
+from collections.abc import Sequence
+
 from alembic import op
 
 revision: str = "008_source_visibility"
-down_revision: Union[str, None] = "007_doc_versions"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "007_doc_versions"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
-def _add_visibility(table: str) -> None:
-    op.add_column(
-        table,
-        sa.Column(
-            "visibility",
-            sa.String(16),
-            nullable=False,
-            server_default="public",
-        ),
-    )
-    op.create_index(f"idx_{table}_visibility", table, ["visibility"])
-    # Backfill from is_public — runs once and uses the existing column.
+def _add_visibility(table: str, default: str) -> None:
+    op.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS visibility VARCHAR(16)")
     op.execute(
         f"UPDATE {table} SET visibility = CASE WHEN is_public THEN 'public' "
-        f"ELSE 'private' END"
+        "ELSE 'private' END WHERE visibility IS NULL"
     )
+    op.execute(f"ALTER TABLE {table} ALTER COLUMN visibility SET DEFAULT '{default}'")
+    op.execute(f"ALTER TABLE {table} ALTER COLUMN visibility SET NOT NULL")
+    op.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_visibility ON {table}(visibility)")
 
 
 def _drop_visibility(table: str) -> None:
-    op.drop_index(f"idx_{table}_visibility", table_name=table)
-    op.drop_column(table, "visibility")
+    op.execute(f"DROP INDEX IF EXISTS idx_{table}_visibility")
+    op.execute(f"ALTER TABLE {table} DROP COLUMN IF EXISTS visibility")
 
 
 def upgrade() -> None:
-    _add_visibility("repositories")
-    _add_visibility("papers")
-    _add_visibility("documentation_sources")
-    _add_visibility("datasets")
+    _add_visibility("repositories", "public")
+    _add_visibility("papers", "private")
+    _add_visibility("documentation_sources", "public")
+    _add_visibility("datasets", "public")
 
 
 def downgrade() -> None:
