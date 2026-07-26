@@ -70,13 +70,31 @@ done
 
 # Banner
 echo ""
-echo -e "${ORANGE}   ███████╗██╗   ██╗███╗   ██╗███████╗ ██████╗${NC}"
-echo -e "${ORANGE}   ██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝██╔════╝${NC}"
-echo -e "${ORANGE}   ███████╗ ╚████╔╝ ██╔██╗ ██║███████╗██║     ${NC}"
-echo -e "${ORANGE}   ╚════██║  ╚██╔╝  ██║╚██╗██║╚════██║██║     ${NC}"
-echo -e "${ORANGE}   ███████║   ██║   ██║ ╚████║███████║╚██████╗${NC}"
-echo -e "${ORANGE}   ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚══════╝ ╚═════╝${NC}"
-echo -e "${DIM}   synsc delphi — open-source mcp server for ai agents${NC}"
+TERMINAL_WIDTH="${COLUMNS:-80}"
+if command -v tput >/dev/null 2>&1; then
+    TERMINAL_WIDTH="$(tput cols 2>/dev/null || echo "$TERMINAL_WIDTH")"
+fi
+[[ "$TERMINAL_WIDTH" =~ ^[0-9]+$ ]] || TERMINAL_WIDTH=80
+
+print_centered() {
+    local text="$1"
+    local color="$2"
+    local display_width="${3:-${#text}}"
+    local padding=$(( (TERMINAL_WIDTH - display_width) / 2 ))
+    if (( padding < 0 )); then
+        padding=0
+    fi
+    printf "%*s%b%s%b\n" "$padding" "" "$color" "$text" "$NC"
+}
+
+DELPHI_ART_WIDTH=43
+print_centered "██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "██║  ██║█████╗  ██║     ██████╔╝███████║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "██████╔╝███████╗███████╗██║     ██║  ██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "open-source MCP server for AI agents" "$DIM"
 echo ""
 
 # Cleanup function
