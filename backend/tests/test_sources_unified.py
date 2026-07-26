@@ -340,6 +340,69 @@ def test_post_v1_sources_dispatches_to_index_source(client, monkeypatch):
     assert body["source_type"] == "repo"
 
 
+def test_post_v1_sources_async_persists_a_durable_job(client, monkeypatch):
+    """Accepted async work must live in PostgreSQL, not an event-loop task."""
+    from synsc.services import job_queue_service
+
+    queue = MagicMock()
+    queue.create_source_job.return_value = {
+        "success": True,
+        "job_id": "job-123",
+        "status": "pending",
+        "message": "Job queued successfully",
+    }
+    monkeypatch.setattr(job_queue_service, "get_job_queue_service", lambda: queue)
+
+    response = client.post(
+        "/v1/sources",
+        json={
+            "source_type": "docs",
+            "url": "https://docs.example.com",
+            "display_name": "Example docs",
+            "options": {"max_pages": 25},
+            "async_mode": True,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["job_id"] == "job-123"
+    queue.create_source_job.assert_called_once_with(
+        user_id="00000000-0000-0000-0000-000000000000",
+        source_type="docs",
+        url="https://docs.example.com",
+        display_name="Example docs",
+        options={"max_pages": 25},
+    )
+
+
+def test_auto_index_on_miss_uses_the_durable_queue(monkeypatch):
+    """Search-triggered indexing must survive the API process exiting."""
+    from synsc.services import job_queue_service, source_service
+
+    queue = MagicMock()
+    queue.create_source_job.return_value = {
+        "success": True,
+        "job_id": "job-456",
+        "status": "pending",
+    }
+    monkeypatch.setattr(job_queue_service, "get_job_queue_service", lambda: queue)
+
+    queued = source_service._queue_async_index(
+        url="https://github.com/pallets/flask",
+        display_name="flask",
+        user_id="user-1",
+    )
+
+    assert queued is True
+    queue.create_source_job.assert_called_once_with(
+        user_id="user-1",
+        source_type="repo",
+        url="https://github.com/pallets/flask",
+        display_name="flask",
+        options=None,
+    )
+
+
 def test_post_v1_sources_docs_dispatches_to_docs_service(client, monkeypatch):
     """Docs landed — endpoint now returns 200 with the canonical envelope."""
     from synsc.services import docs_service as ds_mod
