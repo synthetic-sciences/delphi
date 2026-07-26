@@ -64,8 +64,8 @@ delphi uninstall    # remove containers + data volume
 For contributors or anyone who wants to run a fork:
 
 ```bash
-git clone https://github.com/synthetic-sciences/delhpi.git
-cd delhpi
+git clone https://github.com/synthetic-sciences/delphi.git
+cd delphi
 cp env.example .env       # set SERVER_SECRET and SYSTEM_PASSWORD
 ./scripts/launch_app.sh   # or: docker compose up --build
 ```
