@@ -32,7 +32,7 @@ class JobQueueService:
         self,
         user_id: str,
         repo_url: str,
-        branch: str = "main",
+        branch: str | None = None,
         priority: int = 0,
     ) -> dict:
         """Create a new indexing job.
@@ -40,7 +40,7 @@ class JobQueueService:
         Args:
             user_id: User who requested the indexing
             repo_url: GitHub repository URL
-            branch: Branch to index
+            branch: Branch to index. None lets the worker detect the default.
             priority: Job priority (higher = more urgent)
             
         Returns:
