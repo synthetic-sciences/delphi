@@ -98,7 +98,7 @@ async function apiFetch(
 
 export async function indexRepository(
   url: string,
-  branch = "main",
+  branch?: string,
   deepIndex = false
 ) {
   return apiFetch(
@@ -158,7 +158,7 @@ export async function searchCode(
 export async function indexPaper(source: string) {
   return apiFetch(
     "/v1/papers/index",
-    { method: "POST", body: JSON.stringify({ source }) },
+    { method: "POST", body: JSON.stringify({ url: source }) },
     true
   );
 }
