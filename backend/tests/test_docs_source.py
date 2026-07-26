@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Sitemap discovery + chunking (pure helpers, no DB)
 # ---------------------------------------------------------------------------
@@ -26,6 +25,88 @@ def test_discover_sitemap_falls_back_to_origin_root():
         svc._discover_sitemap("https://docs.example.com/getting-started")
         == "https://docs.example.com/sitemap.xml"
     )
+
+
+def test_docs_url_validation_rejects_loopback_and_private_addresses():
+    from synsc.services.docs_service import _validate_public_url
+
+    for url in (
+        "http://127.0.0.1/admin",
+        "http://[::1]/admin",
+        "http://10.0.0.5/docs",
+        "http://169.254.169.254/latest/meta-data/",
+    ):
+        with pytest.raises(ValueError, match="public"):
+            _validate_public_url(url)
+
+
+def test_docs_fetch_rejects_redirect_to_private_address():
+    from synsc.services.docs_service import DocsService
+
+    class RedirectResponse:
+        status_code = 302
+        headers = {"location": "http://127.0.0.1/secrets"}
+
+    class FakeClient:
+        def get(self, url, **kwargs):
+            return RedirectResponse()
+
+    with pytest.raises(ValueError, match="public"):
+        DocsService(user_id="u1")._fetch(FakeClient(), "https://8.8.8.8/docs")
+
+
+def test_public_network_backend_pins_connection_to_validated_address(monkeypatch):
+    import socket
+
+    from synsc.services.docs_service import _PublicNetworkBackend
+
+    resolutions = [
+        (
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+            "",
+            ("93.184.216.34", 443),
+        )
+    ]
+    connected_to = []
+
+    class FakeSocket:
+        def setsockopt(self, *args):
+            pass
+
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: resolutions)
+    monkeypatch.setattr(
+        socket,
+        "create_connection",
+        lambda address, *args, **kwargs: connected_to.append(address) or FakeSocket(),
+    )
+
+    _PublicNetworkBackend().connect_tcp("attacker-controlled.test", 443)
+
+    assert connected_to == [("93.184.216.34", 443)]
+
+
+def test_public_network_backend_rejects_rebound_private_address(monkeypatch):
+    import socket
+
+    from synsc.services.docs_service import _PublicNetworkBackend
+
+    private_resolution = [
+        (
+            socket.AF_INET,
+            socket.SOCK_STREAM,
+            socket.IPPROTO_TCP,
+            "",
+            ("127.0.0.1", 443),
+        )
+    ]
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *args, **kwargs: private_resolution
+    )
+
+    with pytest.raises(ValueError, match="public"):
+        _PublicNetworkBackend().connect_tcp("attacker-controlled.test", 443)
 
 
 def test_html_to_markdown_extracts_first_h1_as_heading():
@@ -87,8 +168,8 @@ def test_index_docs_requires_user_id():
 
 
 def test_index_source_docs_dispatches_to_docs_service(monkeypatch):
-    from synsc.services import source_service
     from synsc.services import docs_service as ds_mod
+    from synsc.services import source_service
 
     fake_svc = MagicMock()
     fake_svc.index_docs.return_value = {
@@ -116,8 +197,8 @@ def test_index_source_docs_dispatches_to_docs_service(monkeypatch):
 def test_index_source_docs_sitemap_failure_surfaces_as_error(monkeypatch):
     """A sitemap that 404s should propagate as status='error' so the HTTP
     layer can return 502 instead of a misleading 200."""
-    from synsc.services import source_service
     from synsc.services import docs_service as ds_mod
+    from synsc.services import source_service
 
     fake_svc = MagicMock()
     fake_svc.index_docs.return_value = {
@@ -146,8 +227,8 @@ def test_index_source_docs_requires_user_id():
 
 
 def test_list_sources_includes_docs_branch(monkeypatch):
-    from synsc.services import source_service
     from synsc.services import docs_service as ds_mod
+    from synsc.services import source_service
 
     fake_svc = MagicMock()
     fake_svc.list_docs.return_value = [
@@ -199,8 +280,8 @@ def test_search_docs_requires_user_id():
 def test_unified_retrieve_includes_docs_branch_by_default(monkeypatch):
     """Without an explicit source_types filter, the docs branch should fan out
     alongside repo / paper / dataset (P2 — was previously excluded)."""
-    from synsc.services import source_service
     from synsc.services import docs_service as ds_mod
+    from synsc.services import source_service
 
     fake_docs_svc = MagicMock()
     fake_docs_svc.search_docs.return_value = {

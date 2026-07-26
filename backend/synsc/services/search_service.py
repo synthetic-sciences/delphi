@@ -13,22 +13,20 @@ Post-retrieval quality pipeline:
 """
 
 import json
-import os
 import re
 import time
 from pathlib import Path
 
 import numpy as np
 import structlog
-from sqlalchemy import func, text
-from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from synsc.config import get_config
 from synsc.database.connection import get_session
 from synsc.database.models import (
+    CodeChunk,
     Repository,
     RepositoryFile,
-    CodeChunk,
     UserRepository,
 )
 from synsc.embeddings.generator import get_embedding_generator

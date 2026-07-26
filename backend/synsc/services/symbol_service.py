@@ -6,14 +6,13 @@ Uses smart deduplication with access control:
 - Private repos: only the indexer can access
 """
 
-from pathlib import Path
 
 import structlog
-from sqlalchemy import func, or_, text
+from sqlalchemy import func, text
 from sqlalchemy.orm import joinedload
 
 from synsc.database.connection import get_session
-from synsc.database.models import Repository, RepositoryFile, Symbol, UserRepository
+from synsc.database.models import RepositoryFile, Symbol
 
 logger = structlog.get_logger(__name__)
 
@@ -599,7 +598,7 @@ class SymbolService:
                     Symbol.repo_id == repo_id,
                 ).group_by(Symbol.symbol_type).all()
                 
-                type_counts = {t: c for t, c in counts}
+                type_counts = dict(counts)
                 total = sum(type_counts.values())
                 
                 return {

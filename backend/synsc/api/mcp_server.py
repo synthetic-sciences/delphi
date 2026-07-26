@@ -4,6 +4,7 @@ Unified MCP Server for Synsc Context.
 Provides tools for code repository, research paper, and HuggingFace dataset indexing.
 """
 
+import contextlib
 import contextvars
 import json
 import os
@@ -57,8 +58,9 @@ def _log_activity(
 ) -> None:
     """Log a user activity to the activity_log table (best-effort)."""
     try:
-        from synsc.database.connection import get_session
         from sqlalchemy import text
+
+        from synsc.database.connection import get_session
         with get_session() as session:
             session.execute(
                 text(
@@ -212,8 +214,9 @@ Provides deep context to AI agents through:
             return None
 
         try:
-            from synsc.database.connection import get_session
             from sqlalchemy import text
+
+            from synsc.database.connection import get_session
 
             key_hash = hashlib.sha256(api_key.encode()).hexdigest()
             with get_session() as session:
@@ -269,6 +272,7 @@ Provides deep context to AI agents through:
             and the quality_mode that was actually applied.
         """
         import asyncio
+
         from synsc.config import get_config
         from synsc.services.indexing_service import IndexingService
 
@@ -522,6 +526,7 @@ Provides deep context to AI agents through:
             ``hybrid`` block showing how many candidates each branch hit.
         """
         import asyncio
+
         from synsc.config import get_config
         from synsc.services.search_service import SearchService
 
@@ -716,6 +721,7 @@ Provides deep context to AI agents through:
             include_tests/docs/examples/configs: Toggle per-category inclusion.
         """
         import asyncio
+
         from synsc.config import get_config
         from synsc.services.context_pack import build_context_pack as _build_pack
 
@@ -926,10 +932,16 @@ Provides deep context to AI agents through:
             Dictionary with paper_id, title, authors, chunks, etc.
         """
         import asyncio
-        import tempfile
         import os
+        import tempfile
+
+        from synsc.core.arxiv_client import (
+            ArxivError,
+            download_arxiv_pdf,
+            get_arxiv_metadata,
+            parse_arxiv_id,
+        )
         from synsc.services.paper_service import get_paper_service
-        from synsc.core.arxiv_client import parse_arxiv_id, download_arxiv_pdf, get_arxiv_metadata, ArxivError
 
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
@@ -946,10 +958,8 @@ Provides deep context to AI agents through:
                 arxiv_id = source.strip()
 
             arxiv_metadata = None
-            try:
+            with contextlib.suppress(Exception):
                 arxiv_metadata = get_arxiv_metadata(arxiv_id)
-            except Exception:
-                pass
 
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                 pdf_path = tmp.name
@@ -960,10 +970,8 @@ Provides deep context to AI agents through:
                     arxiv_id=arxiv_id, arxiv_metadata=arxiv_metadata,
                 )
             finally:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(pdf_path)
-                except OSError:
-                    pass
 
         result = await asyncio.to_thread(_do_index)
 
@@ -1134,8 +1142,9 @@ Provides deep context to AI agents through:
         Returns:
             List of code blocks with language detection
         """
-        from synsc.database.connection import get_session
         from sqlalchemy import text
+
+        from synsc.database.connection import get_session
 
         user_id = get_authenticated_user_id()
 
@@ -1143,8 +1152,15 @@ Provides deep context to AI agents through:
         try:
             with get_session() as session:
                 rows = session.execute(
-                    text("SELECT * FROM paper_code_snippets WHERE paper_id = :pid"),
-                    {"pid": paper_id},
+                    text(
+                        "SELECT snippets.* "
+                        "FROM paper_code_snippets AS snippets "
+                        "JOIN user_papers AS access "
+                        "ON access.paper_id = snippets.paper_id "
+                        "WHERE snippets.paper_id = :pid "
+                        "AND access.user_id = :uid"
+                    ),
+                    {"pid": paper_id, "uid": user_id},
                 ).mappings().all()
                 snippets = [dict(r) for r in rows]
         except Exception:
@@ -1347,10 +1363,10 @@ Provides deep context to AI agents through:
 
     @_tool_in("papers")
     def delete_paper(paper_id: str) -> dict[str, Any]:
-        """Delete an indexed paper and all associated data.
+        """Remove an indexed paper from the current user's library.
 
-        Removes the paper, its chunks, embeddings, citations, equations,
-        and code snippets.
+        Shared paper data remains available to other users. If this is the
+        final user link, the now-unreferenced paper data is also deleted.
 
         Args:
             paper_id: Paper identifier (UUID)
@@ -1393,8 +1409,9 @@ Provides deep context to AI agents through:
             Dictionary with dataset_id, name, hf_id, chunks, etc.
         """
         import asyncio
+
+        from synsc.core.huggingface_client import HuggingFaceError, parse_hf_dataset_id
         from synsc.services.dataset_service import get_dataset_service
-        from synsc.core.huggingface_client import parse_hf_dataset_id, HuggingFaceError
 
         user_id = get_authenticated_user_id()
 
@@ -1473,6 +1490,7 @@ Provides deep context to AI agents through:
             Matching dataset chunks with relevance scores
         """
         import asyncio
+
         from synsc.services.dataset_service import get_dataset_service
 
         user_id = get_authenticated_user_id()

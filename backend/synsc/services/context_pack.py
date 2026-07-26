@@ -226,10 +226,7 @@ def _query_is_broad(query: str) -> bool:
     if len(query.split()) < 4:
         return False
     # Has any CamelCase / snake_case identifier? Then it's specific.
-    if re.search(r"[A-Z][a-z]+[A-Z]|_\w+|\.\w+", query):
-        return False
-    # Otherwise, broad-ish
-    return True
+    return not bool(re.search(r"[A-Z][a-z]+[A-Z]|_\w+|\.\w+", query))
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -505,7 +502,6 @@ class ContextPackBuilder:
         """
         if not primary:
             return
-        file_ids = list({r.get("file_id") or r.get("repo_id") for r in primary})
         chunks_by_file: dict[str, list[dict]] = {}
         for r in primary:
             fid = r.get("file_id")

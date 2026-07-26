@@ -67,6 +67,7 @@ dependencies = [
     # HTTP client & server
     # ===========================================
     "httpx>=0.28.1",
+    "httpcore>=1.0.9",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     # ===========================================
@@ -151,6 +152,9 @@ ignore = ["E501"]  # Line length handled by formatter
 
 [tool.ruff.lint.isort]
 known-first-party = ["synsc"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File"]
 
 [tool.mypy]
 python_version = "3.10"

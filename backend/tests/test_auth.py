@@ -1,6 +1,5 @@
 """Tests for API key authentication."""
 
-import os
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 

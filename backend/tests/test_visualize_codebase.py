@@ -104,7 +104,11 @@ def test_visualize_codebase_returns_structure(monkeypatch):
         def query(self, model):
             from synsc.database.models import (
                 Repository as _R,
+            )
+            from synsc.database.models import (
                 RepositoryFile as _F,
+            )
+            from synsc.database.models import (
                 Symbol as _S,
             )
 

@@ -5,8 +5,8 @@ early without needing a running database.
 """
 
 import importlib
-import pytest
 
+import pytest
 
 CORE_MODULES = [
     "synsc",

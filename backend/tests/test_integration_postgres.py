@@ -163,7 +163,9 @@ def test_atlas_ingest_workspace_and_node(user_id, session, monkeypatch):
     )
 
     from synsc.services.atlas_connector import (
-        ingest_workspace, ingest_node, search_atlas_nodes,
+        ingest_node,
+        ingest_workspace,
+        search_atlas_nodes,
     )
 
     ws = ingest_workspace(
@@ -220,8 +222,10 @@ def test_atlas_what_not_to_repeat(user_id, monkeypatch):
     )
 
     from synsc.services.atlas_connector import (
-        ingest_workspace, ingest_node,
-        find_what_was_tried, find_what_not_to_repeat,
+        find_what_not_to_repeat,
+        find_what_was_tried,
+        ingest_node,
+        ingest_workspace,
     )
 
     ws = ingest_workspace(
@@ -282,7 +286,10 @@ def test_atlas_find_related_nodes_via_question(user_id, monkeypatch):
     )
 
     from synsc.services.atlas_connector import (
-        ingest_workspace, ingest_node, ingest_edge, find_related_nodes,
+        find_related_nodes,
+        ingest_edge,
+        ingest_node,
+        ingest_workspace,
     )
 
     ws = ingest_workspace(
@@ -353,8 +360,10 @@ def test_atlas_artifact_ingest_and_search(user_id, monkeypatch):
     )
 
     from synsc.services.atlas_connector import (
-        ingest_workspace, ingest_node, ingest_artifact,
         find_relevant_artifacts,
+        ingest_artifact,
+        ingest_node,
+        ingest_workspace,
     )
 
     ws = ingest_workspace(
@@ -383,7 +392,8 @@ def test_atlas_artifact_ingest_and_search(user_id, monkeypatch):
 
 def test_atlas_tool_contract_ingest_and_retrieve(user_id):
     from synsc.services.atlas_connector import (
-        ingest_tool_contract, retrieve_tool_contract,
+        ingest_tool_contract,
+        retrieve_tool_contract,
     )
     res = ingest_tool_contract(
         user_id=user_id,

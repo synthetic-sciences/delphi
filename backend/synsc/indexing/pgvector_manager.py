@@ -77,7 +77,7 @@ class PgVectorManager:
             values_parts = []
             params: dict[str, Any] = {"rid": repo_id}
             for j, (chunk_id, embedding) in enumerate(
-                zip(batch_chunk_ids, batch_embeddings)
+                zip(batch_chunk_ids, batch_embeddings, strict=True)
             ):
                 values_parts.append(f"(:cid_{j}, :rid, :emb_{j})")
                 params[f"cid_{j}"] = chunk_id

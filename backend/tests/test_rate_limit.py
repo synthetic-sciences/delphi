@@ -1,12 +1,12 @@
 """Tests for rate limiting configuration and key extraction."""
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def test_rate_limit_module_imports():
     """Rate limit module should import without errors."""
-    from synsc.api.rate_limit import limiter, AUTH_LIMIT, INDEX_LIMIT, SEARCH_LIMIT
+    from synsc.api.rate_limit import AUTH_LIMIT, INDEX_LIMIT, SEARCH_LIMIT
 
     assert AUTH_LIMIT == "10/minute"
     assert INDEX_LIMIT == "5/minute"
@@ -39,8 +39,9 @@ def test_rate_limit_key_uses_user_id_when_present():
 
 def test_rate_limit_exceeded_handler_returns_429():
     """The custom handler should return 429 with JSON body."""
-    from synsc.api.rate_limit import _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded
+
+    from synsc.api.rate_limit import _rate_limit_exceeded_handler
 
     mock_request = MagicMock()
     # RateLimitExceeded expects a Limit object; mock it
@@ -82,6 +83,7 @@ def test_rate_limit_env_overrides():
     try:
         # Need to reimport to pick up env vars (module-level reads)
         import importlib
+
         import synsc.api.rate_limit as rl
         importlib.reload(rl)
 
@@ -95,6 +97,7 @@ def test_rate_limit_env_overrides():
         os.environ.pop("SYNSC_RATE_LIMIT_DEFAULT", None)
         # Reload with defaults restored
         import importlib
+
         import synsc.api.rate_limit as rl
         importlib.reload(rl)
 

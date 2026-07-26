@@ -11,8 +11,8 @@ exact_path_search) are integration-tested separately with a real Postgres.
 from __future__ import annotations
 
 from synsc.services.hybrid_retrieval import (
-    Candidate,
     DEFAULT_WEIGHTS,
+    Candidate,
     extract_identifiers,
     fuse_candidates,
     vector_to_candidates,

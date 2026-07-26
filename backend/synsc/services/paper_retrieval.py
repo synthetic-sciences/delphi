@@ -28,7 +28,6 @@ from typing import Any
 
 import structlog
 from sqlalchemy import text
-from sqlalchemy.orm import Session
 
 from synsc.database.connection import get_session
 

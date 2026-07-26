@@ -14,13 +14,13 @@ Run:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from pathlib import Path
 from typing import Any
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Environment setup — load .env BEFORE any synsc imports
@@ -66,10 +66,8 @@ os.environ["SYNSC_API_KEY"] = API_KEY
 import tests.conftest as _root_conftest  # noqa: E402
 
 for _p in _root_conftest._session_patches:
-    try:
+    with contextlib.suppress(RuntimeError):
         _p.stop()
-    except RuntimeError:
-        pass  # Already stopped
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +76,6 @@ for _p in _root_conftest._session_patches:
 
 def _init_real_db():
     """Initialise the real database connection."""
-    import importlib
 
     # Reset config singleton so it picks up the real env vars
     import synsc.config as cfg
@@ -388,7 +385,5 @@ class TestPaperTools:
 def teardown_module():
     """Re-apply conftest patches so other test files are unaffected."""
     for _p in _root_conftest._session_patches:
-        try:
+        with contextlib.suppress(RuntimeError):
             _p.start()
-        except RuntimeError:
-            pass  # Already started

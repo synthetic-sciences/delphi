@@ -102,7 +102,8 @@ def test_index_source_routes_generic_pdf_url(monkeypatch):
 
     class FakePaperService:
         def index_paper(self, pdf_path, source, **kw):
-            seen["pdf_bytes"] = open(pdf_path, "rb").read()[:4]
+            with open(pdf_path, "rb") as pdf_file:
+                seen["pdf_bytes"] = pdf_file.read()[:4]
             seen["source"] = source
             seen["metadata"] = kw.get("arxiv_metadata")
             return {

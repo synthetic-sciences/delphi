@@ -52,10 +52,7 @@ def topic_matches(text: str | None, topic: str | None) -> bool:
     if not text:
         return False
     haystack = text.lower()
-    for tok in _tokenize_topic(topic):
-        if tok in haystack:
-            return True
-    return False
+    return any(tok in haystack for tok in _tokenize_topic(topic))
 
 
 def filter_results_by_topic(

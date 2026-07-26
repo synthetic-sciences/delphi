@@ -183,8 +183,8 @@ def test_index_source_unsupported_type_raises_value_error():
 
 def test_index_source_docs_now_dispatches_to_docs_service(monkeypatch):
     """Docs indexing landed — dispatcher now hands off to DocsService."""
-    from synsc.services import source_service
     from synsc.services import docs_service as ds_mod
+    from synsc.services import source_service
 
     fake = MagicMock()
     fake.index_docs.return_value = {

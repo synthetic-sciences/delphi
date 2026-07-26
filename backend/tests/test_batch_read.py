@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 
 def _call_batch_read(monkeypatch, requests, **kwargs):
     """Helper: invoke batch_read by name via the registered MCP server."""

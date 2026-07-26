@@ -1,8 +1,6 @@
 """Tests for versioned docs lookup + resolver `url@version` syntax."""
 from __future__ import annotations
 
-import pytest
-
 from synsc.services import source_service
 
 

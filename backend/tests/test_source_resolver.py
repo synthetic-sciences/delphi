@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-
 _VALID_UUID = "12345678-1234-1234-1234-123456789abc"
 
 

@@ -24,11 +24,8 @@ from __future__ import annotations
 
 import json
 import re
-import time
-from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 import structlog
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -235,7 +232,9 @@ def ingest_node(
                 emb_gen = get_embedding_generator()
                 embeds = emb_gen.generate([row[1] for row in embedding_rows])
                 with get_session() as esess:
-                    for (chunk_id, _content, _kind), vec in zip(embedding_rows, embeds):
+                    for (chunk_id, _content, _kind), vec in zip(
+                        embedding_rows, embeds, strict=True
+                    ):
                         emb_str = "[" + ",".join(str(x) for x in vec.tolist()) + "]"
                         esess.execute(
                             text(

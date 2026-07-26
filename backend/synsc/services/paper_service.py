@@ -13,11 +13,10 @@ Coordinates:
 - PostgreSQL storage
 """
 
-import json
 import re as _re
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import structlog
 from sqlalchemy import text
@@ -76,7 +75,7 @@ class PaperService:
         """Generate a unique paper ID."""
         return str(uuid.uuid4())
 
-    def _check_duplicate_by_arxiv(self, arxiv_id: str) -> Optional[dict]:
+    def _check_duplicate_by_arxiv(self, arxiv_id: str) -> dict | None:
         """Check if paper with this arXiv ID already exists."""
         try:
             with get_session() as session:
@@ -91,7 +90,7 @@ class PaperService:
             logger.warning(f"Failed to check arXiv duplicate: {e}")
         return None
 
-    def _check_duplicate_by_hash(self, pdf_hash: str) -> Optional[dict]:
+    def _check_duplicate_by_hash(self, pdf_hash: str) -> dict | None:
         """Check if paper with this PDF hash already exists."""
         try:
             with get_session() as session:
@@ -395,7 +394,9 @@ class PaperService:
                         embeddings = embedding_gen.generate_batched(chunk_texts)
 
                         # Store embeddings using raw SQL for pgvector
-                        for chunk_id, embedding in zip(chunk_ids, embeddings):
+                        for chunk_id, embedding in zip(
+                            chunk_ids, embeddings, strict=True
+                        ):
                             embedding_list = (
                                 embedding.tolist()
                                 if hasattr(embedding, "tolist")
@@ -440,8 +441,8 @@ class PaperService:
                     full_text = extracted.normalized_text
                     try:
                         from synsc.extractors.citations import CitationExtractor
-                        from synsc.extractors.equations import EquationExtractor
                         from synsc.extractors.code_snippets import CodeSnippetExtractor
+                        from synsc.extractors.equations import EquationExtractor
 
                         # Citations
                         raw_citations = CitationExtractor().extract(full_text)
@@ -597,7 +598,7 @@ class PaperService:
 
     def get_paper(
         self, paper_id: str, section: str | None = None
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Get a specific paper by ID, optionally filtered to a single section.
 
         When ``section`` is provided, match against ``chunk.section_title``
@@ -730,10 +731,53 @@ class PaperService:
             return []
 
     def delete_paper(self, paper_id: str) -> dict[str, Any]:
-        """Fully delete a paper and all associated data."""
+        """Remove a paper from this user's library.
+
+        Paper rows are globally deduplicated, so shared data is retained while
+        another user still has a collection link. The final user's removal
+        also deletes the now-unreferenced paper data.
+        """
         try:
             with get_session() as session:
-                # Delete everything in FK order
+                paper = (
+                    session.query(Paper.paper_id)
+                    .filter(Paper.paper_id == paper_id)
+                    .with_for_update()
+                    .first()
+                )
+                if not paper:
+                    return {"success": False, "error": "Paper not found"}
+
+                removed_link = session.execute(
+                    text(
+                        "DELETE FROM user_papers "
+                        "WHERE user_id = :uid AND paper_id = :pid "
+                        "RETURNING paper_id"
+                    ),
+                    {"uid": self.user_id, "pid": paper_id},
+                ).fetchone()
+                if not removed_link:
+                    return {"success": False, "error": "Paper not found"}
+
+                remaining_link = session.execute(
+                    text(
+                        "SELECT 1 FROM user_papers "
+                        "WHERE paper_id = :pid LIMIT 1"
+                    ),
+                    {"pid": paper_id},
+                ).fetchone()
+                if remaining_link:
+                    logger.info(
+                        "Removed paper from user library",
+                        paper_id=paper_id,
+                        user_id=self.user_id,
+                    )
+                    return {
+                        "success": True,
+                        "message": "Paper removed from your library",
+                    }
+
+                # No user links remain: delete the shared data in FK order.
                 session.execute(
                     text("DELETE FROM paper_chunk_embeddings WHERE paper_id = :pid"),
                     {"pid": paper_id},
@@ -755,15 +799,15 @@ class PaperService:
                     {"pid": paper_id},
                 )
                 session.execute(
-                    text("DELETE FROM user_papers WHERE paper_id = :pid"),
-                    {"pid": paper_id},
-                )
-                session.execute(
                     text("DELETE FROM papers WHERE paper_id = :pid"),
                     {"pid": paper_id},
                 )
 
-            logger.info("Fully deleted paper", paper_id=paper_id, user_id=self.user_id)
+            logger.info(
+                "Deleted unreferenced paper",
+                paper_id=paper_id,
+                user_id=self.user_id,
+            )
             return {"success": True, "message": "Paper fully deleted"}
         except Exception as e:
             logger.error(f"Failed to delete paper: {e}")
@@ -825,23 +869,32 @@ class PaperService:
             return {"success": False, "error": str(e), "results": []}
 
     def get_citations(self, paper_id: str) -> list[dict]:
-        """Get citations for a paper."""
+        """Get citations only when the current user has the paper."""
         try:
             with get_session() as session:
-                citations = (
-                    session.query(Citation)
-                    .filter(Citation.paper_id == paper_id)
-                    .all()
-                )
+                citations = session.execute(
+                    text(
+                        "SELECT citations.citation_id, citations.paper_id, "
+                        "citations.citation_text, citations.citation_context, "
+                        "citations.page_number, citations.citation_number, "
+                        "citations.external_reference "
+                        "FROM citations "
+                        "JOIN user_papers "
+                        "ON user_papers.paper_id = citations.paper_id "
+                        "WHERE citations.paper_id = :pid "
+                        "AND user_papers.user_id = :uid"
+                    ),
+                    {"pid": paper_id, "uid": self.user_id},
+                ).mappings().all()
                 return [
                     {
-                        "citation_id": c.citation_id,
-                        "paper_id": c.paper_id,
-                        "citation_text": c.citation_text,
-                        "citation_context": c.citation_context,
-                        "page_number": c.page_number,
-                        "citation_number": c.citation_number,
-                        "external_reference": c.external_reference,
+                        "citation_id": c["citation_id"],
+                        "paper_id": c["paper_id"],
+                        "citation_text": c["citation_text"],
+                        "citation_context": c["citation_context"],
+                        "page_number": c["page_number"],
+                        "citation_number": c["citation_number"],
+                        "external_reference": c["external_reference"],
                     }
                     for c in citations
                 ]
@@ -850,24 +903,33 @@ class PaperService:
             return []
 
     def get_equations(self, paper_id: str) -> list[dict]:
-        """Get equations for a paper."""
+        """Get equations only when the current user has the paper."""
         try:
             with get_session() as session:
-                equations = (
-                    session.query(Equation)
-                    .filter(Equation.paper_id == paper_id)
-                    .all()
-                )
+                equations = session.execute(
+                    text(
+                        "SELECT equations.equation_id, equations.paper_id, "
+                        "equations.equation_text, equations.equation_number, "
+                        "equations.section_title, equations.page_number, "
+                        "equations.context, equations.equation_type "
+                        "FROM equations "
+                        "JOIN user_papers "
+                        "ON user_papers.paper_id = equations.paper_id "
+                        "WHERE equations.paper_id = :pid "
+                        "AND user_papers.user_id = :uid"
+                    ),
+                    {"pid": paper_id, "uid": self.user_id},
+                ).mappings().all()
                 return [
                     {
-                        "equation_id": e.equation_id,
-                        "paper_id": e.paper_id,
-                        "equation_text": e.equation_text,
-                        "equation_number": e.equation_number,
-                        "section_title": e.section_title,
-                        "page_number": e.page_number,
-                        "context": e.context,
-                        "equation_type": e.equation_type,
+                        "equation_id": e["equation_id"],
+                        "paper_id": e["paper_id"],
+                        "equation_text": e["equation_text"],
+                        "equation_number": e["equation_number"],
+                        "section_title": e["section_title"],
+                        "page_number": e["page_number"],
+                        "context": e["context"],
+                        "equation_type": e["equation_type"],
                     }
                     for e in equations
                 ]

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from synsc.services.docs_service import DocsService
 
-
 HTML = b"""
 <html>
 <head><title>FastAPI - Background Tasks</title></head>

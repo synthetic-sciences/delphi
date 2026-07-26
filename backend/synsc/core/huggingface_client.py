@@ -72,7 +72,7 @@ def get_dataset_info(hf_id: str, hf_token: str | None = None) -> dict[str, Any]:
 
     try:
         from huggingface_hub import HfApi
-        from huggingface_hub.utils import RepositoryNotFoundError, GatedRepoError
+        from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
 
         api = HfApi()
         info = api.dataset_info(hf_id, token=token)
@@ -169,13 +169,15 @@ def get_dataset_info(hf_id: str, hf_token: str | None = None) -> dict[str, Any]:
             "is_gated": bool(info.gated) if hasattr(info, "gated") else False,
         }
 
-    except RepositoryNotFoundError:
-        raise DatasetNotFoundError(f"HuggingFace dataset not found: {hf_id}")
-    except GatedRepoError:
+    except RepositoryNotFoundError as exc:
+        raise DatasetNotFoundError(
+            f"HuggingFace dataset not found: {hf_id}"
+        ) from exc
+    except GatedRepoError as exc:
         raise HuggingFaceError(
             f"Dataset '{hf_id}' is gated. Accept the license at "
             f"https://huggingface.co/datasets/{hf_id} and provide HF_TOKEN."
-        )
+        ) from exc
     except (DatasetNotFoundError, HuggingFaceError):
         raise
     except Exception as e:

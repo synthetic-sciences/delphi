@@ -1,7 +1,7 @@
 """Tests for security headers middleware."""
 
 import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def test_security_headers_on_health(client):
@@ -42,8 +42,9 @@ def test_hsts_when_enabled():
     """HSTS header should appear when SYNSC_ENABLE_HSTS=true."""
     os.environ["SYNSC_ENABLE_HSTS"] = "true"
     try:
-        from synsc.api.http_server import create_app
         from fastapi.testclient import TestClient
+
+        from synsc.api.http_server import create_app
 
         app = create_app()
         with TestClient(app) as c:

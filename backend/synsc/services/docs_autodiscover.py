@@ -159,6 +159,7 @@ def discover_docs_url(
         return None
     owner, name = m.group(1), m.group(2)
 
+    homepage_fallback = None
     with httpx.Client(follow_redirects=True) as client:
         for fn in (_from_github_homepage, _from_readme, _from_pyproject):
             try:
@@ -169,6 +170,10 @@ def discover_docs_url(
             except Exception as exc:
                 logger.debug("autodiscover: branch failed", fn=fn.__name__, error=str(exc))
                 found = None
-            if found:
-                return found.rstrip("#homepage")
-    return None
+            if not found:
+                continue
+            if fn is _from_github_homepage and found.endswith("#homepage"):
+                homepage_fallback = found.removesuffix("#homepage")
+                continue
+            return found
+    return homepage_fallback

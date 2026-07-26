@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import inspect
 
-import pytest
-
 from synsc.services import atlas_connector as tc
 
 

@@ -15,7 +15,7 @@ Coordinates:
 import json
 import time
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 import structlog
 from sqlalchemy import text
@@ -31,7 +31,7 @@ class DatasetService:
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    def _check_duplicate_by_hf_id(self, hf_id: str) -> Optional[dict]:
+    def _check_duplicate_by_hf_id(self, hf_id: str) -> dict | None:
         """Check if dataset with this HF ID already exists."""
         try:
             with get_session() as session:
@@ -145,7 +145,7 @@ class DatasetService:
 
         try:
             # Step 1: Parse and normalize hf_id
-            from synsc.core.huggingface_client import parse_hf_dataset_id, HuggingFaceError
+            from synsc.core.huggingface_client import HuggingFaceError, parse_hf_dataset_id
             try:
                 hf_id = parse_hf_dataset_id(hf_id)
             except HuggingFaceError as e:
@@ -193,8 +193,8 @@ class DatasetService:
                 self._delete_dataset_fully(dataset_id)
 
             # Step 3: Fetch metadata from HuggingFace Hub
-            from synsc.core.huggingface_client import get_dataset_info
             from synsc.config import get_config
+            from synsc.core.huggingface_client import get_dataset_info
             config = get_config()
 
             info = get_dataset_info(
@@ -308,7 +308,9 @@ class DatasetService:
                         ]
                         embeddings = embedding_gen.generate_batched(chunk_texts)
 
-                        for chunk_id, embedding in zip(chunk_ids, embeddings):
+                        for chunk_id, embedding in zip(
+                            chunk_ids, embeddings, strict=True
+                        ):
                             embedding_list = (
                                 embedding.tolist()
                                 if hasattr(embedding, "tolist")
@@ -382,7 +384,7 @@ class DatasetService:
                 "error": f"Failed to index dataset: {str(e)}",
             }
 
-    def get_dataset(self, dataset_id: str) -> Optional[dict]:
+    def get_dataset(self, dataset_id: str) -> dict | None:
         """Get a specific dataset by ID."""
         try:
             with get_session() as session:

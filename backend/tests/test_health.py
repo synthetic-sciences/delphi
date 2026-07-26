@@ -1,6 +1,6 @@
 """Tests for the health and info endpoints."""
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from synsc import __version__
 

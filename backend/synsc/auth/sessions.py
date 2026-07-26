@@ -7,7 +7,7 @@ Requires SERVER_SECRET env var for signing.
 """
 
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 
 import jwt
 import structlog
