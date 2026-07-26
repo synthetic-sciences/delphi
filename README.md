@@ -213,6 +213,7 @@ backend/                  Python backend (FastAPI + MCP)
   pyproject.toml          Python deps & entry points
   Dockerfile              Image for api + worker targets
 frontend/                 Next.js dashboard
+landing/                  Public Next.js site (deployed from this monorepo)
 packages/cli/             `npx @synsci/delphi` installer (one-command setup)
 packages/mcp-proxy/       MCP stdio-to-HTTP bridge (published separately)
 database/supabase/        Local PostgreSQL init SQL

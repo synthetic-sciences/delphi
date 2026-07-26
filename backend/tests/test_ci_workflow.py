@@ -39,6 +39,7 @@ def test_ci_covers_every_shippable_surface() -> None:
         "mcp-proxy",
         "cli",
         "frontend",
+        "landing",
     }
     for job in jobs.values():
         assert int(job["timeout-minutes"]) <= 30
@@ -74,6 +75,7 @@ def test_package_and_frontend_jobs_use_reproducible_checks() -> None:
     proxy = _run_commands(jobs["mcp-proxy"])
     cli = _run_commands(jobs["cli"])
     frontend = _run_commands(jobs["frontend"])
+    landing = _run_commands(jobs["landing"])
 
     assert "uv sync --locked --group dev" in proxy
     assert "uv run pytest -q" in proxy
@@ -88,3 +90,8 @@ def test_package_and_frontend_jobs_use_reproducible_checks() -> None:
     assert "npm run lint" in frontend
     assert "npm audit --audit-level=low" in frontend
     assert "npm run build" in frontend
+
+    assert "pnpm install --frozen-lockfile" in landing
+    assert "pnpm audit --prod" in landing
+    assert "pnpm build" in landing
+    assert "/_next/image" in landing

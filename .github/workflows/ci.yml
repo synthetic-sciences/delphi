@@ -200,3 +200,55 @@ jobs:
         run: npm audit --audit-level=low
       - name: Build production frontend
         run: npm run build
+
+  landing:
+    name: Landing site
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: landing
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+      - name: Build production site
+        run: pnpm build
+      - name: Smoke test production image optimization
+        run: |
+          pnpm start --hostname 127.0.0.1 > /tmp/delphi-landing.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          if ! curl --retry 30 --retry-connrefused --retry-delay 1 \
+            --fail --silent --show-error \
+            http://127.0.0.1:3000/ --output /dev/null; then
+            cat /tmp/delphi-landing.log
+            exit 1
+          fi
+
+          headers="$(mktemp)"
+          curl --fail --silent --show-error \
+            --header "Accept: image/webp" \
+            --dump-header "$headers" \
+            --output /dev/null \
+            "http://127.0.0.1:3000/_next/image?url=%2Fimg%2Fheroes%2Fsacred-way.png&w=828&q=75"
+          grep --extended-regexp --ignore-case \
+            "^content-type: image/(avif|webp)" "$headers"

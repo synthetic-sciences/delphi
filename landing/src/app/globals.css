@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+/* ---- design tokens, theme-aware ---------------------------------- */
+:root,
+[data-theme="dark"] {
+  --bg:           #0a0908;
+  --bg-deep:      #050404;
+  --fg:           #f4ecd6;
+  --fg-strong:    #fbf5e3;
+  --fg-dim:       #d6cdb5;
+  --fg-mute:      #8e8773;
+  --line:         rgba(244, 236, 214, 0.14);
+  --line-strong:  rgba(244, 236, 214, 0.28);
+  --selection:    rgba(244, 236, 214, 0.22);
+  --nav-bg:       rgba(10, 9, 8, 0.85);
+  --code-bg:      #050404;
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg:           #faf6ea;
+  --bg-deep:      #f3eedf;
+  --fg:           #1a1715;
+  --fg-strong:    #0a0908;
+  --fg-dim:       #4a4640;
+  --fg-mute:      #746e60;
+  --line:         rgba(26, 23, 21, 0.14);
+  --line-strong:  rgba(26, 23, 21, 0.28);
+  --selection:    rgba(26, 23, 21, 0.18);
+  --nav-bg:       rgba(250, 246, 234, 0.85);
+  --code-bg:      #f3eedf;
+  color-scheme: light;
+}
+
+@theme {
+  --color-bg: var(--bg);
+  --color-bg-deep: var(--bg-deep);
+  --color-fg: var(--fg);
+  --color-fg-strong: var(--fg-strong);
+  --color-fg-dim: var(--fg-dim);
+  --color-fg-mute: var(--fg-mute);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+}
+
+/* ---- base -------------------------------------------------------- */
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-serif), "Tiempos Text", "Source Serif 4", Georgia, "Times New Roman", serif;
+  font-feature-settings: "kern", "liga", "onum";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 220ms ease, color 220ms ease;
+}
+
+::selection {
+  background: var(--selection);
+  color: var(--fg-strong);
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--line-strong); }
+
+html { scroll-behavior: smooth; }
+section[id] { scroll-margin-top: 80px; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  html, body { transition: none; }
+}
+
+.font-serif { font-family: var(--font-serif), "Tiempos Text", "Source Serif 4", Georgia, serif; font-weight: 400; }
+.font-mono { font-family: var(--font-mono), ui-monospace, "SFMono-Regular", monospace; }
+
+.prose p { text-wrap: pretty; }
+
+a.quiet {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition: text-decoration-color 150ms ease;
+}
+a.quiet:hover {
+  text-decoration-color: var(--fg);
+}
+
+/* ---- theme-paired image swap -------------------------------------- */
+/* The Doré engravings ship as a dark/light pair generated from the same
+ * master, so the composition is pixel-perfect identical across themes —
+ * only the polarity flips, no layout shift on toggle. */
+.dark-only { display: block; }
+.light-only { display: none; }
+[data-theme="light"] .dark-only { display: none; }
+[data-theme="light"] .light-only { display: block; }
