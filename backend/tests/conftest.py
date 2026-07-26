@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import atexit
 import os
-from typing import Generator
+from collections.abc import Generator
 from unittest.mock import patch
 
 import pytest
@@ -38,6 +38,17 @@ os.environ.setdefault("SERVER_SECRET", "test-secret-for-unit-tests-only")
 _session_patches = [
     patch("synsc.database.connection.init_db"),
     patch("synsc.embeddings.generator.get_embedding_generator"),
+]
+for _p in _session_patches:
+    _p.start()
+
+# Import the HTTP module explicitly instead of relying on dotted patch-target
+# resolution.  This makes the fresh-interpreter ordering deterministic: the
+# heavyweight startup dependencies are patched before the module-level auth
+# helpers below are resolved.
+import synsc.api.http_server  # noqa: E402,F401
+
+_http_patches = [
     patch(
         "synsc.api.http_server._get_or_create_admin_user",
         return_value="test-admin-user-id",
@@ -47,8 +58,9 @@ _session_patches = [
         return_value=None,
     ),
 ]
-for _p in _session_patches:
+for _p in _http_patches:
     _p.start()
+_session_patches.extend(_http_patches)
 
 # Clean up when the interpreter shuts down (after all tests complete).
 for _p in _session_patches:
