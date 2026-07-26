@@ -296,8 +296,11 @@ class StoreHuggingFaceTokenRequest(BaseModel):
 
 class CreateJobRequest(BaseModel):
     """Request to create an indexing job."""
-    job_type: str = Field(..., description="Job type: 'repository' or 'paper'")
-    target: str = Field(..., description="Repository URL or paper ID/URL")
+    job_type: Literal["repository", "paper", "dataset", "docs"] = Field(
+        ...,
+        description="Source job type.",
+    )
+    target: str = Field(..., description="Repository URL or source identifier/URL")
     branch: str | None = Field(
         default=None,
         description="Repository branch. Omit to detect the repository default.",
@@ -375,8 +378,8 @@ class IndexSourceRequest(BaseModel):
         default=False,
         description=(
             "When true, the endpoint returns 202 immediately with "
-            "status='queued' and a stable source_id placeholder; the actual "
-            "chunk + embed work runs in a background task. Recommended for "
+            "status='pending' and a durable job_id; the actual chunk + embed "
+            "work runs in the indexing worker. Recommended for "
             "large repos (django, pandas, numpy) where the synchronous path "
             "blocks the API process for many minutes."
         ),
@@ -2702,39 +2705,23 @@ def create_app() -> FastAPI:
         embed pipeline inline; the response carries the final status. Good
         for small repos and CI scripts that want a single round-trip.
 
-        Async path (``async_mode=true``): returns 202 immediately with
-        ``status="queued"``; the chunk + embed pipeline runs in an
-        ``asyncio`` background task and a callback updates the DB row when
-        it finishes. Use this for any large repo (django ≈ 3.5k files,
-        pandas ≈ 5k files) where the sync path blocks the API process for
-        minutes and starves every other request.
+        Async path (``async_mode=true``): persists the complete source request
+        in PostgreSQL and returns 202 with a ``job_id``. A separate worker
+        claims it, so accepted work survives API and worker restarts.
         """
         from synsc.services.source_service import index_source
 
         # ---- Async path -------------------------------------------------
         if body.async_mode:
-            async def _background_index() -> None:
-                # Re-import inside the task so the worker doesn't capture a
-                # stale module reference at queue time.
-                from synsc.services.source_service import index_source as _idx
-                try:
-                    _idx(
-                        source_type=body.source_type,
-                        url=body.url,
-                        display_name=body.display_name,
-                        options=body.options,
-                        user_id=auth.user_id,
-                    )
-                except Exception as e:  # noqa: BLE001 — we log and swallow
-                    logger.error(
-                        "async index failed",
-                        url=body.url,
-                        source_type=body.source_type,
-                        error=str(e),
-                    )
+            from synsc.services.job_queue_service import get_job_queue_service
 
-            # Schedule the work, don't await it.
-            asyncio.create_task(_background_index())
+            queued = get_job_queue_service().create_source_job(
+                user_id=auth.user_id,
+                source_type=body.source_type,
+                url=body.url,
+                display_name=body.display_name,
+                options=body.options,
+            )
             _log_activity(
                 user_id=auth.user_id,
                 action="index_source_async_queued",
@@ -2747,13 +2734,12 @@ def create_app() -> FastAPI:
                 status_code=202,
                 content={
                     "success": True,
-                    "status": "queued",
+                    "job_id": queued["job_id"],
+                    "status": queued["status"],
                     "source_type": body.source_type,
                     "external_ref": body.url,
-                    "message": (
-                        "Indexing queued. Poll GET /v1/sources to watch for "
-                        "status='indexed'."
-                    ),
+                    "message": queued["message"],
+                    "status_url": f"/v1/jobs/{queued['job_id']}",
                 },
             )
 
@@ -2899,12 +2885,11 @@ def create_app() -> FastAPI:
                 branch=request.branch,
             )
         else:
-            # For papers, create job with paper_source
-            result = {
-                "success": True,
-                "message": f"Paper indexing job queued for: {request.target}",
-                "job_type": "paper",
-            }
+            result = service.create_source_job(
+                user_id=auth.user_id,
+                source_type=request.job_type,
+                url=request.target,
+            )
 
         return SafeJSONResponse(content=result)
 

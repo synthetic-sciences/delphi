@@ -578,7 +578,7 @@ CREATE TABLE IF NOT EXISTS indexing_jobs (
     -- Job owner
     user_id UUID NOT NULL,
 
-    -- Job type: 'repository' or 'paper'
+    -- Job type: 'repository', 'paper', 'dataset', or 'docs'
     job_type TEXT DEFAULT 'repository',
 
     -- For repositories
@@ -588,7 +588,12 @@ CREATE TABLE IF NOT EXISTS indexing_jobs (
     -- For papers
     paper_source TEXT,  -- arXiv URL/ID or file path
 
-    -- Status: pending, processing, completed, failed, cancelled
+    -- Generic source payload used by POST /v1/sources async mode
+    source_url TEXT,
+    display_name TEXT,
+    options JSONB,
+
+    -- Status: pending, processing, cancelling, completed, failed, cancelled
     status TEXT DEFAULT 'pending',
     priority INTEGER DEFAULT 0,
 
@@ -611,15 +616,30 @@ CREATE TABLE IF NOT EXISTS indexing_jobs (
     -- Results
     result_repo_id UUID REFERENCES repositories(repo_id) ON DELETE SET NULL,
     result_paper_id UUID REFERENCES papers(paper_id) ON DELETE SET NULL,
+    result_source_id VARCHAR(36),
     error_message TEXT,
 
     -- Worker tracking
     worker_id TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
 
     -- Timestamps
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Keep setup_local.sql idempotent for databases created before generic source
+-- jobs were introduced. Production containers also apply Alembic revision 011.
+ALTER TABLE indexing_jobs ADD COLUMN IF NOT EXISTS source_url TEXT;
+ALTER TABLE indexing_jobs ADD COLUMN IF NOT EXISTS display_name TEXT;
+ALTER TABLE indexing_jobs ADD COLUMN IF NOT EXISTS options JSONB;
+ALTER TABLE indexing_jobs
+    ADD COLUMN IF NOT EXISTS result_source_id VARCHAR(36);
+ALTER TABLE indexing_jobs
+    ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE indexing_jobs
+    ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3;
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON indexing_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_user ON indexing_jobs(user_id);
@@ -915,11 +935,13 @@ BEGIN
         status = 'processing',
         worker_id = p_worker_id,
         started_at = NOW(),
+        attempt_count = COALESCE(attempt_count, 0) + 1,
         updated_at = NOW()
     WHERE job_id = (
         SELECT job_id
         FROM indexing_jobs
         WHERE status = 'pending'
+          AND COALESCE(attempt_count, 0) < COALESCE(max_attempts, 3)
         ORDER BY priority DESC, created_at ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED

@@ -1143,6 +1143,12 @@ class IndexingJob(Base):
     
     # For papers
     paper_source: Mapped[str | None] = mapped_column(Text)  # arxiv URL/ID or file path
+
+    # Generic source queue payload used by /v1/sources async indexing.
+    # Legacy repository jobs continue to use repo_url/branch directly.
+    source_url: Mapped[str | None] = mapped_column(Text)
+    display_name: Mapped[str | None] = mapped_column(Text)
+    options: Mapped[dict | None] = mapped_column(JSONB)
     
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     priority: Mapped[int] = mapped_column(Integer, default=0)
@@ -1166,9 +1172,12 @@ class IndexingJob(Base):
     # Result
     result_repo_id: Mapped[str | None] = mapped_column(String(36))
     result_paper_id: Mapped[str | None] = mapped_column(String(36))
+    result_source_id: Mapped[str | None] = mapped_column(String(36))
     error_message: Mapped[str | None] = mapped_column(Text)
     
     worker_id: Mapped[str | None] = mapped_column(String(50))
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -1184,6 +1193,9 @@ class IndexingJob(Base):
             "repo_url": self.repo_url,
             "branch": self.branch,
             "paper_source": self.paper_source,
+            "source_url": self.source_url,
+            "display_name": self.display_name,
+            "options": self.options or {},
             "status": self.status,
             "priority": self.priority,
             "progress": self.progress,
@@ -1198,7 +1210,10 @@ class IndexingJob(Base):
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "result_repo_id": self.result_repo_id,
             "result_paper_id": self.result_paper_id,
+            "result_source_id": self.result_source_id,
             "error_message": self.error_message,
+            "attempt_count": self.attempt_count,
+            "max_attempts": self.max_attempts,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

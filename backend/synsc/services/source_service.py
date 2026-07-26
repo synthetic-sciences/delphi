@@ -194,45 +194,28 @@ def _user_indexed_library_names(user_id: str | None) -> set[str]:
         return set()
 
 
-def _queue_async_index(url: str, display_name: str, user_id: str | None) -> None:
-    """Queue a background indexing job. Best-effort fire-and-forget.
+def _queue_async_index(url: str, display_name: str, user_id: str | None) -> bool:
+    """Persist a background indexing job in the shared PostgreSQL queue.
 
     Called from the search path when the caller passes auto_index_on_miss=True
     and the query mentions a registry library the user hasn't indexed yet.
     """
     if not user_id:
-        return
+        return False
     try:
-        import asyncio
+        from synsc.services.job_queue_service import get_job_queue_service
 
-        # If we're inside an event loop (FastAPI request handler), schedule
-        # via create_task; otherwise spin up a one-shot loop.
-        async def _run() -> None:
-            try:
-                index_source(
-                    source_type="repo",
-                    url=url,
-                    display_name=display_name,
-                    options=None,
-                    user_id=user_id,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    "auto_index_on_miss background index failed",
-                    url=url, error=str(e),
-                )
-
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(_run())
-        except RuntimeError:
-            # No running loop — fall back to a detached thread so the search
-            # caller doesn't block.
-            import threading
-            t = threading.Thread(target=lambda: asyncio.run(_run()), daemon=True)
-            t.start()
+        result = get_job_queue_service().create_source_job(
+            user_id=user_id,
+            source_type="repo",
+            url=url,
+            display_name=display_name,
+            options=None,
+        )
+        return bool(result.get("success"))
     except Exception as e:  # noqa: BLE001
         logger.warning("auto_index_on_miss: could not queue", url=url, error=str(e))
+        return False
 
 
 def _maybe_auto_index_on_miss(query: str, user_id: str | None) -> list[str]:
@@ -249,9 +232,9 @@ def _maybe_auto_index_on_miss(query: str, user_id: str | None) -> list[str]:
         url = LIBRARY_REGISTRY.get(name)
         if not url:
             continue
-        _queue_async_index(url=url, display_name=name, user_id=user_id)
-        queued.append(name)
-        logger.info("auto_index_on_miss: queued", lib=name, url=url)
+        if _queue_async_index(url=url, display_name=name, user_id=user_id):
+            queued.append(name)
+            logger.info("auto_index_on_miss: queued", lib=name, url=url)
     return queued
 
 

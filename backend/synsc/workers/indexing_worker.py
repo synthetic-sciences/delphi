@@ -12,12 +12,10 @@ Features:
 """
 
 import signal
-import sys
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -36,12 +34,16 @@ from synsc.database.models import (
     Symbol,
     UserRepository,
 )
-from synsc.embeddings.generator import EmbeddingGenerator, get_embedding_generator
+from synsc.embeddings.generator import get_embedding_generator
 from synsc.indexing.vector_store import get_vector_store
 from synsc.parsing.registry import get_parser_registry
 from synsc.services.job_queue_service import get_job_queue_service
 
 logger = structlog.get_logger(__name__)
+
+
+class JobLeaseLost(RuntimeError):
+    """Raised when a worker no longer owns the claimed job generation."""
 
 
 def _read_repository_file(
@@ -105,6 +107,24 @@ class IndexingWorker:
         """Handle shutdown signals gracefully."""
         logger.info("Shutdown signal received", worker_id=self.worker_id)
         self.running = False
+
+    def _update_progress(
+        self,
+        job: IndexingJob,
+        progress: float,
+        **details: Any,
+    ) -> bool:
+        """Update progress only while this worker still owns the job lease."""
+        updated = self.job_queue.update_progress(
+            job.job_id,
+            progress,
+            worker_id=job.worker_id,
+            attempt_count=job.attempt_count,
+            **details,
+        )
+        if updated is False:
+            raise JobLeaseLost(f"Lease lost for job {job.job_id}")
+        return True
     
     def run(self, poll_interval: float = 2.0):
         """Run the worker loop.
@@ -115,12 +135,41 @@ class IndexingWorker:
             poll_interval: Seconds between poll attempts when idle
         """
         logger.info("Worker started", worker_id=self.worker_id)
+
+        try:
+            recovery = self.job_queue.recover_stale_jobs()
+            if recovery["requeued"] or recovery["failed"]:
+                logger.warning(
+                    "Recovered work from interrupted workers",
+                    worker_id=self.worker_id,
+                    **recovery,
+                )
+        except Exception as e:
+            # A concurrently starting API container may still be applying the
+            # migration that adds lease fields. The normal poll loop below
+            # keeps retrying once the schema is ready.
+            logger.warning(
+                "Could not recover stale jobs at worker startup",
+                worker_id=self.worker_id,
+                error=str(e),
+            )
+        next_recovery_at = time.monotonic() + 60.0
         
         # Track if we've shown the table missing error
         table_missing_logged = False
         
         while self.running:
             try:
+                if time.monotonic() >= next_recovery_at:
+                    recovery = self.job_queue.recover_stale_jobs()
+                    next_recovery_at = time.monotonic() + 60.0
+                    if recovery["requeued"] or recovery["failed"]:
+                        logger.warning(
+                            "Recovered work from interrupted workers",
+                            worker_id=self.worker_id,
+                            **recovery,
+                        )
+
                 # Try to claim a job
                 job = self.job_queue.claim_next_job(self.worker_id)
                 
@@ -172,9 +221,13 @@ class IndexingWorker:
         start_time = time.time()
         
         try:
+            if getattr(job, "source_url", None):
+                self._process_source_job(job)
+                return
+
             # Update progress
-            self.job_queue.update_progress(
-                job.job_id,
+            self._update_progress(
+                job,
                 progress=0.05,
                 stage="cloning",
                 message="Cloning repository...",
@@ -198,8 +251,8 @@ class IndexingWorker:
                 branch,
             )
             
-            self.job_queue.update_progress(
-                job.job_id,
+            self._update_progress(
+                job,
                 progress=0.10,
                 stage="listing",
                 message="Listing files...",
@@ -209,8 +262,8 @@ class IndexingWorker:
             files = self.git_client.list_files(repo_path)
             total_files = len(files)
             
-            self.job_queue.update_progress(
-                job.job_id,
+            self._update_progress(
+                job,
                 progress=0.15,
                 stage="processing",
                 message=f"Processing {total_files} files...",
@@ -242,21 +295,111 @@ class IndexingWorker:
                 embed_errors=result.get("embed_errors", 0),
             )
             
-            self.job_queue.complete_job(
+            completed = self.job_queue.complete_job(
                 job.job_id,
                 repo_id=result["repo_id"],
                 files_processed=result["files_processed"],
                 chunks_created=result["chunks_created"],
                 symbols_extracted=result["symbols_extracted"],
+                worker_id=job.worker_id,
+                attempt_count=job.attempt_count,
             )
+            if completed is False:
+                raise JobLeaseLost(f"Lease lost before completing job {job.job_id}")
             
+        except JobLeaseLost:
+            self.job_queue.acknowledge_cancellation(
+                job.job_id,
+                worker_id=job.worker_id,
+                attempt_count=job.attempt_count,
+            )
+            logger.info("Stopped work after lease loss", job_id=job.job_id)
         except Exception as e:
             logger.error(
                 "Job failed",
                 job_id=job.job_id,
                 error=str(e),
             )
-            self.job_queue.fail_job(job.job_id, str(e))
+            failed = self.job_queue.fail_job(
+                job.job_id,
+                str(e),
+                worker_id=job.worker_id,
+                attempt_count=job.attempt_count,
+            )
+            if failed is False:
+                self.job_queue.acknowledge_cancellation(
+                    job.job_id,
+                    worker_id=job.worker_id,
+                    attempt_count=job.attempt_count,
+                )
+
+    def _process_source_job(self, job: IndexingJob) -> None:
+        """Process a generic persisted source request through one dispatcher."""
+        from synsc.services.source_service import index_source
+
+        source_type = "repo" if job.job_type == "repository" else job.job_type
+        self._update_progress(
+            job,
+            progress=0.05,
+            stage="indexing",
+            message=f"Indexing {source_type} source...",
+        )
+
+        heartbeat_stop = threading.Event()
+        lease_lost = threading.Event()
+
+        def heartbeat() -> None:
+            while not heartbeat_stop.wait(60.0):
+                try:
+                    refreshed = self.job_queue.heartbeat_job(
+                        job.job_id,
+                        worker_id=job.worker_id,
+                        attempt_count=job.attempt_count,
+                    )
+                    if refreshed is False:
+                        lease_lost.set()
+                        break
+                except Exception as e:
+                    lease_lost.set()
+                    logger.warning(
+                        "Could not refresh source job lease",
+                        job_id=job.job_id,
+                        error=str(e),
+                    )
+                    break
+
+        heartbeat_thread = threading.Thread(
+            target=heartbeat,
+            daemon=True,
+            name=f"job-heartbeat-{job.job_id}",
+        )
+        heartbeat_thread.start()
+        try:
+            result = index_source(
+                source_type=source_type,
+                url=job.source_url,
+                display_name=job.display_name,
+                options=job.options,
+                user_id=job.user_id,
+            )
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=1.0)
+
+        if lease_lost.is_set():
+            raise JobLeaseLost(f"Lease lost while indexing job {job.job_id}")
+        if result.get("status") == "error":
+            raise RuntimeError(result.get("error") or "Source indexing failed")
+
+        completed = self.job_queue.complete_source_job(
+            job.job_id,
+            source_type=source_type,
+            source_id=result.get("source_id") or None,
+            worker_id=job.worker_id,
+            attempt_count=job.attempt_count,
+        )
+        if completed is False:
+            raise JobLeaseLost(f"Lease lost before completing job {job.job_id}")
     
     def _process_files_parallel(
         self,
@@ -331,8 +474,8 @@ class IndexingWorker:
         total_files = len(files)
         phase1_progress = {"done": 0}
         
-        self.job_queue.update_progress(
-            job.job_id, progress=0.20, stage="reading",
+        self._update_progress(
+            job, progress=0.20, stage="reading",
             message="Reading files...", files_total=total_files,
         )
         
@@ -352,8 +495,8 @@ class IndexingWorker:
                 
                 if done % 50 == 0 or done == total_files:
                     progress = 0.20 + (done / total_files) * 0.15
-                    self.job_queue.update_progress(
-                        job.job_id, progress=progress, stage="reading",
+                    self._update_progress(
+                        job, progress=progress, stage="reading",
                         message=f"Read {done}/{total_files} files",
                         files_processed=done, files_total=total_files,
                     )
@@ -373,8 +516,8 @@ class IndexingWorker:
         #   Failures are isolated per-batch — one bad file doesn't kill
         #   the whole job.
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        self.job_queue.update_progress(
-            job.job_id, progress=0.35, stage="chunking",
+        self._update_progress(
+            job, progress=0.35, stage="chunking",
             message=f"Chunking {len(processed_files)} files...",
         )
         
@@ -509,8 +652,8 @@ class IndexingWorker:
                 with _lock:
                     done = phase2["files_done"]
                 progress = 0.35 + (done / len(processed_files)) * 0.20
-                self.job_queue.update_progress(
-                    job.job_id, progress=min(progress, 0.55), stage="chunking",
+                self._update_progress(
+                    job, progress=min(progress, 0.55), stage="chunking",
                     message=f"Chunked {done}/{len(processed_files)} files",
                     chunks_created=phase2["chunks"],
                     symbols_extracted=phase2["symbols"],
@@ -532,8 +675,8 @@ class IndexingWorker:
         #   DB writes happen outside the semaphore so they don't block
         #   the next API call (pipeline parallelism).
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        self.job_queue.update_progress(
-            job.job_id, progress=0.55, stage="embeddings",
+        self._update_progress(
+            job, progress=0.55, stage="embeddings",
             message=f"Generating embeddings for {len(chunks_to_embed)} chunks...",
         )
         
@@ -609,8 +752,8 @@ class IndexingWorker:
                     current = embed_progress["done"]
                 
                 progress = 0.55 + (current / total_embed_batches) * 0.40
-                self.job_queue.update_progress(
-                    job.job_id, progress=min(progress, 0.95), stage="embeddings",
+                self._update_progress(
+                    job, progress=min(progress, 0.95), stage="embeddings",
                     message=f"Embedded batch {current}/{total_embed_batches}",
                 )
             
@@ -622,6 +765,8 @@ class IndexingWorker:
                 for future in as_completed(futures):
                     try:
                         future.result()
+                    except JobLeaseLost:
+                        raise
                     except Exception as e:
                         batch_idx = futures[future]
                         embed_errors.append(f"Batch {batch_idx + 1}: {e}")
