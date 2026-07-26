@@ -2,7 +2,7 @@
 
 import PageShell from "@/components/PageShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   FileText, Plus, Search, X, Trash2, ExternalLink,
@@ -44,12 +44,7 @@ export default function PapersPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch papers
-  useEffect(() => {
-    fetchPapers();
-  }, []);
-
-  async function fetchPapers() {
+  const fetchPapers = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/v1/papers`, { headers: await getAuthHeaders() });
@@ -62,7 +57,12 @@ export default function PapersPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  // Fetch papers
+  useEffect(() => {
+    void fetchPapers();
+  }, [fetchPapers]);
 
   async function indexPaper() {
     setIsIndexing(true);

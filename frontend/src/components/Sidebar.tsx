@@ -8,19 +8,23 @@ import {
 } from "lucide-react";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 
-const nav = [
+type NavEntry =
+  | { icon: typeof BarChart3; label: string; href: string }
+  | { separator: string };
+
+const nav: NavEntry[] = [
   { icon: BarChart3, label: "overview", href: "/overview" },
   { icon: Activity, label: "activity", href: "/activity" },
   { icon: FileText, label: "papers", href: "/papers" },
   { icon: Database, label: "datasets", href: "/datasets" },
   { icon: Code2, label: "repositories", href: "/repositories" },
-  null,
+  { separator: "account" },
   { icon: Key, label: "api keys", href: "/api-keys" },
   { icon: BookOpen, label: "docs", href: "/docs" },
 ];
 
-const adminNav = [
-  null,
+const adminNav: NavEntry[] = [
+  { separator: "admin" },
   { icon: Shield, label: "admin", href: "/admin/repos" },
 ];
 
@@ -42,9 +46,11 @@ export default function Sidebar() {
 
       {/* nav */}
       <nav className="flex-1 px-2 py-3 overflow-y-auto">
-        {items.map((item, i) => {
-          if (!item) return <div key={i} className="h-4" />;
-          const active = pathname === item.href || pathname.startsWith(item.href + "/");
+        {items.map((item) => {
+          if ("separator" in item) {
+            return <div key={item.separator} className="h-4" />;
+          }
+          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           return (
             <Link
               key={item.label}

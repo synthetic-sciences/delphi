@@ -2,7 +2,7 @@
 
 import PageShell from "@/components/PageShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Database, Plus, Search, X, Trash2, ExternalLink,
@@ -54,12 +54,22 @@ export default function DatasetsPage() {
   const [hasHfToken, setHasHfToken] = useState<boolean | null>(null);
   const [hfTokenLoading, setHfTokenLoading] = useState(true);
 
-  useEffect(() => {
-    checkHfToken();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const fetchDatasets = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/v1/datasets`, { headers: await getAuthHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setDatasets(data.datasets || []);
+      }
+    } catch (error) {
+      console.error("Failed to fetch datasets:", error);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  async function checkHfToken() {
+  const checkHfToken = useCallback(async () => {
     setHfTokenLoading(true);
     try {
       const res = await fetch(`${API_URL}/v1/huggingface/token`, {
@@ -69,7 +79,7 @@ export default function DatasetsPage() {
         const data = await res.json();
         setHasHfToken(data.has_token ?? false);
         if (data.has_token) {
-          fetchDatasets();
+          void fetchDatasets();
         } else {
           setLoading(false);
         }
@@ -83,22 +93,11 @@ export default function DatasetsPage() {
     } finally {
       setHfTokenLoading(false);
     }
-  }
+  }, [fetchDatasets]);
 
-  async function fetchDatasets() {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_URL}/v1/datasets`, { headers: await getAuthHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        setDatasets(data.datasets || []);
-      }
-    } catch (error) {
-      console.error("Failed to fetch datasets:", error);
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    void checkHfToken();
+  }, [checkHfToken]);
 
   async function indexDataset() {
     if (!hfInput.trim()) return;

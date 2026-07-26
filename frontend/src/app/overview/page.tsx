@@ -2,6 +2,7 @@
 
 import PageShell from "@/components/PageShell";
 import Link from "next/link";
+import Image from "next/image";
 import { ArrowRight } from "lucide-react";
 import { AreaChart, Area, ResponsiveContainer, XAxis } from "recharts";
 import { useEffect, useState } from "react";
@@ -15,8 +16,27 @@ interface Stats {
   toolCalls: number;
   apiUsage: number;
   apiChange: number;
-  recentQueries: { q: string; t: string }[];
+  recentQueries: { id: string; q: string; t: string }[];
   chartData: { d: string; v: number }[];
+}
+
+interface ActivityItem {
+  id: string;
+  action?: string;
+  query?: string;
+  created_at: string;
+}
+
+// The chart has a fixed 7rem height. A known SSR height suppresses Recharts'
+// invalid -1x-1 first render; width stays zero until ResizeObserver measures it.
+const CHART_INITIAL_DIMENSION = { width: 0, height: 112 };
+
+function formatTimeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  if (hours < 1) return 'now';
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
 }
 
 export default function OverviewPage() {
@@ -76,13 +96,13 @@ export default function OverviewPage() {
         // Build chart data + recent queries from weekly activity
         let chartData: { d: string; v: number }[] = [];
         let apiChange = 0;
-        let recentQueries: { q: string; t: string }[] = [];
+        let recentQueries: Stats["recentQueries"] = [];
         let apiUsage = toolCalls;
 
         if (weekRes?.ok) {
           const weekData = await weekRes.json();
           if (weekData.success && weekData.activities) {
-            const activities = weekData.activities as { action?: string; query?: string; created_at: string }[];
+            const activities = weekData.activities as ActivityItem[];
 
             // Build daily chart data for last 7 days
             const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -118,11 +138,16 @@ export default function OverviewPage() {
             // Recent queries
             const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
             recentQueries = activities
-              .filter(a => a.query && new Date(a.created_at).getTime() > oneDayAgo)
+              .filter(
+                (activity): activity is ActivityItem & { query: string } =>
+                  Boolean(activity.query) &&
+                  new Date(activity.created_at).getTime() > oneDayAgo,
+              )
               .slice(0, 3)
-              .map(a => ({
-                q: a.query!,
-                t: formatTimeAgo(a.created_at),
+              .map(activity => ({
+                id: activity.id,
+                q: activity.query,
+                t: formatTimeAgo(activity.created_at),
               }));
           }
         }
@@ -144,14 +169,6 @@ export default function OverviewPage() {
     fetchStats();
   }, []);
   
-  function formatTimeAgo(dateStr: string): string {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    if (hours < 1) return 'now';
-    if (hours < 24) return `${hours}h`;
-    return `${Math.floor(hours / 24)}d`;
-  }
-
   return (
     <PageShell>
       {/* header */}
@@ -170,10 +187,12 @@ export default function OverviewPage() {
         <div className="mb-6 p-6 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
           <div className="flex items-center gap-4">
             {profile.avatar_url && (
-              <img
+              <Image
                 src={profile.avatar_url}
                 alt=""
-                className="w-10 h-10 rounded-full"
+                width={40}
+                height={40}
+                className="rounded-full"
               />
             )}
             <div>
@@ -238,7 +257,11 @@ export default function OverviewPage() {
           </div>
           <div className="h-28 mt-2">
             {stats.chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer
+                width="100%"
+                height="100%"
+                initialDimension={CHART_INITIAL_DIMENSION}
+              >
                 <AreaChart data={stats.chartData}>
                   <defs>
                     <linearGradient id="usageGradient" x1="0" y1="0" x2="0" y2="1">
@@ -263,7 +286,11 @@ export default function OverviewPage() {
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer
+                width="100%"
+                height="100%"
+                initialDimension={CHART_INITIAL_DIMENSION}
+              >
                 <AreaChart data={[
                   { d: 'mon', v: 0 }, { d: 'tue', v: 0 }, { d: 'wed', v: 0 },
                   { d: 'thu', v: 0 }, { d: 'fri', v: 0 }, { d: 'sat', v: 0 }, { d: 'sun', v: 0 },
@@ -308,8 +335,8 @@ export default function OverviewPage() {
           </div>
           {stats.recentQueries.length > 0 ? (
             <div className="space-y-1">
-              {stats.recentQueries.map((q, i) => (
-                <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-[#efe7dd] transition-colors group cursor-pointer">
+              {stats.recentQueries.map((q) => (
+                <div key={q.id} className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-[#efe7dd] transition-colors group cursor-pointer">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#b58a73] flex-shrink-0" />
                   <p className="text-xs text-[#2e2522]/70 group-hover:text-[#2e2522] font-mono truncate flex-1 lowercase transition-colors">
                     {q.q}

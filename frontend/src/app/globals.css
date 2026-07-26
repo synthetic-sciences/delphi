@@ -53,7 +53,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 code, pre, kbd, .font-mono {
-  font-family: 'IBM Plex Mono', monospace !important;
+  font-family: 'IBM Plex Mono', monospace;
 }
 
 /* Custom scrollbar */
@@ -152,7 +152,7 @@ a:focus:not(:focus-visible) {
 }
 
 .progress-indeterminate {
-  width: 25% !important;
+  width: 25%;
   animation: indeterminate 1.6s cubic-bezier(0.65, 0.815, 0.735, 0.395) infinite;
 }
 

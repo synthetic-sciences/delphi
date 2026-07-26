@@ -1,6 +1,13 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
 import { getUserProfile, isAuthenticated } from "@/lib/api";
 
 interface UserProfile {
@@ -29,7 +36,7 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchProfile = async () => {
+  const fetchProfile = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -53,11 +60,11 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchProfile();
-  }, []);
+    void fetchProfile();
+  }, [fetchProfile]);
 
   return (
     <UserProfileContext.Provider value={{ profile, loading, error, refresh: fetchProfile }}>

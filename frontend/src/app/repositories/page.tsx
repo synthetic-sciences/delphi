@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import PageShell from "@/components/PageShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -86,6 +86,13 @@ const stageLabels: Record<string, string> = {
   error: "error",
 };
 
+function parseRepo(url: string): { owner: string; name: string } | null {
+  // Match "owner/name" or "https://github.com/owner/name[/...]"
+  const match = url.trim().match(/(?:github\.com\/)?([^/\s]+)\/([^/\s#?]+)/);
+  if (!match) return null;
+  return { owner: match[1], name: match[2].replace(/\.git$/, "") };
+}
+
 export default function RepositoriesPage() {
   const [repos, setRepos] = useState<Repository[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,12 +130,7 @@ export default function RepositoriesPage() {
   // Get minimized jobs
   const minimizedJobs = Array.from(indexingJobs.values()).filter(job => job.isMinimized && job.isIndexing);
 
-  // Fetch repositories
-  useEffect(() => {
-    fetchRepos();
-  }, []);
-
-  async function fetchRepos() {
+  const fetchRepos = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/v1/repositories`, {
@@ -143,10 +145,15 @@ export default function RepositoriesPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  // Fetch repositories
+  useEffect(() => {
+    void fetchRepos();
+  }, [fetchRepos]);
 
   // Check if user has a GitHub token stored
-  async function checkGitHubToken() {
+  const checkGitHubToken = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/v1/github/token`, {
         headers: await getAuthHeaders(),
@@ -160,10 +167,10 @@ export default function RepositoriesPage() {
       // ignore
     }
     return false;
-  }
+  }, []);
 
   // Fetch GitHub repos accessible via stored PAT
-  async function fetchGitHubRepos(query?: string) {
+  const fetchGitHubRepos = useCallback(async (query?: string) => {
     setGhLoading(true);
     try {
       const params = new URLSearchParams({ per_page: "50" });
@@ -180,18 +187,10 @@ export default function RepositoriesPage() {
     } finally {
       setGhLoading(false);
     }
-  }
-
-  // Parse owner/name from a GitHub URL or shorthand
-  function parseRepo(url: string): { owner: string; name: string } | null {
-    // Match "owner/name" or "https://github.com/owner/name[/...]"
-    const m = url.trim().match(/(?:github\.com\/)?([^/\s]+)\/([^/\s#?]+)/);
-    if (!m) return null;
-    return { owner: m[1], name: m[2].replace(/\.git$/, "") };
-  }
+  }, []);
 
   // Fetch branches for a given owner/name
-  async function fetchBranches(owner: string, name: string) {
+  const fetchBranches = useCallback(async (owner: string, name: string) => {
     setBranchesLoading(true);
     try {
       const params = new URLSearchParams({ owner, name });
@@ -213,7 +212,7 @@ export default function RepositoriesPage() {
     } finally {
       setBranchesLoading(false);
     }
-  }
+  }, []);
 
   // Fetch branches when repo URL changes (debounced)
   useEffect(() => {
@@ -223,10 +222,11 @@ export default function RepositoriesPage() {
     }
     const parsed = parseRepo(repoUrl);
     if (!parsed) return;
-    const t = setTimeout(() => fetchBranches(parsed.owner, parsed.name), 400);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repoUrl]);
+    const timer = setTimeout(() => {
+      void fetchBranches(parsed.owner, parsed.name);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [fetchBranches, repoUrl]);
 
   // Close branch dropdown on click outside
   useEffect(() => {
@@ -242,20 +242,18 @@ export default function RepositoriesPage() {
   // Debounced search for GitHub repos
   useEffect(() => {
     if (!showIndexModal || !hasToken || manualMode) return;
-    const t = setTimeout(() => {
-      fetchGitHubRepos(ghSearch || undefined);
+    const timer = setTimeout(() => {
+      void fetchGitHubRepos(ghSearch || undefined);
     }, ghSearch ? 300 : 0);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ghSearch, showIndexModal, hasToken, manualMode]);
+    return () => clearTimeout(timer);
+  }, [fetchGitHubRepos, ghSearch, hasToken, manualMode, showIndexModal]);
 
   // When modal opens, check for token
   useEffect(() => {
     if (showIndexModal && !activeJob?.isIndexing) {
-      checkGitHubToken();
+      void checkGitHubToken();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showIndexModal]);
+  }, [activeJob?.isIndexing, checkGitHubToken, showIndexModal]);
 
   // Select a repo from the dropdown
   function selectRepo(repo: GitHubRepo) {
