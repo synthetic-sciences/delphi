@@ -115,4 +115,4 @@ CMD ["sh", "-c", "alembic upgrade head && uvicorn synsc.api.http_server:app --ho
 # ---------------------------------------------------------------------------
 FROM runtime AS worker
 
-CMD ["synsc-context", "worker"]
+CMD ["sh", "-c", "alembic upgrade head && synsc-context worker"]

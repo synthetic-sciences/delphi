@@ -1,15 +1,15 @@
 """Alembic environment configuration.
 
-Reads DATABASE_URL from synsc config so migrations use the same
-connection string as the application.
+Resolves the database URL through the application config so migrations and
+runtime services honor the same DATABASE_URL / POSTGRES_* precedence.
 """
 
-import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
+from synsc.config import SynscConfig
 from synsc.database.models import Base
 
 # Alembic Config object
@@ -19,10 +19,9 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Use synsc's DATABASE_URL if available, otherwise fall back to alembic.ini
-database_url = os.getenv("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# Use the same explicit-URL-or-POSTGRES_* resolution as runtime services.
+database_url = SynscConfig.from_env().get_database_url()
+config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
 
