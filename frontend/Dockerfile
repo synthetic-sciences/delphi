@@ -1,7 +1,7 @@
 # =============================================================================
-# Delphi dashboard (Next.js 14, standalone output)
+# Delphi dashboard (Next.js 16, standalone output)
 # =============================================================================
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 # Next.js bakes the rewrite `destination` URLs into routes-manifest.json
 # at build time (not runtime), so anything next.config.mjs reads from
@@ -24,7 +24,7 @@ RUN npm run build
 # Runtime ships only the traced standalone bundle (server.js + minimal
 # node_modules) — much smaller than copying the full dev node_modules,
 # and avoids ENOSPC on disk-tight Docker VMs.
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
