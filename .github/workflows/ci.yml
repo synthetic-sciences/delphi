@@ -43,6 +43,13 @@ jobs:
         run: uv sync --locked --extra dev
       - name: Lint backend
         run: uv run ruff check synsc tests
+      - name: Audit backend dependencies
+        run: |
+          audit_requirements="$(mktemp)"
+          trap 'rm -f "$audit_requirements"' EXIT
+          uv export --quiet --frozen --extra dev --no-hashes --no-header \
+            --no-annotate --no-emit-project --output-file "$audit_requirements"
+          uvx --from pip-audit==2.10.1 pip-audit -r "$audit_requirements"
       - name: Run backend tests
         run: uv run pytest -q
 
@@ -128,6 +135,13 @@ jobs:
         run: uv sync --locked --group dev
       - name: Run proxy tests
         run: uv run pytest -q
+      - name: Audit proxy dependencies
+        run: |
+          audit_requirements="$(mktemp)"
+          trap 'rm -f "$audit_requirements"' EXIT
+          uv export --quiet --frozen --group dev --no-hashes --no-header \
+            --no-annotate --no-emit-project --output-file "$audit_requirements"
+          uvx --from pip-audit==2.10.1 pip-audit -r "$audit_requirements"
       - name: Build distributions
         run: uv build
 
