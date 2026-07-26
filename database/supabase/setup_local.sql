@@ -107,6 +107,27 @@ CREATE INDEX IF NOT EXISTS idx_hf_tokens_user ON huggingface_tokens(user_id);
 
 
 -- ============================================================================
+-- PART 3d: RESEARCH PROVIDER CREDENTIALS (Encrypted Per-User Keys)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS user_research_credentials (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider VARCHAR(32) NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_user_research_credentials_user_provider
+        UNIQUE (user_id, provider),
+    CONSTRAINT ck_user_research_credentials_provider
+        CHECK (provider = 'gemini')
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_research_credentials_user
+    ON user_research_credentials(user_id);
+
+
+-- ============================================================================
 -- PART 4: REPOSITORIES (Code Context - Global Deduplication)
 -- ============================================================================
 -- Public repos are stored once globally and shared by all users

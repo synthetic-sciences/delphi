@@ -3,6 +3,7 @@
 Uses a pluggable `ResearchProvider` (default: Gemini via google.genai) and
 a pluggable `retrieve_fn` so unit tests can stub out both.
 """
+
 from __future__ import annotations
 
 import time
@@ -12,6 +13,7 @@ from typing import Any, Literal
 import structlog
 
 from synsc.config import get_config
+from synsc.services.research_credentials import get_user_research_api_key
 from synsc.services.research_providers.base import ResearchProvider
 
 logger = structlog.get_logger(__name__)
@@ -23,24 +25,43 @@ RetrieveFn = Callable[..., list[dict[str, Any]]]
 _REFINE_PREFIX = "REFINE:"
 
 
+class ResearchProviderNotConfiguredError(RuntimeError):
+    """Raised when neither the caller nor the server has a provider key."""
+
+    def __init__(self, provider: str):
+        self.provider = provider
+        super().__init__(f"Research provider '{provider}' is not configured")
+
+
 class ResearchService:
     def __init__(
         self,
         provider: ResearchProvider | None = None,
         retrieve_fn: RetrieveFn | None = None,
+        user_id: str | None = None,
     ):
         self.config = get_config()
         self._provider = provider
         self._retrieve = retrieve_fn
+        self._user_id = user_id
 
     @property
     def provider(self) -> ResearchProvider:
+        return self._provider_for_user(self._user_id)
+
+    def _provider_for_user(self, user_id: str | None) -> ResearchProvider:
         if self._provider is not None:
             return self._provider
+
         cfg = self.config.research
+        api_key = get_user_research_api_key(user_id, cfg.provider) or cfg.api_key
+        if not api_key:
+            raise ResearchProviderNotConfiguredError(cfg.provider)
+
         if cfg.provider == "gemini":
             from synsc.services.research_providers.gemini import GeminiResearchProvider
-            return GeminiResearchProvider(api_key=cfg.api_key)
+
+            return GeminiResearchProvider(api_key=api_key)
         raise ValueError(f"Unknown research provider: {cfg.provider}")
 
     @property
@@ -48,6 +69,7 @@ class ResearchService:
         if self._retrieve is not None:
             return self._retrieve
         from synsc.services.source_service import unified_retrieve
+
         return unified_retrieve
 
     def run(
@@ -74,10 +96,11 @@ class ResearchService:
             raise ValueError(f"Unknown mode: {mode}")
 
         current_query = query
-        all_citations: dict[str, dict] = {}
+        all_citations: dict[str, dict[str, Any]] = {}
         tokens_in = 0
         tokens_out = 0
         answer_text = ""
+        provider = self._provider_for_user(user_id or self._user_id)
 
         for hop in range(max_hops):
             hits = self.retrieve(
@@ -92,7 +115,7 @@ class ResearchService:
                 if key not in all_citations:
                     all_citations[key] = h
 
-            ans = self.provider.generate(
+            ans = provider.generate(
                 prompt=current_query if hop == 0 else self._refine_prompt(query, answer_text),
                 context_blocks=list(all_citations.values()),
                 model=model,
@@ -103,7 +126,7 @@ class ResearchService:
 
             if mode == "quick" or not ans.text.startswith(_REFINE_PREFIX):
                 break
-            current_query = ans.text[len(_REFINE_PREFIX):].strip() or query
+            current_query = ans.text[len(_REFINE_PREFIX) :].strip() or query
 
         latency_ms = int((time.monotonic() - t0) * 1000)
         return {

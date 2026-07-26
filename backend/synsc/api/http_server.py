@@ -76,7 +76,7 @@ def _log_activity(
 from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy import text
 
 from synsc import __version__
@@ -292,6 +292,18 @@ class StoreHuggingFaceTokenRequest(BaseModel):
     """Request to store a HuggingFace API token."""
     token: str = Field(..., description="HuggingFace token (hf_...)")
     label: str | None = Field(default=None, description="User label for this token")
+
+
+class StoreResearchCredentialRequest(BaseModel):
+    """Request to store a per-user research-provider credential."""
+
+    provider: Literal["gemini"]
+    api_key: SecretStr = Field(
+        ...,
+        min_length=1,
+        max_length=10000,
+        description="Provider API key. Encrypted at rest and never returned.",
+    )
 
 
 class CreateJobRequest(BaseModel):
@@ -2162,7 +2174,23 @@ def create_app() -> FastAPI:
                 },
             )
 
-        if config.research.provider == "gemini" and not config.research.api_key:
+        from synsc.services.research_credentials import (
+            ResearchCredentialLookupError,
+        )
+        from synsc.services.research_service import ResearchProviderNotConfiguredError, ResearchService
+
+        service = ResearchService(user_id=auth.user_id)
+        start = time.time()
+        try:
+            result = service.run(
+                query=body.query,
+                mode=body.mode,  # type: ignore[arg-type]
+                source_ids=body.source_ids,
+                source_types=body.source_types,
+                k=body.k,
+                user_id=auth.user_id,
+            )
+        except ResearchProviderNotConfiguredError:
             return SafeJSONResponse(
                 status_code=503,
                 content={
@@ -2172,23 +2200,25 @@ def create_app() -> FastAPI:
                     "action_required": "configure_api_key",
                     "message": (
                         f"Research provider '{config.research.provider}' is not "
-                        "configured on this Delphi instance. Set GEMINI_API_KEY "
-                        "in the server environment to enable the research tool."
+                        "configured for this user or Delphi instance. Store a "
+                        "user key with PUT /v1/keys/research, or set "
+                        "GEMINI_API_KEY in the server environment."
                     ),
                 },
             )
-
-        from synsc.services.research_service import ResearchService
-
-        start = time.time()
-        try:
-            result = ResearchService().run(
-                query=body.query,
-                mode=body.mode,  # type: ignore[arg-type]
-                source_ids=body.source_ids,
-                source_types=body.source_types,
-                k=body.k,
-                user_id=auth.user_id,
+        except ResearchCredentialLookupError:
+            return SafeJSONResponse(
+                status_code=503,
+                content={
+                    "success": False,
+                    "error_code": "credential_lookup_unavailable",
+                    "provider": config.research.provider,
+                    "retryable": True,
+                    "message": (
+                        "The user-scoped research credential could not be "
+                        "checked. The server credential was not used."
+                    ),
+                },
             )
         except Exception as exc:
             logger.exception("research failed")
@@ -2214,6 +2244,124 @@ def create_app() -> FastAPI:
             },
         )
         return SafeJSONResponse(content={"success": True, **result})
+
+    # ==========================================================================
+    # Per-user research provider credentials
+    # ==========================================================================
+
+    @app.put("/v1/keys/research", tags=["Research"])
+    def store_research_credential(
+        body: StoreResearchCredentialRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Encrypt and store a research-provider key for the current user."""
+        from synsc.services.research_credentials import (
+            store_user_research_api_key,
+        )
+
+        try:
+            store_user_research_api_key(
+                auth.user_id,
+                body.provider,
+                body.api_key.get_secret_value(),
+            )
+        except RuntimeError as exc:
+            logger.error(
+                "Research credential encryption is unavailable",
+                provider=body.provider,
+                error=str(exc),
+            )
+            return SafeJSONResponse(
+                status_code=503,
+                content={
+                    "success": False,
+                    "error_code": "credential_storage_not_configured",
+                    "message": (
+                        "Encrypted credential storage is unavailable. "
+                        "Set TOKEN_ENCRYPTION_KEY on the Delphi server."
+                    ),
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to store research credential",
+                provider=body.provider,
+            )
+            return SafeJSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error_code": "credential_storage_failed",
+                    "message": "Failed to store research credential.",
+                },
+            )
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "configured": True,
+                "provider": body.provider,
+            }
+        )
+
+    @app.get("/v1/keys/research", tags=["Research"])
+    def get_research_credential_status(
+        provider: Literal["gemini"] = "gemini",
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Return credential metadata for the current user, never the key."""
+        from synsc.services.research_credentials import (
+            get_user_research_credential_status,
+        )
+
+        try:
+            status = get_user_research_credential_status(auth.user_id, provider)
+        except Exception:
+            logger.exception(
+                "Failed to read research credential status",
+                provider=provider,
+            )
+            return SafeJSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error_code": "credential_status_failed",
+                    "message": "Failed to read research credential status.",
+                },
+            )
+        return SafeJSONResponse(content={"success": True, **status})
+
+    @app.delete("/v1/keys/research", tags=["Research"])
+    def delete_research_credential(
+        provider: Literal["gemini"] = "gemini",
+        auth: AuthContext = Depends(verify_api_key),
+    ):
+        """Delete one provider credential belonging to the current user."""
+        from synsc.services.research_credentials import (
+            delete_user_research_api_key,
+        )
+
+        try:
+            deleted = delete_user_research_api_key(auth.user_id, provider)
+        except Exception:
+            logger.exception(
+                "Failed to delete research credential",
+                provider=provider,
+            )
+            return SafeJSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error_code": "credential_delete_failed",
+                    "message": "Failed to delete research credential.",
+                },
+            )
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "deleted": deleted,
+                "provider": provider,
+            }
+        )
 
     # ==========================================================================
     # Research v2 — Oracle-class async sessions with SSE
