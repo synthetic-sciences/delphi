@@ -1,6 +1,7 @@
 """Unit tests for research service + Gemini provider."""
 from __future__ import annotations
 
+import concurrent.futures
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -43,6 +44,105 @@ def test_gemini_provider_rejects_empty_api_key():
 
     with pytest.raises(ValueError, match="non-empty api_key"):
         GeminiResearchProvider(api_key="")
+
+
+def test_shared_research_service_isolates_user_credentials_under_concurrency(
+    monkeypatch,
+):
+    """Even one concurrently reused service never caches another user's key."""
+    from synsc.config import get_config
+    from synsc.services import research_service as rs_mod
+
+    config = get_config()
+    monkeypatch.setattr(config.research, "api_key", "server-fallback")
+    monkeypatch.setattr(
+        rs_mod,
+        "get_user_research_api_key",
+        lambda user_id, provider: {
+            "user-a": "key-a",
+            "user-b": "key-b",
+        }.get(user_id),
+    )
+
+    created_keys: list[str] = []
+
+    class FakeProvider:
+        def __init__(self, api_key: str):
+            self.api_key = api_key
+            created_keys.append(api_key)
+
+    monkeypatch.setattr(
+        "synsc.services.research_providers.gemini.GeminiResearchProvider",
+        FakeProvider,
+    )
+    service = rs_mod.ResearchService()
+
+    def resolve(user_id: str) -> str:
+        return service._provider_for_user(user_id).api_key
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        resolved = list(pool.map(resolve, ["user-a", "user-b"]))
+
+    assert resolved == ["key-a", "key-b"]
+    assert sorted(created_keys) == ["key-a", "key-b"]
+    assert config.research.api_key == "server-fallback"
+
+
+def test_research_service_falls_back_to_server_credential(monkeypatch):
+    from synsc.config import get_config
+    from synsc.services import research_service as rs_mod
+
+    monkeypatch.setattr(get_config().research, "api_key", "server-key")
+    monkeypatch.setattr(
+        rs_mod,
+        "get_user_research_api_key",
+        lambda user_id, provider: None,
+    )
+
+    with patch("synsc.services.research_providers.gemini.GeminiResearchProvider") as provider_cls:
+        service = rs_mod.ResearchService(user_id="user-without-key")
+        resolved_provider = service.provider
+
+    assert resolved_provider is provider_cls.return_value
+    provider_cls.assert_called_once_with(api_key="server-key")
+
+
+def test_research_service_raises_structured_error_without_any_credential(monkeypatch):
+    from synsc.config import get_config
+    from synsc.services import research_service as rs_mod
+
+    monkeypatch.setattr(get_config().research, "api_key", "")
+    monkeypatch.setattr(
+        rs_mod,
+        "get_user_research_api_key",
+        lambda user_id, provider: None,
+    )
+
+    service = rs_mod.ResearchService(user_id="user-without-key")
+    with pytest.raises(rs_mod.ResearchProviderNotConfiguredError) as exc_info:
+        _ = service.provider
+
+    assert exc_info.value.provider == "gemini"
+
+
+def test_research_credential_lookup_failure_does_not_use_server_key(monkeypatch):
+    from synsc.services import research_service as rs_mod
+    from synsc.services.research_credentials import ResearchCredentialLookupError
+
+    def unavailable(user_id, provider):
+        raise ResearchCredentialLookupError(provider)
+
+    monkeypatch.setattr(rs_mod, "get_user_research_api_key", unavailable)
+
+    with (
+        patch(
+            "synsc.services.research_providers.gemini.GeminiResearchProvider"
+        ) as provider_cls,
+        pytest.raises(ResearchCredentialLookupError),
+    ):
+        _ = rs_mod.ResearchService(user_id="user-a").provider
+
+    provider_cls.assert_not_called()
 
 
 def test_render_prompt_includes_question_and_blocks():
@@ -250,9 +350,15 @@ def test_post_v1_research_503_when_provider_unconfigured(client, monkeypatch):
     on it and tell the user to configure their key (rather than parsing
     English error strings)."""
     from synsc.config import get_config
+    from synsc.services import research_service as rs_mod
 
     monkeypatch.setattr(get_config().research, "provider", "gemini")
     monkeypatch.setattr(get_config().research, "api_key", "")
+    monkeypatch.setattr(
+        rs_mod,
+        "get_user_research_api_key",
+        lambda user_id, provider: None,
+    )
 
     r = client.post("/v1/research", json={"query": "x", "mode": "quick"})
     assert r.status_code == 503
@@ -262,6 +368,69 @@ def test_post_v1_research_503_when_provider_unconfigured(client, monkeypatch):
     assert body["provider"] == "gemini"
     assert body["action_required"] == "configure_api_key"
     assert "GEMINI_API_KEY" in body["message"]
+
+
+def test_post_v1_research_uses_per_user_credential(client, monkeypatch):
+    """A stored user key enables research even without a server-wide key."""
+    from synsc.config import get_config
+    from synsc.services import research_service as rs_mod
+
+    monkeypatch.setattr(get_config().research, "api_key", "")
+    monkeypatch.setattr(
+        rs_mod,
+        "get_user_research_api_key",
+        lambda user_id, provider: "user-key",
+    )
+
+    fake_provider = MagicMock()
+    monkeypatch.setattr(
+        rs_mod.ResearchService,
+        "provider",
+        property(lambda self: fake_provider),
+    )
+    monkeypatch.setattr(
+        rs_mod.ResearchService,
+        "run",
+        lambda self, **kwargs: {
+            "answer_markdown": "# User answer",
+            "citations": [],
+            "usage": {
+                "tokens_in": 1,
+                "tokens_out": 1,
+                "mode": kwargs["mode"],
+                "latency_ms": 1,
+            },
+        },
+    )
+
+    response = client.post(
+        "/v1/research",
+        json={"query": "isolated?", "mode": "quick"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answer_markdown"] == "# User answer"
+
+
+def test_post_v1_research_503_when_user_credential_lookup_is_unavailable(
+    client,
+    monkeypatch,
+):
+    from synsc.services import research_service as rs_mod
+    from synsc.services.research_credentials import ResearchCredentialLookupError
+
+    def unavailable(self, **kwargs):
+        raise ResearchCredentialLookupError("gemini")
+
+    monkeypatch.setattr(rs_mod.ResearchService, "run", unavailable)
+
+    response = client.post(
+        "/v1/research",
+        json={"query": "isolated?", "mode": "quick"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "credential_lookup_unavailable"
 
 
 def test_research_per_mode_rate_check_blocks_after_quota():

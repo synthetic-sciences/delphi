@@ -1674,10 +1674,16 @@ Provides deep context to AI agents through:
         On error, the response shape is always
         ``{"success": False, "error_code": <stable-string>, "message": <human-readable>}``
         with one of the codes: ``invalid_mode``, ``provider_not_configured``,
-        ``internal_error``.
+        ``credential_lookup_unavailable``, ``internal_error``.
         """
         from synsc.config import get_config
-        from synsc.services.research_service import ResearchService
+        from synsc.services.research_credentials import (
+            ResearchCredentialLookupError,
+        )
+        from synsc.services.research_service import (
+            ResearchProviderNotConfiguredError,
+            ResearchService,
+        )
 
         if mode not in ("quick", "deep", "oracle"):
             return {
@@ -1689,24 +1695,11 @@ Provides deep context to AI agents through:
             }
 
         config = get_config()
-        if config.research.provider == "gemini" and not config.research.api_key:
-            return {
-                "success": False,
-                "error_code": "provider_not_configured",
-                "provider": config.research.provider,
-                "action_required": "configure_api_key",
-                "message": (
-                    f"Research provider '{config.research.provider}' is not "
-                    "configured on this Delphi instance. Ask the user to set "
-                    "GEMINI_API_KEY in the server environment to enable this "
-                    "tool — do not retry until they confirm it's configured."
-                ),
-            }
-
-        start = time.time()
         user_id = get_authenticated_user_id()
+        service = ResearchService(user_id=user_id)
+        start = time.time()
         try:
-            result = ResearchService().run(
+            result = service.run(
                 query=query,
                 mode=mode,  # type: ignore[arg-type]
                 source_ids=source_ids,
@@ -1714,6 +1707,31 @@ Provides deep context to AI agents through:
                 k=k,
                 user_id=user_id,
             )
+        except ResearchProviderNotConfiguredError:
+            return {
+                "success": False,
+                "error_code": "provider_not_configured",
+                "provider": config.research.provider,
+                "action_required": "configure_api_key",
+                "message": (
+                    f"Research provider '{config.research.provider}' is not "
+                    "configured for this user or Delphi instance. Ask the user "
+                    "to store a key with PUT /v1/keys/research, or set "
+                    "GEMINI_API_KEY on the server. Do not retry until one is "
+                    "configured."
+                ),
+            }
+        except ResearchCredentialLookupError:
+            return {
+                "success": False,
+                "error_code": "credential_lookup_unavailable",
+                "provider": config.research.provider,
+                "retryable": True,
+                "message": (
+                    "The user-scoped research credential could not be checked. "
+                    "The server credential was not used."
+                ),
+            }
         except Exception as e:
             return {
                 "success": False,
