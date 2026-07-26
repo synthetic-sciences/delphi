@@ -2,6 +2,7 @@
 
 import PageShell from "@/components/PageShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import Modal from "@/components/Modal";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -176,7 +177,7 @@ export default function PapersPage() {
           <h1 className="text-2xl font-medium lowercase mb-1">papers</h1>
           <p className="text-sm text-[#8a7a72] lowercase">research papers indexed via api & mcp</p>
         </div>
-        <button
+        <button type="button"
           onClick={() => { resetModal(); setShowAddModal(true); }}
           className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
         >
@@ -204,7 +205,7 @@ export default function PapersPage() {
           {/* Filter buttons */}
           <div className="flex items-center gap-1 p-1 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf]">
             {(['all', 'arxiv', 'pdf'] as const).map((f) => (
-              <button
+              <button type="button"
                 key={f}
                 onClick={() => setFilter(f)}
                 className={`px-3 py-1.5 rounded text-xs lowercase transition-colors ${
@@ -232,7 +233,7 @@ export default function PapersPage() {
             <p className="text-xs text-[#a09488] lowercase mb-4">
               add research papers from arxiv or upload pdfs to start using context.
             </p>
-            <button
+            <button type="button"
               onClick={() => { resetModal(); setShowAddModal(true); }}
               className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
             >
@@ -296,15 +297,17 @@ export default function PapersPage() {
                       href={`https://arxiv.org/abs/${paper.arxiv_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
+                      aria-label={`View ${paper.title} on arXiv`}
                       className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#2e2522] transition-colors"
                       title="View on arXiv"
                     >
                       <ExternalLink size={14} />
                     </a>
                   )}
-                  <button
+                  <button type="button"
                     onClick={() => setConfirmDelete(paper.paper_id)}
                     disabled={actionLoading === paper.paper_id}
+                    aria-label={`Remove ${paper.title}`}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Remove paper"
                   >
@@ -319,7 +322,7 @@ export default function PapersPage() {
 
       {/* Minimized Indexing Indicator — floating pill at bottom-right */}
       {isMinimized && isIndexing && (
-        <button
+        <button type="button"
           onClick={() => { setIsMinimized(false); setShowAddModal(true); }}
           className="fixed bottom-6 right-6 z-50 flex items-center gap-3 pl-4 pr-3 py-3 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl shadow-black/10 hover:border-[#c5b5a5] transition-all group cursor-pointer max-w-xs"
         >
@@ -343,27 +346,29 @@ export default function PapersPage() {
 
       {/* Add Paper Modal — rendered via portal so backdrop-blur works */}
       {showAddModal && !isMinimized && createPortal(
-        <div className="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center">
-          <div
-            className="modal-backdrop absolute inset-0 bg-[#2e2522]/55 backdrop-blur-sm"
-            onClick={() => {
-              if (isIndexing) {
-                setIsMinimized(true);
-                setShowAddModal(false);
-              } else {
-                setShowAddModal(false);
-                resetModal();
-              }
-            }}
-          />
-          <div className="modal-panel relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+        <Modal
+          labelledBy="add-paper-title"
+          containerClassName="fixed top-11 left-52 right-0 bottom-0 z-[60] flex items-center justify-center"
+          backdropClassName="backdrop-blur-sm"
+          panelClassName="w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl"
+          onClose={() => {
+            if (isIndexing) {
+              setIsMinimized(true);
+              setShowAddModal(false);
+            } else {
+              setShowAddModal(false);
+              resetModal();
+            }
+          }}
+        >
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-medium lowercase">add paper</h2>
+              <h2 id="add-paper-title" className="text-lg font-medium lowercase">add paper</h2>
               <div className="flex items-center gap-1">
                 {/* Minimize button — visible during indexing */}
                 {isIndexing && (
-                  <button
+                  <button type="button"
                     onClick={() => { setIsMinimized(true); setShowAddModal(false); }}
+                    aria-label="Minimize paper indexing"
                     className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#b58a73] transition-colors"
                     title="Minimize — indexing continues in the background"
                   >
@@ -372,8 +377,9 @@ export default function PapersPage() {
                 )}
                 {/* Close button — visible when not indexing */}
                 {!isIndexing && (
-                  <button
+                  <button type="button"
                     onClick={() => { setShowAddModal(false); resetModal(); }}
+                    aria-label="Close add paper dialog"
                     className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
                   >
                     <X size={15} />
@@ -387,7 +393,7 @@ export default function PapersPage() {
               <>
                 {/* Source Type Tabs */}
                 <div className="flex gap-2 mb-6">
-                  <button
+                  <button type="button"
                     onClick={() => setSourceType('arxiv')}
                     className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium transition-colors ${
                       sourceType === 'arxiv'
@@ -398,7 +404,7 @@ export default function PapersPage() {
                     <LinkIcon size={16} />
                     arXiv paper
                   </button>
-                  <button
+                  <button type="button"
                     onClick={() => setSourceType('pdf')}
                     className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border text-sm font-medium transition-colors ${
                       sourceType === 'pdf'
@@ -413,27 +419,28 @@ export default function PapersPage() {
 
                 {sourceType === 'arxiv' ? (
                   <div className="mb-6">
-                    <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">arxiv url or id</label>
+                    <label htmlFor="arxiv-paper-url" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">arxiv url or id</label>
                     <input
+                      id="arxiv-paper-url"
                       type="text"
                       value={arxivUrl}
                       onChange={(e) => setArxivUrl(e.target.value)}
                       placeholder="e.g., 2301.07041 or https://arxiv.org/abs/2301.07041"
                       className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
-                      autoFocus
                     />
                     <p className="text-[10px] text-[#a09488] mt-2">paste an arxiv url or paper id</p>
                   </div>
                 ) : (
                   <div className="mb-6">
                     <input
+                      id="paper-pdf-file"
                       ref={fileInputRef}
                       type="file"
                       accept=".pdf"
                       onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
                       className="hidden"
                     />
-                    <div
+                    <button type="button"
                       onClick={() => fileInputRef.current?.click()}
                       onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
                       onDrop={(e) => {
@@ -444,7 +451,7 @@ export default function PapersPage() {
                           setSelectedFile(file);
                         }
                       }}
-                      className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
+                      className={`w-full border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer ${
                         selectedFile
                           ? 'border-[#b58a73]/50 bg-[#b58a73]/5'
                           : 'border-[#dfcdbf] hover:border-[#c5b5a5]'
@@ -463,7 +470,7 @@ export default function PapersPage() {
                           <p className="text-xs text-[#a09488]">or click to browse</p>
                         </>
                       )}
-                    </div>
+                    </button>
                     <p className="text-[10px] text-[#a09488] mt-2">max file size: 50mb</p>
                   </div>
                 )}
@@ -515,13 +522,13 @@ export default function PapersPage() {
             {/* Footer buttons */}
             {!isIndexing && !indexSuccess && (
               <div className="flex justify-end gap-3">
-                <button
+                <button type="button"
                   onClick={() => { setShowAddModal(false); resetModal(); }}
                   className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
                 >
                   cancel
                 </button>
-                <button
+                <button type="button"
                   onClick={indexPaper}
                   disabled={(sourceType === 'arxiv' ? !arxivUrl.trim() : !selectedFile)}
                   className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -530,8 +537,7 @@ export default function PapersPage() {
                 </button>
               </div>
             )}
-          </div>
-        </div>,
+        </Modal>,
         document.body
       )}
 

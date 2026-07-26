@@ -139,6 +139,10 @@ a:focus:not(:focus-visible) {
   will-change: opacity;
 }
 
+button.modal-backdrop:active {
+  transform: none;
+}
+
 .fixed.inset-0 > .relative,
 .modal-panel {
   animation: scaleIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;

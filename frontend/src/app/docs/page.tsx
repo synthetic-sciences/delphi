@@ -18,8 +18,9 @@ function CodeBlock({ code, lang = "bash" }: { code: string; lang?: string }) {
     <div className="relative group rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#dfcdbf]">
         <span className="text-[10px] text-[#a09488] uppercase tracking-wider">{lang}</span>
-        <button
+        <button type="button"
           onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+          aria-label={copied ? "Code copied" : "Copy code"}
           className="p-1 rounded hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#695954] transition-colors"
         >
           {copied ? <Check size={12} className="text-[#d06e28]" /> : <Copy size={12} />}
@@ -56,7 +57,7 @@ function Endpoint({
 
   return (
     <div className="rounded-lg border border-[#dfcdbf] overflow-hidden">
-      <button
+      <button type="button"
         onClick={() => setOpen(!open)}
         className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#efe7dd] transition-colors text-left"
       >
@@ -167,7 +168,7 @@ export default function DocsPage() {
           <ul className="space-y-0.5">
             {sections.map((s) => (
               <li key={s.id}>
-                <button
+                <button type="button"
                   onClick={() => scrollTo(s.id)}
                   className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs transition-colors text-left ${
                     activeSection === s.id

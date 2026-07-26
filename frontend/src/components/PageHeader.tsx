@@ -24,7 +24,7 @@ export default function PageHeader({ title, description, action, children }: Pag
       <div className="flex items-center gap-3">
         {children}
         {action && (
-          <button
+          <button type="button"
             onClick={action.onClick}
             className="h-9 px-4 rounded-lg bg-[#2e2522] text-[#f7f0e8] text-sm font-medium hover:bg-[#3a3230] transition-colors flex items-center gap-2"
           >

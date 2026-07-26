@@ -38,7 +38,7 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
             <div className="flex items-center gap-2 w-48">
               {isDocsPage && (
                 <Link href="/overview" className="flex items-center gap-2">
-                  <svg width="20" height="20" viewBox="0 0 100 100" fill="none">
+                  <svg aria-hidden="true" width="20" height="20" viewBox="0 0 100 100" fill="none">
                     <circle cx="50" cy="50" r="8" fill="#b58a73"/>
                     <ellipse cx="50" cy="50" rx="35" ry="12" stroke="#b58a73" strokeWidth="2.5" fill="none"/>
                     <ellipse cx="50" cy="50" rx="35" ry="12" stroke="#b58a73" strokeWidth="2.5" fill="none" transform="rotate(60 50 50)"/>
@@ -51,7 +51,7 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
 
             {/* Center — command button */}
             <div className="flex-1 flex justify-center">
-              <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#dfcdbf] text-xs text-[#a09488] hover:text-[#b85618] hover:border-[#e08840]/60 transition-all duration-150">
+              <button type="button" className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#dfcdbf] text-xs text-[#a09488] hover:text-[#b85618] hover:border-[#e08840]/60 transition-all duration-150">
                 <Command size={12} />
                 <span>command</span>
               </button>
@@ -59,7 +59,7 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
 
             {/* Right — search, user menu */}
             <div className="flex items-center gap-2 w-auto">
-              <button className="flex items-center gap-2 px-3 py-1.5 bg-[#f7f0e8] border border-[#dfcdbf] rounded-md text-[11px] text-[#8a7a72] hover:text-[#b85618] hover:border-[#e08840]/60 transition-all duration-150">
+              <button type="button" className="flex items-center gap-2 px-3 py-1.5 bg-[#f7f0e8] border border-[#dfcdbf] rounded-md text-[11px] text-[#8a7a72] hover:text-[#b85618] hover:border-[#e08840]/60 transition-all duration-150">
                 <Search size={11} className="opacity-60" />
                 search...
                 <kbd className="ml-1 text-[9px] text-[#a09488] px-1 py-0.5 bg-[#efe7dd] rounded border border-[#dfcdbf]">⌘K</kbd>
@@ -67,7 +67,7 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
 
               {/* User Menu */}
               <div className="relative" ref={menuRef}>
-                <button
+                <button type="button"
                   onClick={() => setShowUserMenu(!showUserMenu)}
                   className="px-2.5 py-1 bg-[#f7f0e8] border border-[#dfcdbf] rounded-md text-[10px] text-[#695954] hover:text-[#b85618] hover:border-[#e08840]/60 transition-all duration-150 lowercase"
                 >

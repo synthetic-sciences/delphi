@@ -1,6 +1,7 @@
 "use client";
 
 import PageShell from "@/components/PageShell";
+import Modal from "@/components/Modal";
 import { useCallback, useEffect, useState } from "react";
 import {
   Key, Copy, Trash2, Plus, X, AlertTriangle,
@@ -36,8 +37,9 @@ function ConfigBlock({ code, lang = "json" }: { code: string; lang?: string }) {
     <div className="relative group rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#dfcdbf]">
         <span className="text-[10px] text-[#a09488] uppercase tracking-wider">{lang}</span>
-        <button
+        <button type="button"
           onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+          aria-label={copied ? "Configuration copied" : "Copy configuration"}
           className="p-1 rounded hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#695954] transition-colors"
         >
           {copied ? <Check size={12} className="text-[#b85618]" /> : <Copy size={12} />}
@@ -130,7 +132,7 @@ function UsageConfigSection() {
       {/* Agent tabs */}
       <div className="flex items-center gap-1 p-1 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] w-fit mb-4 flex-wrap">
         {(["claude-code", "cursor", "windsurf", "claude-desktop"] as const).map((a) => (
-          <button
+          <button type="button"
             key={a}
             onClick={() => setAgent(a)}
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
@@ -399,7 +401,7 @@ export default function ApiKeysPage() {
 
   async function createKey() {
     if (!newKeyName.trim()) return;
-    
+
     setActionLoading('create');
     try {
       const res = await fetch(`${API_URL}/v1/keys`, {
@@ -407,7 +409,7 @@ export default function ApiKeysPage() {
         headers: await getAuthHeaders(),
         body: JSON.stringify({ name: newKeyName.trim() }),
       });
-      
+
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.key) {
@@ -429,14 +431,14 @@ export default function ApiKeysPage() {
     if (!confirm('Are you sure you want to revoke this key? It will no longer work for authentication.')) {
       return;
     }
-    
+
     setActionLoading(keyId);
     try {
       const res = await fetch(`${API_URL}/v1/keys/${keyId}/revoke`, {
         method: 'POST',
         headers: await getAuthHeaders(),
       });
-      
+
       if (res.ok) {
         fetchKeys();
       }
@@ -451,14 +453,14 @@ export default function ApiKeysPage() {
     if (!confirm('Permanently delete this key? This action cannot be undone.')) {
       return;
     }
-    
+
     setActionLoading(keyId);
     try {
       const res = await fetch(`${API_URL}/v1/keys/${keyId}`, {
         method: 'DELETE',
         headers: await getAuthHeaders(),
       });
-      
+
       if (res.ok) {
         fetchKeys();
       }
@@ -487,14 +489,14 @@ export default function ApiKeysPage() {
           <p className="text-sm text-[#8a7a72] lowercase">manage programmatic access and github integration</p>
         </div>
         <div className="flex items-center gap-3">
-          <Link 
-            href="/docs" 
+          <Link
+            href="/docs"
             className="flex items-center gap-2 px-3 py-2 text-xs text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
           >
             <ExternalLink size={12} />
             docs
           </Link>
-          <button 
+          <button type="button"
             onClick={() => setShowCreateModal(true)}
             className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
           >
@@ -516,7 +518,7 @@ export default function ApiKeysPage() {
             <Key size={32} className="text-[#222] mx-auto mb-3" />
             <h3 className="text-sm text-[#8a7a72] lowercase mb-1">no api keys yet</h3>
             <p className="text-xs text-[#a09488] lowercase mb-4">create an api key to authenticate your mcp requests.</p>
-            <button 
+            <button type="button"
               onClick={() => setShowCreateModal(true)}
               className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
             >
@@ -527,14 +529,14 @@ export default function ApiKeysPage() {
           <div className="divide-y divide-[#dfcdbf]">
             {/* Active Keys */}
             {activeKeys.map((key) => (
-              <div 
-                key={key.id} 
+              <div
+                key={key.id}
                 className="flex items-center gap-4 px-4 py-4 hover:bg-[#efe7dd] transition-colors"
               >
                 <div className="w-10 h-10 rounded-lg bg-[#b58a73]/10 flex items-center justify-center">
                   <Key size={18} className="text-[#b58a73]" />
                 </div>
-                
+
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm font-medium text-[#2e2522]">{key.name}</span>
@@ -550,19 +552,21 @@ export default function ApiKeysPage() {
                     <span>last used: {formatDate(key.last_used_at)}</span>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center gap-1">
-                  <button 
+                  <button type="button"
                     onClick={() => revokeKey(key.id)}
                     disabled={actionLoading === key.id}
+                    aria-label={`Revoke ${key.name}`}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-[#a06060] transition-colors disabled:opacity-50"
                     title="Revoke key"
                   >
                     <Ban size={14} />
                   </button>
-                  <button 
+                  <button type="button"
                     onClick={() => deleteKey(key.id)}
                     disabled={actionLoading === key.id}
+                    aria-label={`Delete ${key.name}`}
                     className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                     title="Delete key"
                   >
@@ -574,14 +578,14 @@ export default function ApiKeysPage() {
 
             {/* Revoked Keys */}
             {revokedKeys.map((key) => (
-              <div 
-                key={key.id} 
+              <div
+                key={key.id}
                 className="flex items-center gap-4 px-4 py-4 opacity-50"
               >
                 <div className="w-10 h-10 rounded-lg bg-[#dfcdbf]/50 flex items-center justify-center">
                   <Key size={18} className="text-[#a09488]" />
                 </div>
-                
+
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-sm font-medium text-[#8a7a72]">{key.name}</span>
@@ -595,10 +599,11 @@ export default function ApiKeysPage() {
                     <span>created {formatTimeAgo(key.created_at)}</span>
                   </div>
                 </div>
-                
-                <button 
+
+                <button type="button"
                   onClick={() => deleteKey(key.id)}
                   disabled={actionLoading === key.id}
+                  aria-label={`Permanently delete ${key.name}`}
                   className="p-2 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors disabled:opacity-50"
                   title="Delete key permanently"
                 >
@@ -657,8 +662,9 @@ export default function ApiKeysPage() {
                   <Check size={14} />
                   connected
                 </span>
-                <button
+                <button type="button"
                   onClick={deleteToken}
+                  aria-label="Disconnect GitHub"
                   className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors"
                   title="Disconnect"
                 >
@@ -666,7 +672,7 @@ export default function ApiKeysPage() {
                 </button>
               </div>
             ) : (
-              <button
+              <button type="button"
                 onClick={() => setShowTokenModal(true)}
                 className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-[#dfcdbf] text-[#695954] hover:text-[#2e2522] hover:border-[#c5b5a5] transition-colors lowercase"
               >
@@ -696,8 +702,9 @@ export default function ApiKeysPage() {
                   <Check size={14} />
                   connected
                 </span>
-                <button
+                <button type="button"
                   onClick={deleteHfToken}
+                  aria-label="Disconnect Hugging Face"
                   className="p-1.5 rounded-lg hover:bg-[#dfcdbf] text-[#a09488] hover:text-red-500 transition-colors"
                   title="Disconnect"
                 >
@@ -705,7 +712,7 @@ export default function ApiKeysPage() {
                 </button>
               </div>
             ) : (
-              <button
+              <button type="button"
                 onClick={() => setShowHfTokenModal(true)}
                 className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-[#dfcdbf] text-[#695954] hover:text-[#2e2522] hover:border-[#c5b5a5] transition-colors lowercase"
               >
@@ -721,43 +728,43 @@ export default function ApiKeysPage() {
 
       {/* Create Key Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div 
-            className="absolute inset-0 bg-[#2e2522]/55"
-            onClick={() => setShowCreateModal(false)}
-          />
-          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+        <Modal
+          labelledBy="create-api-key-title"
+          onClose={() => setShowCreateModal(false)}
+          panelClassName="w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl"
+        >
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-medium lowercase">create api key</h2>
-              <button 
+              <h2 id="create-api-key-title" className="text-lg font-medium lowercase">create api key</h2>
+              <button type="button"
                 onClick={() => setShowCreateModal(false)}
+                aria-label="Close create API key dialog"
                 className="p-1 rounded hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
               >
                 <X size={16} />
               </button>
             </div>
-            
+
             <div className="mb-6">
-              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">key name</label>
+              <label htmlFor="new-api-key-name" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">key name</label>
               <input
+                id="new-api-key-name"
                 type="text"
                 value={newKeyName}
                 onChange={(e) => setNewKeyName(e.target.value)}
                 placeholder="e.g., development, mcp setup"
                 className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors"
-                autoFocus
               />
               <p className="text-[10px] text-[#a09488] mt-2">a name to help you identify this key</p>
             </div>
-            
+
             <div className="flex justify-end gap-3">
-              <button 
+              <button type="button"
                 onClick={() => setShowCreateModal(false)}
                 className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 cancel
               </button>
-              <button 
+              <button type="button"
                 onClick={createKey}
                 disabled={!newKeyName.trim() || actionLoading === 'create'}
                 className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -765,28 +772,27 @@ export default function ApiKeysPage() {
                 {actionLoading === 'create' ? 'creating...' : 'create key'}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Key Reveal Modal */}
       {showRevealModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div 
-            className="absolute inset-0 bg-[#2e2522]/55"
-            onClick={() => setShowRevealModal(false)}
-          />
-          <div className="relative w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+        <Modal
+          labelledBy="api-key-created-title"
+          onClose={() => setShowRevealModal(false)}
+          panelClassName="w-full max-w-lg mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl"
+        >
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-medium lowercase">api key created</h2>
-              <button 
+              <h2 id="api-key-created-title" className="text-lg font-medium lowercase">api key created</h2>
+              <button type="button"
                 onClick={() => setShowRevealModal(false)}
+                aria-label="Close API key created dialog"
                 className="p-1 rounded hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
               >
                 <X size={16} />
               </button>
             </div>
-            
+
             <div className="p-4 rounded-xl bg-[#efe7dd] border border-[#dfcdbf] mb-4">
               <code className="block text-sm font-mono text-[#2e2522] break-all select-all">
                 {revealedKey}
@@ -799,40 +805,39 @@ export default function ApiKeysPage() {
                 make sure to copy your api key now. you won&apos;t be able to see it again!
               </p>
             </div>
-            
+
             <div className="flex justify-end gap-3">
-              <button 
+              <button type="button"
                 onClick={() => copyToClipboard(revealedKey)}
                 className="flex items-center gap-2 px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors"
               >
                 {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? 'copied!' : 'copy key'}
               </button>
-              <button 
+              <button type="button"
                 onClick={() => setShowRevealModal(false)}
                 className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 done
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Add / Update GitHub Token Modal */}
       {showTokenModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-[#2e2522]/55"
-            onClick={() => setShowTokenModal(false)}
-          />
-          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+        <Modal
+          labelledBy="github-token-title"
+          onClose={() => setShowTokenModal(false)}
+          panelClassName="w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl"
+        >
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-medium lowercase">
+              <h2 id="github-token-title" className="text-lg font-medium lowercase">
                 {hasToken ? "update github token" : "connect github"}
               </h2>
-              <button
+              <button type="button"
                 onClick={() => setShowTokenModal(false)}
+                aria-label="Close GitHub token dialog"
                 className="p-1 rounded hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
               >
                 <X size={16} />
@@ -840,16 +845,16 @@ export default function ApiKeysPage() {
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+              <label htmlFor="github-personal-access-token" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                 personal access token
               </label>
               <input
+                id="github-personal-access-token"
                 type="password"
                 value={tokenInput}
                 onChange={(e) => setTokenInput(e.target.value)}
                 placeholder="github_pat_••••••••••••••••••••"
                 className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors font-mono"
-                autoFocus
                 onKeyDown={(e) => e.key === "Enter" && saveToken()}
               />
               <p className="text-[10px] text-[#a09488] mt-2">
@@ -858,10 +863,11 @@ export default function ApiKeysPage() {
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+              <label htmlFor="github-token-label" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                 label <span className="text-[#a09488]">(optional)</span>
               </label>
               <input
+                id="github-token-label"
                 type="text"
                 value={labelInput}
                 onChange={(e) => setLabelInput(e.target.value)}
@@ -909,13 +915,13 @@ export default function ApiKeysPage() {
             )}
 
             <div className="flex justify-end gap-3">
-              <button
+              <button type="button"
                 onClick={() => { setShowTokenModal(false); setTokenError(null); }}
                 className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 cancel
               </button>
-              <button
+              <button type="button"
                 onClick={saveToken}
                 disabled={!tokenInput.trim() || tokenSaving}
                 className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -923,23 +929,22 @@ export default function ApiKeysPage() {
                 {tokenSaving ? "validating..." : "connect"}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
       {/* Add / Update HuggingFace Token Modal */}
       {showHfTokenModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="absolute inset-0 bg-[#2e2522]/55"
-            onClick={() => setShowHfTokenModal(false)}
-          />
-          <div className="relative w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl">
+        <Modal
+          labelledBy="hugging-face-token-title"
+          onClose={() => setShowHfTokenModal(false)}
+          panelClassName="w-full max-w-md mx-4 p-6 rounded-2xl bg-[#faf5ef] border border-[#dfcdbf] shadow-2xl"
+        >
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-medium lowercase">
+              <h2 id="hugging-face-token-title" className="text-lg font-medium lowercase">
                 {hasHfToken ? "update hugging face token" : "connect hugging face"}
               </h2>
-              <button
+              <button type="button"
                 onClick={() => setShowHfTokenModal(false)}
+                aria-label="Close Hugging Face token dialog"
                 className="p-1 rounded hover:bg-[#dfcdbf] text-[#8a7a72] hover:text-[#2e2522] transition-colors"
               >
                 <X size={16} />
@@ -947,16 +952,16 @@ export default function ApiKeysPage() {
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+              <label htmlFor="hugging-face-token" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                 access token
               </label>
               <input
+                id="hugging-face-token"
                 type="password"
                 value={hfTokenInput}
                 onChange={(e) => setHfTokenInput(e.target.value)}
                 placeholder="hf_••••••••••••••••••••"
                 className="w-full h-10 px-3 rounded-lg bg-[#f7f0e8] border border-[#dfcdbf] text-sm text-[#2e2522] placeholder-[#a09488] focus:outline-none focus:border-[#c5b5a5] transition-colors font-mono"
-                autoFocus
                 onKeyDown={(e) => e.key === "Enter" && saveHfToken()}
               />
               <p className="text-[10px] text-[#a09488] mt-2">
@@ -965,10 +970,11 @@ export default function ApiKeysPage() {
             </div>
 
             <div className="mb-4">
-              <label className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
+              <label htmlFor="hugging-face-token-label" className="block text-xs text-[#8a7a72] uppercase tracking-wider mb-2">
                 label <span className="text-[#a09488]">(optional)</span>
               </label>
               <input
+                id="hugging-face-token-label"
                 type="text"
                 value={hfLabelInput}
                 onChange={(e) => setHfLabelInput(e.target.value)}
@@ -1015,13 +1021,13 @@ export default function ApiKeysPage() {
             )}
 
             <div className="flex justify-end gap-3">
-              <button
+              <button type="button"
                 onClick={() => { setShowHfTokenModal(false); setHfTokenError(null); }}
                 className="px-4 py-2 text-sm text-[#8a7a72] hover:text-[#2e2522] rounded-lg border border-[#dfcdbf] hover:border-[#c5b5a5] transition-colors lowercase"
               >
                 cancel
               </button>
-              <button
+              <button type="button"
                 onClick={saveHfToken}
                 disabled={!hfTokenInput.trim() || hfTokenSaving}
                 className="px-4 py-2 bg-[#b58a73] text-black text-sm font-medium rounded-lg lowercase hover:bg-[#ff8c3a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1029,8 +1035,7 @@ export default function ApiKeysPage() {
                 {hfTokenSaving ? "validating..." : "connect"}
               </button>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </PageShell>
   );
