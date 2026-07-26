@@ -88,7 +88,7 @@ def get_arxiv_metadata(arxiv_id: str) -> dict[str, Any]:
     try:
         # Use arxiv library to fetch metadata
         search = arxiv.Search(id_list=[arxiv_id], max_results=1)
-        result = next(search.results(), None)
+        result = next(arxiv.Client().results(search), None)
 
         if result is None:
             raise ArxivNotFoundError(f"ArXiv paper not found: {arxiv_id}")
