@@ -5,8 +5,8 @@ from synsc.services.budget import (
     budget_results,
     chars_to_tokens,
     filter_results_by_topic,
-    topic_matches,
     tokens_to_chars,
+    topic_matches,
     truncate_to_tokens,
 )
 

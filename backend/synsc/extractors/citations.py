@@ -73,11 +73,8 @@ class CitationExtractor(BaseExtractor):
                 citation_text = match.group(0)
                 citation_num = match.group(1).strip()
 
-                # Skip if likely a table cell, list index, or footnote marker
-                # by checking if it's at the start of a line (reference list entry)
+                # Track the citation's position so repeated regex matches are ignored.
                 pos = match.start()
-                line_start = text.rfind('\n', 0, pos) + 1
-                prefix = text[line_start:pos].strip()
 
                 # Deduplicate by position
                 if pos in seen:

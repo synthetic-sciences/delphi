@@ -8,8 +8,6 @@ from typing import Any
 import arxiv
 import httpx
 
-from synsc.config import get_config
-
 
 class ArxivError(Exception):
     """Base exception for ArXiv-related errors."""
@@ -112,8 +110,8 @@ def get_arxiv_metadata(arxiv_id: str) -> dict[str, Any]:
 
         return metadata
 
-    except StopIteration:
-        raise ArxivNotFoundError(f"ArXiv paper not found: {arxiv_id}")
+    except StopIteration as exc:
+        raise ArxivNotFoundError(f"ArXiv paper not found: {arxiv_id}") from exc
     except Exception as e:
         if isinstance(e, (ArxivNotFoundError, ArxivError)):
             raise
@@ -162,7 +160,9 @@ def download_arxiv_pdf(
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise ArxivDownloadError(f"PDF not found for ArXiv ID: {arxiv_id}")
+                raise ArxivDownloadError(
+                    f"PDF not found for ArXiv ID: {arxiv_id}"
+                ) from e
             last_error = e
         except Exception as e:
             last_error = e

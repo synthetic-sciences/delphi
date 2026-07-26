@@ -11,19 +11,16 @@ Provides comprehensive analysis of indexed repositories:
 
 import json
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
-from typing import Any
 
 import structlog
-from sqlalchemy import func
 
 from synsc.config import get_config
 from synsc.database.connection import get_session
 from synsc.database.models import (
     Repository,
     RepositoryFile,
-    CodeChunk,
 )
 
 logger = structlog.get_logger(__name__)
@@ -884,9 +881,9 @@ class AnalysisService:
             "top_level_directories": top_level_dirs,
             "root_files": root_files,
             "root_files_count": len(root_files),
-            "total_directories": len(set(
+            "total_directories": len({
                 str(Path(p).parent) for p in file_paths if len(Path(p).parts) > 1
-            )),
+            }),
             "max_depth": max(depths) if depths else 0,
             "avg_depth": sum(depths) / len(depths) if depths else 0,
         }
@@ -1509,7 +1506,6 @@ class AnalysisService:
         # Simple YAML parsing for dependencies section
         in_deps = False
         in_dev_deps = False
-        indent_level = 0
         
         for line in content.split("\n"):
             stripped = line.strip()

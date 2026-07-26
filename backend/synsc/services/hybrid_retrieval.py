@@ -120,10 +120,10 @@ _STOPWORDS: frozenset[str] = frozenset({
     "method", "where", "which", "when", "why", "into", "via",
     # Additional everyday English words that show up in question form
     # but never as code we want to find by name.
-    "work", "works", "working", "does", "doing", "make", "made",
+    "work", "works", "working", "doing", "make", "made",
     "want", "need", "needs", "should", "would", "could", "have", "has",
     "had", "been", "are", "was", "were", "will", "can", "may",
-    "explain", "tell", "give", "show", "want", "want's",
+    "explain", "tell", "give", "want's",
 })
 
 

@@ -8,6 +8,7 @@ Skipped automatically when DATABASE_URL doesn't point at Postgres.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 
@@ -72,10 +73,8 @@ def fake_embeddings(monkeypatch):
         "synsc.services.search_service.get_embedding_generator",
         "synsc.services.atlas_connector.get_embedding_generator",
     ):
-        try:
+        with contextlib.suppress(AttributeError):
             monkeypatch.setattr(target, lambda inst=instance: inst)
-        except AttributeError:
-            pass  # Name not imported at that path — fine.
     return instance
 
 
@@ -86,21 +85,22 @@ def seeded_repo(user_id, fake_embeddings):
     Returns (repo_id, file_id, chunk_ids dict by symbol name).
     """
     from sqlalchemy import text
+
     from synsc.database.connection import get_session
 
     repo_id = str(uuid.uuid4())
     file_id = str(uuid.uuid4())
     chunks = {
         "handleAuthCallback": (
-            f"async def handleAuthCallback(req):\n    return await verify(req)",
+            "async def handleAuthCallback(req):\n    return await verify(req)",
             1, 2, "function",
         ),
         "verifyToken": (
-            f"def verifyToken(t):\n    return jwt.decode(t)",
+            "def verifyToken(t):\n    return jwt.decode(t)",
             10, 11, "function",
         ),
         "render_homepage": (
-            f"def render_homepage():\n    return 'hello'",
+            "def render_homepage():\n    return 'hello'",
             20, 21, "function",
         ),
     }
@@ -271,6 +271,7 @@ def test_chunk_used_stamps_on_get_context(user_id, seeded_repo, fake_embeddings)
     returned-vs-used.
     """
     from sqlalchemy import text
+
     from synsc.database.connection import get_session
     from synsc.services.context_pack import get_chunk_context
 
@@ -308,6 +309,7 @@ def test_get_symbol_returns_source_body(user_id, seeded_repo, fake_embeddings):
 def test_failure_classifier_writes_to_activity_log(user_id):
     """classify_failure inserts a row into activity_log with the chosen code."""
     from sqlalchemy import text
+
     from synsc.database.connection import get_session
     from synsc.services.observability import classify_failure
 

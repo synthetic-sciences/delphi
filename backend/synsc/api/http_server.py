@@ -6,14 +6,37 @@ Multi-user server with GitHub OAuth, JWT sessions, and DB-backed API keys.
 import asyncio
 import hashlib
 import hmac
-import os
 import json
+import os
 import time
 import uuid as _uuid
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import date, datetime
 from typing import Annotated, Literal
 from uuid import UUID
+
+import requests
+import structlog
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager as _SHSM
+from pydantic import BaseModel, Field, SecretStr
+from sqlalchemy import text
+from starlette.responses import Response
+
+from synsc import __version__
+from synsc.api.mcp_server import (
+    create_server as create_mcp_server,
+)
+from synsc.api.mcp_server import (
+    set_current_api_key,
+    set_current_user_id,
+)
+from synsc.auth.sessions import create_session_token, verify_session_token
+from synsc.config import get_config
+from synsc.database.connection import get_session, init_db
 
 
 class _SafeEncoder(json.JSONEncoder):
@@ -30,12 +53,8 @@ class _SafeEncoder(json.JSONEncoder):
 
 def SafeJSONResponse(content, **kwargs):
     """JSONResponse that auto-serializes UUIDs and datetimes."""
-    from starlette.responses import Response
     body = json.dumps(content, cls=_SafeEncoder).encode("utf-8")
     return Response(content=body, media_type="application/json", **kwargs)
-
-import requests
-import structlog
 
 
 def _log_activity(
@@ -50,8 +69,9 @@ def _log_activity(
 ) -> None:
     """Log a user activity to the activity_log table (best-effort)."""
     try:
-        from synsc.database.connection import get_session
         from sqlalchemy import text as sa_text
+
+        from synsc.database.connection import get_session
         with get_session() as session:
             session.execute(
                 sa_text(
@@ -73,21 +93,6 @@ def _log_activity(
             session.commit()
     except Exception as e:
         structlog.get_logger().warning("Failed to log activity", error=str(e))
-from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
-from pydantic import BaseModel, Field, SecretStr
-from sqlalchemy import text
-
-from synsc import __version__
-from synsc.config import get_config
-from synsc.database.connection import init_db, get_session
-from synsc.api.mcp_server import (
-    create_server as create_mcp_server,
-    set_current_api_key,
-    set_current_user_id,
-)
-from synsc.auth.sessions import create_session_token, verify_session_token
 
 logger = structlog.get_logger(__name__)
 
@@ -639,8 +644,6 @@ def create_app() -> FastAPI:
 
     config = get_config()
 
-    from contextlib import asynccontextmanager
-
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Init DB connection for this worker.
@@ -664,29 +667,35 @@ def create_app() -> FastAPI:
 
         warmup_task = asyncio.create_task(_warm_embeddings())
 
-        # Start MCP Streamable HTTP session manager (if attached to app)
-        if hasattr(app, "_mcp_session_mgr") and app._mcp_session_mgr:
-            import anyio
-            mgr = app._mcp_session_mgr
-            mgr._has_started = True
-            tg = anyio.create_task_group()
-            await tg.__aenter__()
-            mgr._task_group = tg
-            logger.info("MCP session manager task group initialized")
-            try:
-                yield
-            finally:
-                tg.cancel_scope.cancel()
-                mgr._task_group = None
+        try:
+            # Start MCP Streamable HTTP session manager (if attached to app)
+            if hasattr(app, "_mcp_session_mgr") and app._mcp_session_mgr:
+                import anyio
+                mgr = app._mcp_session_mgr
+                mgr._has_started = True
+                tg = anyio.create_task_group()
+                await tg.__aenter__()
+                mgr._task_group = tg
+                logger.info("MCP session manager task group initialized")
                 try:
-                    with anyio.fail_after(3):
-                        await tg.__aexit__(None, None, None)
-                except TimeoutError:
-                    logger.warning("MCP task group shutdown timed out")
-                except BaseException:
-                    pass
-        else:
-            yield
+                    yield
+                finally:
+                    tg.cancel_scope.cancel()
+                    mgr._task_group = None
+                    try:
+                        with anyio.fail_after(3):
+                            await tg.__aexit__(None, None, None)
+                    except TimeoutError:
+                        logger.warning("MCP task group shutdown timed out")
+                    except BaseException:
+                        pass
+            else:
+                yield
+        finally:
+            if not warmup_task.done():
+                warmup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await warmup_task
 
     app = FastAPI(
         title="Synsc Context API",
@@ -709,8 +718,15 @@ def create_app() -> FastAPI:
     app.add_middleware(SecurityHeadersMiddleware)
 
     # Rate limiting
-    from synsc.api.rate_limit import limiter, _rate_limit_exceeded_handler, AUTH_LIMIT, INDEX_LIMIT, SEARCH_LIMIT
     from slowapi.errors import RateLimitExceeded
+
+    from synsc.api.rate_limit import (
+        AUTH_LIMIT,
+        INDEX_LIMIT,
+        SEARCH_LIMIT,
+        _rate_limit_exceeded_handler,
+        limiter,
+    )
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -928,7 +944,9 @@ def create_app() -> FastAPI:
             gh_user = await exchange_code(code=code, redirect_uri=callback_url)
         except Exception as e:
             logger.error("GitHub OAuth exchange failed", error=str(e))
-            raise HTTPException(status_code=400, detail="GitHub authentication failed.")
+            raise HTTPException(
+                status_code=400, detail="GitHub authentication failed."
+            ) from e
 
         # Find or create user in DB
         with get_session() as session:
@@ -1119,8 +1137,8 @@ def create_app() -> FastAPI:
         Designed for the `npx @synsci/delphi` installer so it can configure
         MCP clients without driving the dashboard UI.
         """
-        import secrets
         import hashlib
+        import secrets
 
         system_pw = os.getenv("SYSTEM_PASSWORD", "")
         if not system_pw:
@@ -1301,13 +1319,11 @@ def create_app() -> FastAPI:
 
             def progress_callback(stage: str, message: str, progress: float = 0, **kwargs):
                 """Callback to receive progress updates (called from worker thread)."""
-                try:
+                with suppress(Exception):
                     loop.call_soon_threadsafe(
                         progress_queue.put_nowait,
                         {"stage": stage, "message": message, "progress": progress, **kwargs}
                     )
-                except Exception:
-                    pass
 
             async def run_indexing():
                 """Run indexing in thread pool."""
@@ -1447,7 +1463,7 @@ def create_app() -> FastAPI:
     @app.post("/v1/repositories/{repo_id}/reindex", tags=["Code"])
     async def reindex_repository(
         repo_id: str,
-        request: ReindexRepositoryRequest = ReindexRepositoryRequest(),
+        request: ReindexRepositoryRequest | None = None,
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Re-index an existing repository with diff-aware updates.
@@ -1455,6 +1471,7 @@ def create_app() -> FastAPI:
         Only re-processes files that changed since the last index.
         Set force=true to fully re-index from scratch.
         """
+        request = request or ReindexRepositoryRequest()
         try:
             _uuid.UUID(repo_id)
         except ValueError:
@@ -1803,13 +1820,18 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Index a research paper from arXiv or URL."""
-        import tempfile
         import os
+        import tempfile
 
         logger.info("API: Indexing paper", arxiv_id=body.arxiv_id, url=body.url, user_id=auth.user_id)
 
+        from synsc.core.arxiv_client import (
+            ArxivError,
+            download_arxiv_pdf,
+            get_arxiv_metadata,
+            parse_arxiv_id,
+        )
         from synsc.services.paper_service import get_paper_service
-        from synsc.core.arxiv_client import parse_arxiv_id, download_arxiv_pdf, get_arxiv_metadata, ArxivError
 
         service = get_paper_service(user_id=auth.user_id)
 
@@ -1818,10 +1840,8 @@ def create_app() -> FastAPI:
 
         # Extract arXiv ID from URL if provided
         if body.url:
-            try:
+            with suppress(ArxivError):
                 source_arxiv_id = parse_arxiv_id(body.url)
-            except ArxivError:
-                pass
 
         if not source_arxiv_id:
             return SafeJSONResponse(content={"success": False, "error": "Please provide an arXiv ID or URL"}, status_code=400)
@@ -1832,7 +1852,7 @@ def create_app() -> FastAPI:
             try:
                 arxiv_metadata = get_arxiv_metadata(source_arxiv_id)
                 logger.info("Fetched arXiv metadata", arxiv_id=source_arxiv_id)
-            except Exception as e:
+            except Exception:
                 logger.warning("Failed to fetch arXiv metadata", arxiv_id=source_arxiv_id)
 
             # Download PDF to temp file
@@ -1855,10 +1875,8 @@ def create_app() -> FastAPI:
                 return SafeJSONResponse(content=result)
             finally:
                 # Clean up temp file
-                try:
+                with suppress(OSError):
                     os.unlink(pdf_path)
-                except OSError:
-                    pass
 
         except ArxivError as e:
             logger.error("ArXiv error", error=str(e))
@@ -1875,8 +1893,8 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Upload and index a PDF paper."""
-        import tempfile
         import os
+        import tempfile
 
         logger.info("API: Uploading paper", filename=file.filename, user_id=auth.user_id)
 
@@ -2216,7 +2234,10 @@ def create_app() -> FastAPI:
         from synsc.services.research_credentials import (
             ResearchCredentialLookupError,
         )
-        from synsc.services.research_service import ResearchProviderNotConfiguredError, ResearchService
+        from synsc.services.research_service import (
+            ResearchProviderNotConfiguredError,
+            ResearchService,
+        )
 
         service = ResearchService(user_id=auth.user_id)
         start = time.time()
@@ -3156,8 +3177,8 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> JSONResponse:
         """Create a new API key for the current user."""
-        import secrets
         import hashlib
+        import secrets
 
         try:
             # Generate API key
@@ -3847,7 +3868,7 @@ def create_app() -> FastAPI:
                 params["lim"] = limit
 
                 # Can't use interval with param binding, use explicit timestamp
-                from datetime import datetime, timezone, timedelta
+                from datetime import datetime, timedelta, timezone
                 cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
                 rows = session.execute(
@@ -3898,7 +3919,7 @@ def create_app() -> FastAPI:
             hours = int(time_range[:-1]) * 24
 
         try:
-            from datetime import datetime, timezone, timedelta
+            from datetime import datetime, timedelta, timezone
             cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
             with get_session() as session:
@@ -4002,8 +4023,6 @@ class _MCPMiddleware:
 
 
 # Production app
-from mcp.server.streamable_http_manager import StreamableHTTPSessionManager as _SHSM
-
 _mcp_srv = create_mcp_server()
 _mcp_session_mgr = _SHSM(app=_mcp_srv._mcp_server, stateless=True)
 

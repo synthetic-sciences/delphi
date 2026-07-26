@@ -22,6 +22,8 @@ from unittest.mock import MagicMock
 
 from sqlalchemy.dialects.postgresql.dml import (
     Insert as PGInsert,
+)
+from sqlalchemy.dialects.postgresql.dml import (
     OnConflictDoNothing,
 )
 

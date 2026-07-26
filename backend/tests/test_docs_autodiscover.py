@@ -1,8 +1,6 @@
 """Tests for docs auto-discovery + opt-in repo-indexing pipeline."""
 from __future__ import annotations
 
-import pytest
-
 from synsc.services import docs_autodiscover, source_service
 
 
@@ -68,8 +66,6 @@ def test_discover_docs_url_returns_github_homepage(monkeypatch):
 
 
 def test_discover_docs_url_falls_back_to_readme(monkeypatch):
-    state = {"phase": "homepage"}
-
     class FakeResp:
         def __init__(self, body, code=200):
             self.text = body
@@ -91,7 +87,7 @@ def test_discover_docs_url_falls_back_to_readme(monkeypatch):
 
         def get(self, url, **kw):
             if "api.github.com" in url:
-                return FakeResp('{"homepage": ""}')
+                return FakeResp('{"homepage": "https://example.com"}')
             if url.endswith("README.md"):
                 return FakeResp(
                     "Welcome\nVisit our docs at https://docs.example.com/ for details."
@@ -101,6 +97,35 @@ def test_discover_docs_url_falls_back_to_readme(monkeypatch):
     monkeypatch.setattr(docs_autodiscover.httpx, "Client", FakeClient)
     out = docs_autodiscover.discover_docs_url("https://github.com/x/y")
     assert out == "https://docs.example.com/"
+
+
+def test_discover_docs_url_uses_non_docs_homepage_as_last_fallback(monkeypatch):
+    class FakeResp:
+        status_code = 404
+        text = ""
+
+        def json(self):
+            return {"homepage": "https://example.com"}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, url, **kw):
+            response = FakeResp()
+            if "api.github.com" in url:
+                response.status_code = 200
+            return response
+
+    monkeypatch.setattr(docs_autodiscover.httpx, "Client", FakeClient)
+    out = docs_autodiscover.discover_docs_url("https://github.com/x/y")
+    assert out == "https://example.com/"
 
 
 def test_discover_docs_url_uses_pyproject(monkeypatch):

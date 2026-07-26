@@ -19,6 +19,7 @@ max_auto_index_per_session so a runaway agent can't blow indexing costs.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import time
 import uuid
@@ -304,10 +305,8 @@ async def start_session(
             _emit(session, "done", status=session.status)
             # Signal SSE consumers.
             for q in session.queues:
-                try:
+                with contextlib.suppress(asyncio.QueueFull):
                     q.put_nowait(None)
-                except asyncio.QueueFull:
-                    pass
 
     session.task = asyncio.create_task(_wrap())
     return session
@@ -375,10 +374,8 @@ async def subscribe(session_id: str) -> AsyncIterator[ResearchEvent]:
                 return
             yield ev
     finally:
-        try:
+        with contextlib.suppress(ValueError):
             session.queues.remove(q)
-        except ValueError:
-            pass
 
 
 async def post_followup(

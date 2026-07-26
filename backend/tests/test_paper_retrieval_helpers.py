@@ -5,9 +5,9 @@ suite.
 from __future__ import annotations
 
 from synsc.services.paper_retrieval import (
+    _SECTION_WEIGHTS,
     _section_weight,
     _split_sentences,
-    _SECTION_WEIGHTS,
 )
 
 

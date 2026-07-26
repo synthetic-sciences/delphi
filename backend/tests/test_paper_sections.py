@@ -206,3 +206,103 @@ def test_mcp_get_paper_invalid_regex_returns_structured_error(monkeypatch):
     assert result["success"] is False
     assert result["error_code"] == "invalid_input"
     assert "invalid section regex" in result["message"]
+
+
+def test_mcp_code_snippets_are_scoped_to_authenticated_user(monkeypatch):
+    _isolate_mcp_auth(monkeypatch)
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
+
+    import synsc.api.mcp_server as mcp_mod
+    from synsc.api.mcp_server import create_server
+    from synsc.database import connection
+
+    captured: dict = {}
+
+    class FakeResult:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [{"snippet_id": "s1", "code_text": "print('safe')"}]
+
+    class FakeSession:
+        def execute(self, statement, params):
+            captured["statement"] = str(statement)
+            captured["params"] = params
+            return FakeResult()
+
+    class FakeSessionContext:
+        def __enter__(self):
+            return FakeSession()
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(connection, "get_session", FakeSessionContext)
+    mcp_mod.set_current_user_id("user-1")
+
+    server = create_server()
+    tool = server._tool_manager._tools["get_code_snippets"]
+    result = tool.fn(paper_id="paper-1")
+
+    assert result["total_snippets"] == 1
+    assert "user_papers" in captured["statement"]
+    assert captured["params"] == {"pid": "paper-1", "uid": "user-1"}
+
+
+def test_mcp_code_snippets_deny_user_without_paper_link(monkeypatch):
+    _isolate_mcp_auth(monkeypatch)
+    monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
+
+    from contextlib import contextmanager
+
+    from sqlalchemy import create_engine, text
+
+    import synsc.api.mcp_server as mcp_mod
+    from synsc.api.mcp_server import create_server
+    from synsc.database import connection
+
+    engine = create_engine("sqlite://")
+    with engine.begin() as db:
+        db.execute(
+            text(
+                "CREATE TABLE paper_code_snippets ("
+                "snippet_id TEXT PRIMARY KEY, paper_id TEXT NOT NULL, "
+                "code_text TEXT)"
+            )
+        )
+        db.execute(
+            text(
+                "CREATE TABLE user_papers ("
+                "user_id TEXT NOT NULL, paper_id TEXT NOT NULL)"
+            )
+        )
+        db.execute(
+            text(
+                "INSERT INTO paper_code_snippets "
+                "(snippet_id, paper_id, code_text) "
+                "VALUES ('snippet-1', 'paper-1', 'private code')"
+            )
+        )
+        db.execute(
+            text(
+                "INSERT INTO user_papers (user_id, paper_id) "
+                "VALUES ('owner', 'paper-1')"
+            )
+        )
+
+    @contextmanager
+    def get_test_session():
+        with engine.begin() as db:
+            yield db
+
+    monkeypatch.setattr(connection, "get_session", get_test_session)
+    mcp_mod.set_current_user_id("stranger")
+
+    server = create_server()
+    tool = server._tool_manager._tools["get_code_snippets"]
+    result = tool.fn(paper_id="paper-1")
+
+    assert result["success"] is True
+    assert result["total_snippets"] == 0
+    assert result["snippets"] == []

@@ -8,9 +8,7 @@ cosine similarity on independent embeddings.
 Expected improvement: +0.15-0.25 on adversarial discrimination score.
 """
 
-import os
 import logging
-from typing import Optional
 
 import numpy as np
 
@@ -130,7 +128,7 @@ class Reranker:
         normalized = 1 / (1 + np.exp(-np.array(scores)))
 
         # Blend cross-encoder with original vector similarity
-        for r, ce_score in zip(results, normalized):
+        for r, ce_score in zip(results, normalized, strict=True):
             original_score = r[score_key]
             r[score_key] = blend_alpha * float(ce_score) + (1 - blend_alpha) * original_score
 
@@ -147,7 +145,7 @@ class Reranker:
 # Singleton
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-_reranker: Optional[Reranker] = None
+_reranker: Reranker | None = None
 
 
 def get_reranker() -> Reranker:

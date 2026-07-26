@@ -63,8 +63,8 @@ def cmd_worker(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     """Show server status and statistics."""
     from synsc.config import get_config
-    from synsc.database.connection import init_db, get_session
-    from synsc.database.models import Repository, CodeChunk, Paper, PaperChunk
+    from synsc.database.connection import get_session, init_db
+    from synsc.database.models import CodeChunk, Paper, PaperChunk, Repository
     
     config = get_config()
     init_db()
@@ -78,10 +78,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     print("\n📊 Synsc Context Status")
     print("=" * 40)
     print(f"\n   Server name: {config.server_name}")
-    print(f"\n   Code Indexing:")
+    print("\n   Code Indexing:")
     print(f"     Repositories: {repo_count}")
     print(f"     Code chunks: {code_chunk_count}")
-    print(f"\n   Paper Indexing:")
+    print("\n   Paper Indexing:")
     print(f"     Papers: {paper_count}")
     print(f"     Paper chunks: {paper_chunk_count}")
     print(f"\n   API host: {config.api.host}")

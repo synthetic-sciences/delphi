@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 import pytest
 
@@ -207,7 +206,7 @@ def test_post_followup_requires_completed(monkeypatch):
 
 
 def test_post_followup_runs_followup(monkeypatch):
-    from synsc.services import research_sessions, research_service
+    from synsc.services import research_service, research_sessions
 
     async def fake_runner(session):
         session.answer_markdown = "first answer"

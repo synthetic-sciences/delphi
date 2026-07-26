@@ -25,13 +25,16 @@ Bench-driven refinements (May 2026):
 """
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 import time
 import uuid
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
+import httpcore
 import httpx
 import structlog
 from markdownify import markdownify
@@ -50,10 +53,90 @@ _DEFAULT_MAX_PAGES = 200
 _DEFAULT_REQ_TIMEOUT = 30.0
 _DEFAULT_REQ_DELAY_S = 1.0
 _DEFAULT_MAX_PAGE_BYTES = 10 * 1024 * 1024  # 10 MB
+_MAX_REDIRECTS = 5
 _CHUNK_TOKENS = 800
 _CHUNK_OVERLAP = 80
 
 _SM_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+
+
+def _resolve_public_addresses(hostname: str, port: int) -> tuple[str, ...]:
+    """Resolve once and return only globally routable addresses."""
+    try:
+        resolved = socket.getaddrinfo(
+            hostname,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError("Documentation URL hostname could not be resolved") from exc
+
+    addresses = tuple(dict.fromkeys(item[4][0] for item in resolved))
+    parsed_addresses = tuple(ipaddress.ip_address(address) for address in addresses)
+    if not parsed_addresses or any(
+        not address.is_global for address in parsed_addresses
+    ):
+        raise ValueError(
+            "Documentation URL must resolve only to public IP addresses"
+        )
+    return addresses
+
+
+def _validate_public_url(url: str) -> None:
+    """Reject non-HTTP and non-public documentation crawl targets."""
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Documentation URL must be a public HTTP(S) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Documentation URL must not contain credentials")
+
+    _resolve_public_addresses(
+        parsed.hostname,
+        parsed.port or (443 if parsed.scheme == "https" else 80),
+    )
+
+
+class _PublicNetworkBackend(httpcore.SyncBackend):
+    """Pin connections to addresses validated during the connect operation."""
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options=None,
+    ) -> httpcore.NetworkStream:
+        last_error: Exception | None = None
+        for address in _resolve_public_addresses(host, port):
+            try:
+                # httpcore retains the original hostname for the Host header,
+                # TLS SNI, and certificate checks. Only TCP uses this pinned IP.
+                return super().connect_tcp(
+                    address,
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
+
+class _PublicHTTPTransport(httpx.HTTPTransport):
+    """HTTP transport whose sockets use the public-only pinned resolver."""
+
+    def __init__(self) -> None:
+        super().__init__(trust_env=False)
+        self._pool.close()
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(trust_env=False),
+            max_connections=20,
+            max_keepalive_connections=10,
+            network_backend=_PublicNetworkBackend(),
+        )
 
 
 class DocsService:
@@ -83,9 +166,25 @@ class DocsService:
         return f"{parsed.scheme}://{parsed.netloc}/sitemap.xml"
 
     def _fetch(self, client: httpx.Client, url: str) -> bytes:
-        resp = client.get(url, timeout=_DEFAULT_REQ_TIMEOUT, follow_redirects=True)
-        resp.raise_for_status()
-        return resp.content[:_DEFAULT_MAX_PAGE_BYTES]
+        current_url = url
+        redirect_statuses = {301, 302, 303, 307, 308}
+        for _ in range(_MAX_REDIRECTS + 1):
+            _validate_public_url(current_url)
+            resp = client.get(
+                current_url,
+                timeout=_DEFAULT_REQ_TIMEOUT,
+                follow_redirects=False,
+            )
+            if resp.status_code not in redirect_statuses:
+                resp.raise_for_status()
+                return resp.content[:_DEFAULT_MAX_PAGE_BYTES]
+
+            location = resp.headers.get("location")
+            if not location:
+                raise ValueError("Documentation redirect is missing a location")
+            current_url = urljoin(current_url, location)
+
+        raise ValueError("Documentation URL exceeded the redirect limit")
 
     def _iter_sitemap_urls(
         self,
@@ -408,7 +507,9 @@ class DocsService:
         pages_seen = 0
 
         with httpx.Client(
-            timeout=_DEFAULT_REQ_TIMEOUT, follow_redirects=True
+            timeout=_DEFAULT_REQ_TIMEOUT,
+            follow_redirects=False,
+            transport=_PublicHTTPTransport(),
         ) as client:
             try:
                 page_urls = list(

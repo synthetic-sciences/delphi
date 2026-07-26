@@ -37,7 +37,7 @@ class PDFSection:
         self.level = level
         self.page = page
         self.section_number = section_number
-        self.subsections: list["PDFSection"] = []
+        self.subsections: list[PDFSection] = []
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -127,10 +127,12 @@ def extract_title_from_text(text: str) -> str | None:
     candidates = []
     for i, line in enumerate(lines[:20]):
         line = line.strip()
-        if len(line) > 20 and len(line) < 300:
-            # Title lines are usually not all lowercase and don't start with numbers
-            if not line[0].isdigit() and not line.islower():
-                candidates.append((i, line, len(line)))
+        if (
+            20 < len(line) < 300
+            and not line[0].isdigit()
+            and not line.islower()
+        ):
+            candidates.append((i, line, len(line)))
     
     if candidates:
         # Return the longest candidate in the first few lines
@@ -206,10 +208,7 @@ def detect_sections(text: str) -> list[dict]:
             # Find content until next section
             start = match.end()
             next_match = re.search(pattern, text[start:])
-            if next_match:
-                end = start + next_match.start()
-            else:
-                end = len(text)
+            end = start + next_match.start() if next_match else len(text)
             
             content = text[start:end].strip()
             

@@ -6,6 +6,7 @@ P2 surface: adds canonical source_id resolution + docs.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 from typing import Any
@@ -167,8 +168,9 @@ def _user_indexed_library_names(user_id: str | None) -> set[str]:
     if not user_id:
         return set()
     try:
-        from synsc.database.connection import get_session
         from sqlalchemy import text as _sql_text
+
+        from synsc.database.connection import get_session
 
         with get_session() as session:
             rows = session.execute(
@@ -490,7 +492,7 @@ def _normalize_per_branch(hits: list[dict]) -> None:
     by_type: dict[str, list[dict]] = defaultdict(list)
     for h in hits:
         by_type[h.get("source_type", "_")].append(h)
-    for stype, group in by_type.items():
+    for group in by_type.values():
         scores = [float(h.get("score") or 0.0) for h in group]
         if not scores:
             continue
@@ -901,10 +903,8 @@ def index_source(
                     },
                 )
             finally:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(pdf_path)
-                except OSError:
-                    pass
             ext_ref = url
         else:
             try:
@@ -914,10 +914,8 @@ def index_source(
             except ArxivError:
                 arxiv_id = url.strip()
             meta = None
-            try:
+            with contextlib.suppress(Exception):
                 meta = get_arxiv_metadata(arxiv_id)
-            except Exception:
-                pass
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
                 pdf_path = tmp.name
             try:
@@ -929,10 +927,8 @@ def index_source(
                     arxiv_metadata=meta,
                 )
             finally:
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(pdf_path)
-                except OSError:
-                    pass
             ext_ref = arxiv_id
 
         return _normalize_index_response(

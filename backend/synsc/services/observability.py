@@ -19,9 +19,9 @@ import json
 from typing import Any
 
 import structlog
+from sqlalchemy import text
 
 from synsc.database.connection import get_session
-from sqlalchemy import text
 
 logger = structlog.get_logger(__name__)
 
@@ -122,7 +122,7 @@ def log_chunk_used(
     """
     if not user_id or not chunk_id:
         return
-    try:
+    with contextlib.suppress(Exception):
         _write(
             user_id=user_id,
             action="chunk_used",
@@ -130,8 +130,6 @@ def log_chunk_used(
             resource_id=chunk_id,
             metadata={"query_id": query_id},
         )
-    except Exception:
-        pass
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -197,7 +195,7 @@ def classify_failure(
         code = "no_test_link"
 
     payload = {"code": code, "message": FAILURE_MODES[code]}
-    try:
+    with contextlib.suppress(Exception):
         _write(
             user_id=user_id,
             action="failure_classification",
@@ -206,8 +204,6 @@ def classify_failure(
             query=query,
             metadata={"code": code, "description": description},
         )
-    except Exception:
-        pass
     return payload
 
 

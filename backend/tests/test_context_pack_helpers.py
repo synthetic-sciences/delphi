@@ -4,11 +4,11 @@ broad-query detection). The full builder is integration-tested separately.
 from __future__ import annotations
 
 from synsc.services.context_pack import (
+    ContextPack,
+    PackSnippet,
     _approx_tokens,
     _query_is_broad,
     classify_path,
-    PackSnippet,
-    ContextPack,
 )
 
 

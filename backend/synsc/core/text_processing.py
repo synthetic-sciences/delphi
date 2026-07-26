@@ -379,10 +379,11 @@ def detect_sections(text: str) -> list[dict[str, Any]]:
         start = m["match"].end()
 
         # End is start of next section or end of text
-        if i + 1 < len(unique_matches):
-            end = unique_matches[i + 1]["pos"]
-        else:
-            end = len(text)
+        end = (
+            unique_matches[i + 1]["pos"]
+            if i + 1 < len(unique_matches)
+            else len(text)
+        )
 
         content = text[start:end].strip()
         
