@@ -11,28 +11,29 @@ export const log = {
 };
 
 const ART = [
-  "",
-  "  ██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗",
-  "  ██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║",
-  "  ██║  ██║█████╗  ██║     ██████╔╝███████║██║",
-  "  ██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║",
-  "  ██████╔╝███████╗███████╗██║     ██║  ██║██║",
-  "  ╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝",
-  "",
-].join("\n");
+  "██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗",
+  "██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║",
+  "██║  ██║█████╗  ██║     ██████╔╝███████║██║",
+  "██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║",
+  "██████╔╝███████╗███████╗██║     ██║  ██║██║",
+  "╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝",
+];
+const ART_WIDTH = 43;
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export function banner() {
+  const center = (line, displayWidth = line.length) => {
+    const columns = process.stdout.columns || 80;
+    return `${" ".repeat(Math.max(0, Math.floor((columns - displayWidth) / 2)))}${line}`;
+  };
+
   // Color each line individually so terminals don't reset color mid-glyph.
-  for (const line of ART.split("\n")) {
-    console.log(line ? pc.cyan(line) : "");
+  console.log();
+  for (const line of ART) {
+    console.log(pc.cyan(center(line, ART_WIDTH)));
   }
-  console.log(
-    pc.dim("  semantic context for AI coding agents") +
-      "  " +
-      pc.dim(pc.italic("by Synsci"))
-  );
+  console.log(pc.dim(center("semantic context for AI coding agents")));
   console.log();
 }
 
