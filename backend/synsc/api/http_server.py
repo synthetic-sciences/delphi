@@ -298,6 +298,10 @@ class CreateJobRequest(BaseModel):
     """Request to create an indexing job."""
     job_type: str = Field(..., description="Job type: 'repository' or 'paper'")
     target: str = Field(..., description="Repository URL or paper ID/URL")
+    branch: str | None = Field(
+        default=None,
+        description="Repository branch. Omit to detect the repository default.",
+    )
 
 
 class ResearchRequest(BaseModel):
@@ -2892,7 +2896,7 @@ def create_app() -> FastAPI:
             result = service.create_job(
                 user_id=auth.user_id,
                 repo_url=request.target,
-                branch="main",
+                branch=request.branch,
             )
         else:
             # For papers, create job with paper_source

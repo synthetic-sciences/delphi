@@ -44,6 +44,27 @@ from synsc.services.job_queue_service import get_job_queue_service
 logger = structlog.get_logger(__name__)
 
 
+def _read_repository_file(
+    repo_path: Path,
+    file_info: dict[str, Any],
+) -> dict[str, Any]:
+    """Read one repository file and attach path-derived language metadata."""
+    file_path = file_info["path"]
+    full_path = repo_path / file_path
+    try:
+        content = full_path.read_text(errors="replace")
+        return {
+            "file_path": file_path,
+            "content": content,
+            "language": detect_language(file_path),
+            "size": len(content),
+            "lines": content.count("\n") + 1,
+            "success": True,
+        }
+    except Exception as e:
+        return {"file_path": file_path, "success": False, "error": str(e)}
+
+
 class IndexingWorker:
     """Background worker for processing indexing jobs.
     
@@ -158,13 +179,24 @@ class IndexingWorker:
                 stage="cloning",
                 message="Cloning repository...",
             )
-            
-            # Clone the repository
-            repo_info = self.git_client.clone(job.repo_url, job.branch)
-            repo_path = Path(repo_info["path"])
-            owner = repo_info["owner"]
-            name = repo_info["name"]
-            commit_sha = repo_info["commit_sha"]
+
+            if not job.repo_url:
+                raise ValueError("Repository indexing job is missing repo_url")
+
+            branch = job.branch
+            if not branch:
+                _, parsed_owner, parsed_name = self.git_client.parse_github_url(
+                    job.repo_url
+                )
+                branch = self.git_client._get_default_branch(
+                    parsed_owner,
+                    parsed_name,
+                )
+
+            repo_path, owner, name, commit_sha = self.git_client.clone(
+                job.repo_url,
+                branch,
+            )
             
             self.job_queue.update_progress(
                 job.job_id,
@@ -192,7 +224,7 @@ class IndexingWorker:
                 files=files,
                 owner=owner,
                 name=name,
-                branch=job.branch,
+                branch=branch,
                 commit_sha=commit_sha,
                 repo_url=job.repo_url,
                 user_id=job.user_id,
@@ -299,31 +331,16 @@ class IndexingWorker:
         total_files = len(files)
         phase1_progress = {"done": 0}
         
-        def read_single_file(file_info: dict) -> dict:
-            """Read a single file from disk and detect its language."""
-            file_path = file_info["path"]
-            full_path = repo_path / file_path
-            try:
-                content = full_path.read_text(errors="replace")
-                language = detect_language(file_path, content)
-                return {
-                    "file_path": file_path,
-                    "content": content,
-                    "language": language,
-                    "size": len(content),
-                    "lines": content.count("\n") + 1,
-                    "success": True,
-                }
-            except Exception as e:
-                return {"file_path": file_path, "success": False, "error": str(e)}
-        
         self.job_queue.update_progress(
             job.job_id, progress=0.20, stage="reading",
             message="Reading files...", files_total=total_files,
         )
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(read_single_file, f): f for f in files}
+            futures = {
+                executor.submit(_read_repository_file, repo_path, file_info): file_info
+                for file_info in files
+            }
             for future in as_completed(futures):
                 result = future.result()
                 if result["success"]:
