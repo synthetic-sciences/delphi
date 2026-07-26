@@ -240,7 +240,7 @@ export async function searchSymbols(
   language?: string,
   topK = 25
 ) {
-  return apiFetch("/v1/search/symbols", {
+  return apiFetch("/v1/symbols/search", {
     method: "POST",
     body: JSON.stringify({
       name,
