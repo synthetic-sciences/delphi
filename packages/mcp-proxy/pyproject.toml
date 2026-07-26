@@ -9,7 +9,7 @@ readme = {text = "MCP proxy for Delphi. Bridges stdio MCP clients (Claude Code, 
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    { name = "InkVell" }
+    { name = "Aayam Bansal" }
 ]
 keywords = ["mcp", "ai", "code-search", "research-papers", "huggingface", "datasets", "cursor", "claude", "semantic-search"]
 classifiers = [
