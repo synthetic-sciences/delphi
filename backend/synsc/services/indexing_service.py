@@ -392,7 +392,10 @@ class IndexingService:
             if progress_callback:
                 with contextlib.suppress(Exception):
                     progress_callback(stage, message, progress, **kwargs)
-        
+
+        full_reindex_repo_id: str | None = None
+        full_reindex_baseline_sha: str | None = None
+
         try:
             # Parse URL
             report_progress("parsing", "Parsing repository URL...", 5)
@@ -429,6 +432,8 @@ class IndexingService:
                     if existing.is_public:
                         # PUBLIC: Check if repo is up-to-date
                         # Get current commit SHA to compare
+                        baseline_commit_sha = existing.commit_sha
+                        update_attempted = False
                         try:
                             # Clone temporarily to check current commit
                             temp_path, _, _, current_sha = self.git_client.clone(url, branch)
@@ -469,6 +474,16 @@ class IndexingService:
                                 }
                             else:
                                 # Outdated: Need to re-index (update the repo)
+                                update_attempted = True
+                                # Serialize diff-aware work with full
+                                # replacements. Refresh after waiting so the
+                                # diff compares against the latest committed
+                                # index rather than a stale ORM snapshot.
+                                existing = self._lock_repository_for_reindex(
+                                    session,
+                                    str(existing.repo_id),
+                                    baseline_commit_sha,
+                                )
                                 logger.info(
                                     "Public repo is outdated, re-indexing",
                                     repo_id=existing.repo_id,
@@ -486,11 +501,15 @@ class IndexingService:
                                 if not force_reindex:
                                     # Diff-aware re-index: only process changed files
                                     diff_files = self.git_client.list_files(temp_path, include_content=True)
-                                    diff_result = self._diff_reindex(
-                                        session, existing, temp_path, diff_files,
-                                        current_sha, progress_callback, deep_index,
-                                        quality_mode=effective_mode,
-                                    )
+                                    # Keep diff mutations in a savepoint so a
+                                    # failed embed/delete phase cannot leak
+                                    # partial state into later session work.
+                                    with session.begin_nested():
+                                        diff_result = self._diff_reindex(
+                                            session, existing, temp_path, diff_files,
+                                            current_sha, progress_callback, deep_index,
+                                            quality_mode=effective_mode,
+                                        )
                                     if diff_result is not None:
                                         # Diff reindex succeeded
                                         self._add_repo_to_user_collection(
@@ -532,15 +551,15 @@ class IndexingService:
                                     # diff_result is None → threshold exceeded, fall through to full re-index
                                     logger.info("Diff threshold exceeded, performing full re-index")
 
-                                # Full re-index: delete child data but KEEP the repo row
-                                # so the repo_id is preserved and user_repositories links stay valid
-                                session.execute(text("DELETE FROM chunk_embeddings WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                                session.execute(text("DELETE FROM symbols WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                                session.execute(text("DELETE FROM code_chunks WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                                session.execute(text("DELETE FROM repository_files WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                                session.commit()
-                                # Fall through to re-index below (_index_files will reuse the repo row)
+                                # Defer destructive replacement until the
+                                # final indexing transaction. The old index
+                                # remains visible and rollback-safe through
+                                # clone, file discovery, chunking, and embeds.
+                                full_reindex_repo_id = str(existing.repo_id)
+                                full_reindex_baseline_sha = existing.commit_sha
                         except Exception as e:
+                            if update_attempted:
+                                raise
                             logger.warning(
                                 "Failed to check if repo is up-to-date, treating as up-to-date",
                                 error=str(e),
@@ -591,12 +610,10 @@ class IndexingService:
                                 "message": "Repository already indexed by you",
                             }
                         else:
-                            # Force re-index: delete child data but KEEP the repo row
-                            session.execute(text("DELETE FROM chunk_embeddings WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                            session.execute(text("DELETE FROM symbols WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                            session.execute(text("DELETE FROM code_chunks WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                            session.execute(text("DELETE FROM repository_files WHERE repo_id = :rid"), {"rid": existing.repo_id})
-                            session.commit()
+                            # Replace inside the same transaction that writes
+                            # the new index so failures restore the old one.
+                            full_reindex_repo_id = str(existing.repo_id)
+                            full_reindex_baseline_sha = existing.commit_sha
                     else:
                         # PRIVATE + different user: Don't reuse the existing
                         # entry — fall through to full indexing so this user
@@ -698,6 +715,17 @@ class IndexingService:
             # Index files
             report_progress("indexing", "Processing files and extracting symbols...", 40)
             with get_session() as session:
+                if full_reindex_repo_id:
+                    self._lock_repository_for_reindex(
+                        session,
+                        full_reindex_repo_id,
+                        full_reindex_baseline_sha,
+                    )
+                    self._purge_repository_index(
+                        session,
+                        full_reindex_repo_id,
+                    )
+
                 result = self._index_files(
                     session=session,
                     url=stored_url,
@@ -712,6 +740,7 @@ class IndexingService:
                     progress_callback=progress_callback,
                     deep_index=deep_index,
                     quality_mode=effective_mode,
+                    existing_repo_id=full_reindex_repo_id,
                 )
                 
                 # Add to user's collection
@@ -1064,6 +1093,52 @@ class IndexingService:
         session.execute(
             text("DELETE FROM repository_files WHERE file_id = :fid"), {"fid": file_id}
         )
+
+    def _purge_repository_index(self, session: Session, repo_id: str) -> None:
+        """Delete replaceable index data inside the caller's transaction.
+
+        The repository row and user collection links are intentionally kept.
+        Callers must write the replacement before committing so any failure
+        rolls this purge back together with the partial new index.
+        """
+        params = {"rid": repo_id}
+        session.execute(
+            text("DELETE FROM symbol_references WHERE repo_id = :rid"),
+            params,
+        )
+        session.execute(
+            text("DELETE FROM chunk_embeddings WHERE repo_id = :rid"),
+            params,
+        )
+        session.execute(text("DELETE FROM symbols WHERE repo_id = :rid"), params)
+        session.execute(text("DELETE FROM code_chunks WHERE repo_id = :rid"), params)
+        session.execute(
+            text("DELETE FROM repository_files WHERE repo_id = :rid"),
+            params,
+        )
+
+    def _lock_repository_for_reindex(
+        self,
+        session: Session,
+        repo_id: str,
+        expected_commit_sha: str | None,
+    ) -> Repository:
+        """Lock a repository and reject a stale replacement candidate."""
+        locked_repo = (
+            session.query(Repository)
+            .filter(Repository.repo_id == repo_id)
+            .with_for_update()
+            .populate_existing()
+            .first()
+        )
+        if not locked_repo:
+            raise RuntimeError("Repository disappeared before atomic re-index")
+        if locked_repo.commit_sha != expected_commit_sha:
+            raise RuntimeError(
+                "Repository changed while re-index was being prepared; retry "
+                "against the latest index"
+            )
+        return locked_repo
 
     def _diff_reindex(
         self,
@@ -1524,6 +1599,7 @@ class IndexingService:
         progress_callback: Callable | None = None,
         deep_index: bool = False,
         quality_mode: str | None = None,
+        existing_repo_id: str | None = None,
     ) -> dict:
         """Index files from a repository.
 
@@ -1541,6 +1617,7 @@ class IndexingService:
             files: List of file info dicts
             user_id: User ID of who indexed (for private repos, this is the owner)
             is_public: Whether the repo is publicly accessible
+            existing_repo_id: Exact repository row to replace atomically.
         
         Returns:
             Dict with indexing stats
@@ -1561,10 +1638,15 @@ class IndexingService:
 
         # Reuse existing repository record if one exists (force reindex case),
         # otherwise create a new one.
-        repo = session.query(Repository).filter(
-            Repository.url == url,
-            Repository.branch == branch,
-        ).first()
+        repo_query = session.query(Repository)
+        if existing_repo_id:
+            repo_query = repo_query.filter(Repository.repo_id == existing_repo_id)
+        else:
+            repo_query = repo_query.filter(
+                Repository.url == url,
+                Repository.branch == branch,
+            )
+        repo = repo_query.first()
 
         if repo:
             # Update existing record
