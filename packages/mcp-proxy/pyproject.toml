@@ -3,10 +3,10 @@
 # repo for that product). Delphi gets its own slot so the two projects can
 # version + publish independently.
 name = "synsci-delphi-proxy"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP proxy for Delphi — bridges stdio MCP clients (Claude Code, Cursor, Windsurf) to a Delphi HTTP API."
-readme = {text = "MCP proxy for Delphi. Bridges stdio MCP clients (Claude Code, Cursor, Windsurf) to a Delphi HTTP API server, exposing 33 tools for code, research paper, and HuggingFace dataset context.", content-type = "text/markdown"}
-license = "MIT"
+readme = {text = "MCP proxy for Delphi. Bridges stdio MCP clients (Claude Code, Cursor, Windsurf) to the Delphi HTTP API and mirrors the backend's current MCP tool profile.", content-type = "text/markdown"}
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "InkVell" }
@@ -15,7 +15,7 @@ keywords = ["mcp", "ai", "code-search", "research-papers", "huggingface", "datas
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -26,12 +26,12 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp[cli]>=1.4.1",
+    "mcp[cli]>=1.20.0",
     "httpx>=0.27.0",
 ]
 
 [project.urls]
-Repository = "https://github.com/synthetic-sciences/delhpi"
+Repository = "https://github.com/synthetic-sciences/delphi"
 
 [project.scripts]
 synsci-delphi-proxy = "synsci_delphi_proxy:main"
@@ -42,3 +42,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["synsci_delphi_proxy"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
