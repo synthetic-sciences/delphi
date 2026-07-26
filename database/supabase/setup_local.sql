@@ -144,8 +144,9 @@ CREATE TABLE IF NOT EXISTS repositories (
     commit_sha TEXT,
     description TEXT,
 
-    -- Visibility (TRUE = shared globally, FALSE = private to indexed_by user)
+    -- Visibility (legacy boolean plus the canonical 3-tier value)
     is_public BOOLEAN DEFAULT TRUE,
+    visibility VARCHAR(16) NOT NULL DEFAULT 'public',
 
     -- Who first indexed this repo
     indexed_by UUID,
@@ -173,7 +174,18 @@ CREATE TABLE IF NOT EXISTS repositories (
     UNIQUE(url, branch)
 );
 
+-- Keep reruns compatible with databases created before visibility existed.
+ALTER TABLE repositories
+    ADD COLUMN IF NOT EXISTS visibility VARCHAR(16);
+UPDATE repositories
+SET visibility = CASE WHEN is_public THEN 'public' ELSE 'private' END
+WHERE visibility IS NULL;
+ALTER TABLE repositories
+    ALTER COLUMN visibility SET DEFAULT 'public',
+    ALTER COLUMN visibility SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_repos_public ON repositories(is_public);
+CREATE INDEX IF NOT EXISTS idx_repositories_visibility ON repositories(visibility);
 CREATE INDEX IF NOT EXISTS idx_repos_owner_name ON repositories(owner, name);
 CREATE INDEX IF NOT EXISTS idx_repos_indexed_by ON repositories(indexed_by);
 
@@ -370,6 +382,7 @@ CREATE TABLE IF NOT EXISTS papers (
 
     -- Visibility
     is_public BOOLEAN DEFAULT FALSE,
+    visibility VARCHAR(16) NOT NULL DEFAULT 'private',
     indexed_by UUID,
 
     -- Statistics
@@ -385,9 +398,23 @@ CREATE TABLE IF NOT EXISTS papers (
     report JSONB DEFAULT '{}'
 );
 
+-- Keep reruns compatible with databases created before visibility existed.
+ALTER TABLE papers
+    ADD COLUMN IF NOT EXISTS visibility VARCHAR(16);
+UPDATE papers
+SET visibility = CASE WHEN is_public THEN 'public' ELSE 'private' END
+WHERE visibility IS NULL;
+UPDATE papers
+SET visibility = 'private'
+WHERE visibility = 'public' AND is_public IS NOT TRUE;
+ALTER TABLE papers
+    ALTER COLUMN visibility SET DEFAULT 'private',
+    ALTER COLUMN visibility SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_papers_arxiv ON papers(arxiv_id);
 CREATE INDEX IF NOT EXISTS idx_papers_hash ON papers(pdf_hash);
 CREATE INDEX IF NOT EXISTS idx_papers_public ON papers(is_public);
+CREATE INDEX IF NOT EXISTS idx_papers_visibility ON papers(visibility);
 CREATE INDEX IF NOT EXISTS idx_papers_indexed_by ON papers(indexed_by);
 
 
@@ -542,14 +569,26 @@ CREATE TABLE IF NOT EXISTS datasets (
     splits JSONB DEFAULT '{}',
     dataset_size_bytes BIGINT DEFAULT 0,
     is_public BOOLEAN DEFAULT TRUE,
+    visibility VARCHAR(16) NOT NULL DEFAULT 'public',
     indexed_by UUID,
     chunk_count INTEGER DEFAULT 0,
     indexed_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Keep reruns compatible with databases created before visibility existed.
+ALTER TABLE datasets
+    ADD COLUMN IF NOT EXISTS visibility VARCHAR(16);
+UPDATE datasets
+SET visibility = CASE WHEN is_public THEN 'public' ELSE 'private' END
+WHERE visibility IS NULL;
+ALTER TABLE datasets
+    ALTER COLUMN visibility SET DEFAULT 'public',
+    ALTER COLUMN visibility SET NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_datasets_hf_id ON datasets(hf_id);
 CREATE INDEX IF NOT EXISTS idx_datasets_public ON datasets(is_public);
+CREATE INDEX IF NOT EXISTS idx_datasets_visibility ON datasets(visibility);
 
 CREATE TABLE IF NOT EXISTS user_datasets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
