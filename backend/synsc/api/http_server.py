@@ -1952,6 +1952,45 @@ def create_app() -> FastAPI:
         _log_activity(auth.user_id, "search_papers", "search", query=body.query, results_count=rc, duration_ms=dur)
         return SafeJSONResponse(content=result)
 
+    @app.get("/v1/papers/{paper_id}", tags=["Papers"])
+    def get_paper(
+        paper_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> JSONResponse:
+        """Get full content for a paper in the authenticated user's library."""
+        from synsc.services.paper_service import get_paper_service
+
+        service = get_paper_service(user_id=auth.user_id)
+        try:
+            paper = service.get_paper(paper_id)
+        except Exception as exc:
+            logger.error(
+                "Failed to retrieve paper",
+                paper_id=paper_id,
+                user_id=auth.user_id,
+                error=str(exc),
+            )
+            return SafeJSONResponse(
+                content={
+                    "success": False,
+                    "error": "Failed to retrieve paper.",
+                },
+                status_code=500,
+            )
+        if not paper:
+            return SafeJSONResponse(
+                content={"success": False, "error": "Paper not found"},
+                status_code=404,
+            )
+
+        _log_activity(
+            auth.user_id,
+            "get_paper",
+            "paper",
+            resource_id=paper_id,
+        )
+        return SafeJSONResponse(content={"success": True, **paper})
+
     @app.get("/v1/papers/{paper_id}/citations", tags=["Papers"])
     def get_citations(
         paper_id: str,

@@ -682,8 +682,8 @@ class PaperService:
         except ValueError:
             raise
         except Exception as e:
-            logger.error(f"Failed to get paper: {e}")
-        return None
+            logger.error("Failed to get paper", paper_id=paper_id, error=str(e))
+            raise
 
     def list_papers(self, limit: int = 50) -> list[dict]:
         """List papers for the current user."""

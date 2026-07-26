@@ -641,6 +641,21 @@ data: {"stage": "complete", "progress": 100, "result": {"files_indexed": 1240, "
 
               <Endpoint
                 method="GET"
+                path="/v1/papers/{paper_id}"
+                desc="Get full content for a paper in your library"
+                response={`{
+  "success": true,
+  "paper_id": "abc123-...",
+  "title": "Attention Is All You Need",
+  "authors": ["Vaswani et al."],
+  "chunks": [
+    {"chunk_index": 0, "section_title": "Abstract", "content": "..."}
+  ]
+}`}
+              />
+
+              <Endpoint
+                method="GET"
                 path="/v1/papers/{paper_id}/citations"
                 desc="Extract citations from an indexed paper"
                 response={`{
