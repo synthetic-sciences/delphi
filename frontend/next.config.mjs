@@ -4,6 +4,14 @@ const nextConfig = {
   // runtime stage copies just .next/standalone instead of the full
   // node_modules tree (~700MB → ~150MB).
   output: 'standalone',
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'avatars.githubusercontent.com',
+      },
+    ],
+  },
   // Allow cross-origin requests from backend API during development
   allowedDevOrigins: [
     'http://localhost:8742',

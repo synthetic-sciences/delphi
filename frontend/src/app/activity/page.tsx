@@ -225,11 +225,11 @@ export default function ActivityPage() {
             onChange={(e) => setTypeFilter(e.target.value)}
             className="h-10 pl-9 pr-8 rounded-lg bg-[#faf5ef] border border-[#dfcdbf] text-sm text-[#2e2522] focus:outline-none focus:border-[#c5b5a5] lowercase appearance-none cursor-pointer transition-colors"
           >
-            {typeFilters.map((item, i) => (
+            {typeFilters.map((item) => (
               'value' in item ? (
-                <option key={i} value={item.value}>{item.label}</option>
+                <option key={item.value} value={item.value}>{item.label}</option>
               ) : (
-                <optgroup key={i} label={item.group}>
+                <optgroup key={item.group} label={item.group}>
                   {item.options.map(opt => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}

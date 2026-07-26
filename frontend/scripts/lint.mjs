@@ -59,7 +59,19 @@ const regressions = Object.entries(warningCounts)
       `${key}: ${count} warning(s), baseline ${baseline[key] ?? 0}`,
   );
 
-if (errors.length > 0 || regressions.length > 0 || result.status !== 0) {
+const staleAllowances = Object.entries(baseline)
+  .filter(([key, allowance]) => (warningCounts[key] ?? 0) < allowance)
+  .map(
+    ([key, allowance]) =>
+      `${key}: ${warningCounts[key] ?? 0} warning(s), baseline ${allowance}`,
+  );
+
+if (
+  errors.length > 0 ||
+  regressions.length > 0 ||
+  staleAllowances.length > 0 ||
+  result.status !== 0
+) {
   for (const diagnostic of errors) {
     console.error(
       `${diagnostic.location?.path ?? "<unknown>"}:${diagnostic.location?.start?.line ?? "?"} ${diagnostic.category}: ${diagnostic.message}`,
@@ -67,6 +79,9 @@ if (errors.length > 0 || regressions.length > 0 || result.status !== 0) {
   }
   for (const regression of regressions) {
     console.error(`Lint warning regression: ${regression}`);
+  }
+  for (const staleAllowance of staleAllowances) {
+    console.error(`Remove stale lint allowance: ${staleAllowance}`);
   }
   process.exit(1);
 }

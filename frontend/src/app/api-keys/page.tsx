@@ -1,7 +1,7 @@
 "use client";
 
 import PageShell from "@/components/PageShell";
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Key, Copy, Trash2, Plus, X, AlertTriangle,
   Check, Ban, RefreshCw, ExternalLink,
@@ -215,13 +215,6 @@ export default function ApiKeysPage() {
   const [hfTokenError, setHfTokenError] = useState<string | null>(null);
   const [hfTokenSuccess, setHfTokenSuccess] = useState<string | null>(null);
 
-  // Fetch API keys + token status on mount
-  useEffect(() => {
-    fetchKeys();
-    fetchTokenStatus();
-    fetchHfTokenStatus();
-  }, []);
-
   // Auto-clear token messages
   useEffect(() => {
     if (tokenSuccess || tokenError) {
@@ -237,7 +230,7 @@ export default function ApiKeysPage() {
     }
   }, [hfTokenSuccess, hfTokenError]);
 
-  async function fetchKeys() {
+  const fetchKeys = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/v1/keys`, { headers: await getAuthHeaders() });
@@ -250,9 +243,9 @@ export default function ApiKeysPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  async function fetchTokenStatus() {
+  const fetchTokenStatus = useCallback(async () => {
     setTokenLoading(true);
     try {
       const res = await fetch(`${API_URL}/v1/github/token`, {
@@ -266,7 +259,7 @@ export default function ApiKeysPage() {
     } finally {
       setTokenLoading(false);
     }
-  }
+  }, []);
 
   async function saveToken() {
     if (!tokenInput.trim()) return;
@@ -325,7 +318,7 @@ export default function ApiKeysPage() {
   const hasToken = tokenInfo?.has_token ?? false;
 
   // HuggingFace token functions
-  async function fetchHfTokenStatus() {
+  const fetchHfTokenStatus = useCallback(async () => {
     setHfTokenLoading(true);
     try {
       const res = await fetch(`${API_URL}/v1/huggingface/token`, {
@@ -339,7 +332,14 @@ export default function ApiKeysPage() {
     } finally {
       setHfTokenLoading(false);
     }
-  }
+  }, []);
+
+  // Fetch API keys + token status on mount.
+  useEffect(() => {
+    void fetchKeys();
+    void fetchTokenStatus();
+    void fetchHfTokenStatus();
+  }, [fetchHfTokenStatus, fetchKeys, fetchTokenStatus]);
 
   async function saveHfToken() {
     if (!hfTokenInput.trim()) return;

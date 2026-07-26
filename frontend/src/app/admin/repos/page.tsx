@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import PageShell from "@/components/PageShell";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -105,16 +105,12 @@ export default function AdminReposPage() {
 
   // Redirect non-admins
   useEffect(() => {
-    if (!profileLoading && (!profile || !profile.is_admin)) {
+    if (!profileLoading && !profile?.is_admin) {
       router.replace("/overview");
     }
   }, [profile, profileLoading, router]);
 
-  useEffect(() => {
-    fetchRepos();
-  }, []);
-
-  async function fetchRepos() {
+  const fetchRepos = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/v1/admin/repositories`, {
@@ -129,7 +125,11 @@ export default function AdminReposPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void fetchRepos();
+  }, [fetchRepos]);
 
   async function hardDeleteRepo(repoId: string) {
     const previous = repos;
