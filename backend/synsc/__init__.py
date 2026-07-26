@@ -9,9 +9,9 @@ Provides deep context to AI agents through:
 - Citation, equation, and code snippet extraction from papers
 """
 
-__version__ = "1.2.0"
-__author__ = "InkVell"
+__version__ = "2.0.0"
+__author__ = "Aayam Bansal"
 
-from synsc.config import get_config, SynscConfig
+from synsc.config import SynscConfig, get_config
 
 __all__ = ["get_config", "SynscConfig", "__version__"]

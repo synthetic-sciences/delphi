@@ -6,13 +6,13 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    { name = "InkVell" }
+    { name = "Aayam Bansal" }
 ]
 keywords = ["mcp", "github", "research", "papers", "code-search", "ai", "semantic-search", "cursor", "arxiv", "huggingface", "datasets"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -108,6 +108,10 @@ dependencies = [
     "tree-sitter-ruby>=0.23.1",
     "tree-sitter-php>=0.24.1",
 ]
+
+[project.urls]
+Repository = "https://github.com/synthetic-sciences/delphi"
+Issues = "https://github.com/synthetic-sciences/delphi/issues"
 
 [project.optional-dependencies]
 dev = [
