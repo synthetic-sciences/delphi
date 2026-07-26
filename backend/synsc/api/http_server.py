@@ -3973,10 +3973,19 @@ _fastapi_app._mcp_session_mgr = _mcp_session_mgr  # type: ignore[attr-defined]
 app = _MCPMiddleware(_fastapi_app, _mcp_session_mgr)
 
 
-def run_http_server():
+def run_http_server(
+    host: str | None = None,
+    port: int | None = None,
+) -> None:
+    """Run the HTTP server, honoring explicit CLI bind overrides."""
     import uvicorn
+
     config = get_config()
-    uvicorn.run(app, host=config.api.host, port=config.api.port)
+    uvicorn.run(
+        app,
+        host=config.api.host if host is None else host,
+        port=config.api.port if port is None else port,
+    )
 
 
 if __name__ == "__main__":
