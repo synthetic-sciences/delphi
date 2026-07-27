@@ -91,6 +91,40 @@ curl -X POST \
 The child records both `parent_session_id` and `parent_revision_id`. It rebuilds
 the same deterministic manifest under current authorization.
 
+## CLI, Python, and MCP
+
+Set `SYNSC_API_URL` for a hosted deployment and keep the API key in
+`SYNSC_API_KEY`. The CLI uses the public HTTP contract:
+
+```bash
+synsc-context contexts list
+synsc-context contexts show SESSION_ID --revision 2
+synsc-context contexts create release-review \
+  --objective "Verify the release" \
+  --snapshot-id SNAPSHOT_ID \
+  --token-budget 8000
+synsc-context contexts handoff SESSION_ID \
+  --name deployment-follow-up \
+  --objective "Continue deployment verification" \
+  --note "Start from the approved release evidence"
+synsc-context contexts export SESSION_ID --json
+```
+
+The synchronous Python client exposes the same operations:
+
+```python
+from synsc.client import SynscClient
+
+with SynscClient() as client:
+    sessions = client.list_context_sessions()
+    exported = client.export_context_session(sessions[0]["session_id"])
+```
+
+MCP profiles other than `minimal` expose `context_session_create`,
+`context_session_list`, `context_session_get`, `context_session_revise`, and
+`context_session_handoff`. Each tool derives the owner from the authenticated
+request rather than accepting an owner identifier from the model.
+
 ## HTTP surface
 
 - `POST /v2/context-sessions`

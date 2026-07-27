@@ -4,6 +4,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_API = REPOSITORY_ROOT / "frontend" / "src" / "lib" / "api.ts"
+FRONTEND_CONFIG = REPOSITORY_ROOT / "frontend" / "next.config.mjs"
 
 
 def test_symbol_search_uses_registered_backend_route() -> None:
@@ -24,3 +25,9 @@ def test_paper_indexing_sends_a_supported_request_field() -> None:
 
     assert "JSON.stringify({ url: source })" in source
     assert "JSON.stringify({ source })" not in source
+
+
+def test_frontend_proxy_covers_v2_workspace_routes() -> None:
+    config = FRONTEND_CONFIG.read_text()
+
+    assert "{ source: '/v2/:path*'," in config

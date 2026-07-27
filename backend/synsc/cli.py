@@ -5,9 +5,12 @@ import json
 import logging
 import sys
 from collections.abc import Callable
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import structlog
+
+if TYPE_CHECKING:
+    from synsc.client import SynscClient
 
 
 def configure_logging() -> None:
@@ -237,6 +240,160 @@ def cmd_snapshots_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+def _api_client(args: argparse.Namespace) -> "SynscClient":
+    from synsc.client import SynscAPIError, SynscClient
+
+    try:
+        return SynscClient(base_url=getattr(args, "api_url", None))
+    except ValueError as exc:
+        raise SynscAPIError(0, str(exc)) from None
+
+
+def cmd_workspace(args: argparse.Namespace) -> int:
+    """Show one safe snapshot of providers, connectors, research, and contexts."""
+
+    with _api_client(args) as client:
+        workspace = client.workspace()
+    if args.json:
+        print(json.dumps(workspace, sort_keys=True))
+        return 0
+    print("RESOURCE\tCOUNT")
+    for key in (
+        "providers",
+        "connector_providers",
+        "connectors",
+        "research_sessions",
+        "context_sessions",
+    ):
+        print(f"{key}\t{len(workspace[key])}")
+    return 0
+
+
+def cmd_contexts_list(args: argparse.Namespace) -> int:
+    """List reproducible context sessions."""
+
+    with _api_client(args) as client:
+        sessions = client.list_context_sessions(
+            limit=args.limit,
+            include_expired=args.include_expired,
+        )
+    if args.json:
+        print(json.dumps({"sessions": sessions}, sort_keys=True))
+        return 0
+    print("SESSION\tSTATUS\tVERSION\tREVISION\tNAME")
+    for session in sessions:
+        print(
+            f"{session.get('session_id', '')}\t"
+            f"{session.get('status', '')}\t"
+            f"{session.get('write_version', '')}\t"
+            f"{session.get('current_revision', '')}\t"
+            f"{session.get('name', '')}"
+        )
+    return 0
+
+
+def cmd_contexts_show(args: argparse.Namespace) -> int:
+    """Show one authorized context revision."""
+
+    with _api_client(args) as client:
+        context = client.get_context_session(
+            args.session_id,
+            revision=args.revision,
+        )
+    print(json.dumps(context, sort_keys=True, indent=None if args.json else 2))
+    return 0
+
+
+def cmd_contexts_create(args: argparse.Namespace) -> int:
+    """Create a reproducible context session from pinned snapshots."""
+
+    with _api_client(args) as client:
+        context = client.create_context_session(
+            name=args.name,
+            objective=args.objective,
+            snapshot_ids=args.snapshot_ids or [],
+            token_budget=args.token_budget,
+            sharing_policy=args.sharing_policy,
+        )
+    print(json.dumps(context, sort_keys=True, indent=None if args.json else 2))
+    return 0
+
+
+def cmd_contexts_handoff(args: argparse.Namespace) -> int:
+    """Create a linked child context from the current parent revision."""
+
+    with _api_client(args) as client:
+        context = client.handoff_context_session(
+            args.session_id,
+            name=args.name,
+            objective=args.objective,
+            handoff_note=args.note,
+            token_budget=args.token_budget,
+            sharing_policy=args.sharing_policy,
+        )
+    print(json.dumps(context, sort_keys=True, indent=None if args.json else 2))
+    return 0
+
+
+def cmd_contexts_export(args: argparse.Namespace) -> int:
+    """Export one authorized context revision."""
+
+    with _api_client(args) as client:
+        context = client.export_context_session(
+            args.session_id,
+            revision=args.revision,
+        )
+    print(json.dumps(context, sort_keys=True, indent=None if args.json else 2))
+    return 0
+
+
+def cmd_connectors_list(args: argparse.Namespace) -> int:
+    """List encrypted connector sources without configuration secrets."""
+
+    with _api_client(args) as client:
+        connectors = client.list_connectors(
+            provider=args.provider,
+            limit=args.limit,
+        )
+    if args.json:
+        print(json.dumps({"connectors": connectors}, sort_keys=True))
+        return 0
+    print("SOURCE\tPROVIDER\tSTATUS\tNAME")
+    for source in connectors:
+        source_status = "enabled" if source.get("enabled", False) else "disabled"
+        print(
+            f"{source.get('source_id', '')}\t"
+            f"{source.get('provider', '')}\t"
+            f"{source_status}\t"
+            f"{source.get('display_name', '')}"
+        )
+    return 0
+
+
+def cmd_connectors_sync(args: argparse.Namespace) -> int:
+    """Queue an incremental connector synchronization."""
+
+    with _api_client(args) as client:
+        result = client.sync_connector(
+            args.source_id,
+            priority=args.priority,
+        )
+    print(json.dumps(result, sort_keys=True, indent=None if args.json else 2))
+    return 0
+
+
+def _add_api_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--api-url",
+        help="Context service URL (defaults to SYNSC_API_URL or localhost)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit deterministic machine-readable output",
+    )
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -381,6 +538,103 @@ def create_parser() -> argparse.ArgumentParser:
     snapshots_capture_parser.add_argument("--user-id")
     snapshots_capture_parser.add_argument("--json", action="store_true")
     snapshots_capture_parser.set_defaults(func=cmd_snapshots_capture)
+
+    workspace_parser = subparsers.add_parser(
+        "workspace",
+        help="Summarize providers, connectors, research, and contexts",
+    )
+    _add_api_options(workspace_parser)
+    workspace_parser.set_defaults(func=cmd_workspace)
+
+    contexts_parser = subparsers.add_parser(
+        "contexts",
+        help="Create, inspect, hand off, and export context sessions",
+    )
+    context_subparsers = contexts_parser.add_subparsers(
+        dest="context_command",
+        help="Context command",
+    )
+
+    contexts_list_parser = context_subparsers.add_parser("list")
+    contexts_list_parser.add_argument("--limit", type=int, default=100)
+    contexts_list_parser.add_argument(
+        "--include-expired",
+        action="store_true",
+    )
+    _add_api_options(contexts_list_parser)
+    contexts_list_parser.set_defaults(func=cmd_contexts_list)
+
+    contexts_show_parser = context_subparsers.add_parser("show")
+    contexts_show_parser.add_argument("session_id")
+    contexts_show_parser.add_argument("--revision", type=int)
+    _add_api_options(contexts_show_parser)
+    contexts_show_parser.set_defaults(func=cmd_contexts_show)
+
+    contexts_create_parser = context_subparsers.add_parser("create")
+    contexts_create_parser.add_argument("name")
+    contexts_create_parser.add_argument("--objective", required=True)
+    contexts_create_parser.add_argument(
+        "--snapshot-id",
+        action="append",
+        dest="snapshot_ids",
+    )
+    contexts_create_parser.add_argument(
+        "--token-budget",
+        type=int,
+        default=8_000,
+    )
+    contexts_create_parser.add_argument(
+        "--sharing-policy",
+        choices=("private", "shared"),
+        default="private",
+    )
+    _add_api_options(contexts_create_parser)
+    contexts_create_parser.set_defaults(func=cmd_contexts_create)
+
+    contexts_handoff_parser = context_subparsers.add_parser("handoff")
+    contexts_handoff_parser.add_argument("session_id")
+    contexts_handoff_parser.add_argument("--name", required=True)
+    contexts_handoff_parser.add_argument("--objective", required=True)
+    contexts_handoff_parser.add_argument("--note", required=True)
+    contexts_handoff_parser.add_argument("--token-budget", type=int)
+    contexts_handoff_parser.add_argument(
+        "--sharing-policy",
+        choices=("private", "shared"),
+        default="private",
+    )
+    _add_api_options(contexts_handoff_parser)
+    contexts_handoff_parser.set_defaults(func=cmd_contexts_handoff)
+
+    contexts_export_parser = context_subparsers.add_parser("export")
+    contexts_export_parser.add_argument("session_id")
+    contexts_export_parser.add_argument("--revision", type=int)
+    _add_api_options(contexts_export_parser)
+    contexts_export_parser.set_defaults(func=cmd_contexts_export)
+
+    connectors_parser = subparsers.add_parser(
+        "connectors",
+        help="List and synchronize connector sources",
+    )
+    connector_subparsers = connectors_parser.add_subparsers(
+        dest="connector_command",
+        help="Connector command",
+    )
+
+    connectors_list_parser = connector_subparsers.add_parser("list")
+    connectors_list_parser.add_argument("--provider")
+    connectors_list_parser.add_argument("--limit", type=int, default=100)
+    _add_api_options(connectors_list_parser)
+    connectors_list_parser.set_defaults(func=cmd_connectors_list)
+
+    connectors_sync_parser = connector_subparsers.add_parser("sync")
+    connectors_sync_parser.add_argument("source_id")
+    connectors_sync_parser.add_argument(
+        "--priority",
+        type=int,
+        default=0,
+    )
+    _add_api_options(connectors_sync_parser)
+    connectors_sync_parser.set_defaults(func=cmd_connectors_sync)
     
     return parser
 
@@ -402,7 +656,15 @@ def main() -> int:
     
     if hasattr(args, "func"):
         command = cast(Callable[[argparse.Namespace], int], args.func)
-        return command(args)
+        try:
+            return command(args)
+        except Exception as exc:
+            from synsc.client import SynscAPIError
+
+            if not isinstance(exc, SynscAPIError):
+                raise
+            print(f"Context service error: {exc}", file=sys.stderr)
+            return 1
     
     parser.print_help()
     return 0
