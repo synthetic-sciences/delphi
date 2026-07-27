@@ -8,11 +8,12 @@ vector to match the pgvector schema.
 
 import logging
 import os
-from typing import Protocol
+from typing import Protocol, cast
 
 import numpy as np
 
 from synsc.config import get_config
+from synsc.providers.registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
 
@@ -261,8 +262,41 @@ PaperEmbeddingGenerator = EmbeddingGenerator
 _embedding_generator: EmbeddingProvider | None = None
 
 
+def create_embedding_provider(provider: str | None = None) -> EmbeddingProvider:
+    """Construct the configured provider without caching it."""
+
+    configured_provider = (
+        provider
+        if provider is not None
+        else os.getenv("EMBEDDING_PROVIDER", "local")
+    ).strip().lower()
+    provider_names = {
+        "gemini": "gemini-embeddings",
+        "openai": "openai-embeddings",
+        "huggingface": "huggingface-embeddings",
+        "hf": "huggingface-embeddings",
+        "hash": "hash-embeddings",
+        "lite": "hash-embeddings",
+        "lexical": "hash-embeddings",
+        "local": "local-embeddings",
+        "": "local-embeddings",
+    }
+    provider_name = provider_names.get(configured_provider)
+    if provider_name is None:
+        logger.warning(
+            "Unknown EMBEDDING_PROVIDER=%r, falling back to local",
+            configured_provider,
+        )
+        provider_name = "local-embeddings"
+    logger.info("Initializing embedding provider: %s", provider_name)
+    return cast(
+        EmbeddingProvider,
+        get_provider_registry().create(provider_name),
+    )
+
+
 def get_embedding_generator() -> EmbeddingProvider:
-    """Get the global embedding generator.
+    """Get the process-wide embedding provider singleton.
 
     Dispatches based on the `EMBEDDING_PROVIDER` env var (`local` is the
     default). API-based providers require their key in the environment:
@@ -272,33 +306,8 @@ def get_embedding_generator() -> EmbeddingProvider:
     - `hash`/`lite`  → no model download (feature-hashed vectors; lite/CI mode)
     """
     global _embedding_generator
-    if _embedding_generator is not None:
-        return _embedding_generator
-
-    provider = os.getenv("EMBEDDING_PROVIDER", "local").strip().lower()
-
-    if provider == "gemini":
-        from synsc.embeddings.providers import GeminiEmbeddingProvider
-        logger.info("Initializing Gemini embedding provider")
-        _embedding_generator = GeminiEmbeddingProvider()
-    elif provider == "openai":
-        from synsc.embeddings.providers import OpenAIEmbeddingProvider
-        logger.info("Initializing OpenAI embedding provider")
-        _embedding_generator = OpenAIEmbeddingProvider()
-    elif provider in ("huggingface", "hf"):
-        from synsc.embeddings.providers import HuggingFaceEmbeddingProvider
-        logger.info("Initializing HuggingFace embedding provider")
-        _embedding_generator = HuggingFaceEmbeddingProvider()
-    elif provider in ("hash", "lite", "lexical"):
-        from synsc.embeddings.providers import HashEmbeddingProvider
-        logger.info("Initializing hash embedding provider (zero-download lite mode)")
-        _embedding_generator = HashEmbeddingProvider()
-    else:
-        if provider not in ("", "local"):
-            logger.warning("Unknown EMBEDDING_PROVIDER=%r, falling back to local", provider)
-        logger.info("Loading sentence-transformers model...")
-        _embedding_generator = EmbeddingGenerator()
-        logger.info("Embedding model ready")
+    if _embedding_generator is None:
+        _embedding_generator = create_embedding_provider()
     return _embedding_generator
 
 

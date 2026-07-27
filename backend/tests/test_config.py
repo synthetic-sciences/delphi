@@ -2,6 +2,8 @@
 
 import os
 
+import pytest
+
 
 def test_default_cors_is_localhost():
     """Default CORS origins should be localhost:3000, NOT wildcard."""
@@ -62,3 +64,53 @@ def test_version_is_semver():
     parts = __version__.split(".")
     assert len(parts) == 3
     assert all(p.isdigit() for p in parts)
+
+
+def test_provider_policy_defaults_to_local_only(monkeypatch):
+    from synsc.config import SynscConfig
+    from synsc.providers.policy import NetworkPolicy
+
+    monkeypatch.delenv("SYNSC_NETWORK_POLICY", raising=False)
+    monkeypatch.delenv("SYNSC_ALLOWED_REMOTE_PROVIDERS", raising=False)
+
+    config = SynscConfig.from_env()
+
+    assert config.provider_policy.network_policy is NetworkPolicy.LOCAL_ONLY
+    assert config.provider_policy.allowed_remote_providers == []
+
+
+def test_provider_policy_parses_and_deduplicates_allowlist(monkeypatch):
+    from synsc.config import SynscConfig
+    from synsc.providers.policy import NetworkPolicy
+
+    monkeypatch.setenv("SYNSC_NETWORK_POLICY", "allowlisted")
+    monkeypatch.setenv(
+        "SYNSC_ALLOWED_REMOTE_PROVIDERS",
+        " gemini-research,openai-embeddings,gemini-research ,,",
+    )
+
+    config = SynscConfig.from_env()
+
+    assert config.provider_policy.network_policy is NetworkPolicy.ALLOWLISTED
+    assert config.provider_policy.allowed_remote_providers == [
+        "gemini-research",
+        "openai-embeddings",
+    ]
+
+
+def test_provider_policy_rejects_invalid_network_policy(monkeypatch):
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("SYNSC_NETWORK_POLICY", "sometimes-online")
+
+    with pytest.raises(ValueError, match="SYNSC_NETWORK_POLICY"):
+        SynscConfig.from_env()
+
+
+def test_provider_policy_model_contains_no_credential_fields():
+    from synsc.config import ProviderPolicyConfig
+
+    policy = ProviderPolicyConfig()
+
+    assert "key" not in repr(policy).lower()
+    assert "credential" not in repr(policy).lower()

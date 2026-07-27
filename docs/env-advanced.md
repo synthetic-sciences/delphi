@@ -57,6 +57,27 @@ For interactive editing of the install-time choices (provider, model, keys, dash
 
 ---
 
+## Optional-provider network policy
+
+Provider-aware operations default to local-only execution. An allowlist limits
+which remote providers are eligible; it does not grant permission to send
+private source content. Source consent is evaluated separately for each call.
+Per-request policy options can only narrow this deployment ceiling. Requested
+provider allowlists are intersected with the configured allowlist and cannot
+add a provider the deployment has not approved.
+
+| Var | Default | Description |
+|---|---|---|
+| `SYNSC_NETWORK_POLICY` | `local_only` | Maximum network access: `offline`, `local_only`, `allowlisted`, or `online`. |
+| `SYNSC_ALLOWED_REMOTE_PROVIDERS` | — | Comma-separated provider names eligible under `allowlisted` policy. |
+
+Inspect capabilities with `synsc-context providers --json`. Evaluate a proposed
+call without executing it with `synsc-context policy-check`.
+Catalog health describes whether an adapter is implemented and available; each
+provider validates required credentials when it is constructed for a call.
+
+---
+
 ## Reranker (post-retrieval re-ranking)
 
 | Var | Default | Description |

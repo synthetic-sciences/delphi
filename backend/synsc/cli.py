@@ -1,6 +1,7 @@
 """CLI for Synsc Context - unified code and paper indexing."""
 
 import argparse
+import json
 import logging
 import sys
 from collections.abc import Callable
@@ -94,6 +95,64 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_providers(args: argparse.Namespace) -> int:
+    """List registered provider capabilities without constructing them."""
+
+    from synsc.services.provider_service import list_providers
+
+    providers = list_providers()
+    if args.json:
+        print(json.dumps({"providers": providers}, sort_keys=True))
+        return 0
+
+    print("NAME\tEXECUTION\tHEALTH\tCAPABILITIES")
+    for provider in providers:
+        capabilities = provider.get("capabilities", [])
+        capability_text = (
+            ",".join(str(item) for item in capabilities)
+            if isinstance(capabilities, list)
+            else ""
+        )
+        print(
+            f"{provider.get('name', '')}\t"
+            f"{provider.get('execution', '')}\t"
+            f"{provider.get('health', '')}\t"
+            f"{capability_text}"
+        )
+    return 0
+
+
+def cmd_policy_check(args: argparse.Namespace) -> int:
+    """Evaluate a prospective provider call without executing it."""
+
+    from synsc.services.provider_service import evaluate_egress
+
+    payload = {
+        "provider": args.provider,
+        "capability": args.capability,
+        "classification": args.classification,
+        "purpose": args.purpose,
+        "fields": args.fields,
+        "source_opt_in": args.source_opt_in,
+        "one_request_override": args.one_request_override,
+    }
+    if args.network is not None:
+        payload["network"] = args.network
+    if args.allowed_providers is not None:
+        payload["allowed_providers"] = args.allowed_providers
+    decision = evaluate_egress(payload)
+    allowed = decision.get("allowed") is True
+    if args.json:
+        print(json.dumps(decision, sort_keys=True))
+    else:
+        status = "ALLOWED" if allowed else "DENIED"
+        print(
+            f"{status}: {decision.get('reason_code', '')} — "
+            f"{decision.get('policy_basis', '')}"
+        )
+    return 0 if allowed else 2
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -127,6 +186,51 @@ def create_parser() -> argparse.ArgumentParser:
     worker_parser.add_argument("--max-workers", type=int, default=4, help="Max parallel threads")
     worker_parser.add_argument("--poll-interval", type=float, default=2.0, help="Seconds between job polls")
     worker_parser.set_defaults(func=cmd_worker)
+
+    providers_parser = subparsers.add_parser(
+        "providers",
+        help="List local and optional provider capabilities",
+    )
+    providers_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit deterministic machine-readable output",
+    )
+    providers_parser.set_defaults(func=cmd_providers)
+
+    policy_parser = subparsers.add_parser(
+        "policy-check",
+        help="Evaluate provider egress policy without executing a call",
+    )
+    policy_parser.add_argument("--provider", required=True)
+    policy_parser.add_argument("--capability", required=True)
+    policy_parser.add_argument(
+        "--network",
+        default=None,
+        choices=("offline", "local_only", "allowlisted", "online"),
+    )
+    policy_parser.add_argument("--classification", required=True)
+    policy_parser.add_argument("--purpose", required=True)
+    policy_parser.add_argument(
+        "--field",
+        action="append",
+        dest="fields",
+        required=True,
+    )
+    policy_parser.add_argument(
+        "--allowed-provider",
+        action="append",
+        dest="allowed_providers",
+        default=None,
+    )
+    policy_parser.add_argument("--source-opt-in", action="store_true")
+    policy_parser.add_argument("--one-request-override", action="store_true")
+    policy_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit deterministic machine-readable output",
+    )
+    policy_parser.set_defaults(func=cmd_policy_check)
     
     return parser
 

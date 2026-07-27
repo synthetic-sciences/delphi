@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Reques
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager as _SHSM
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
 from starlette.responses import Response
@@ -406,6 +406,22 @@ class IndexSourceRequest(BaseModel):
             "blocks the API process for many minutes."
         ),
     )
+
+
+class ProviderPolicyEvaluateRequest(BaseModel):
+    """Request to inspect one prospective provider egress decision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(..., min_length=1, max_length=200)
+    capability: str = Field(..., min_length=1, max_length=100)
+    network: str | None = Field(default=None, max_length=100)
+    classification: str = Field(..., min_length=1, max_length=100)
+    purpose: str = Field(..., min_length=1, max_length=500)
+    fields: list[str] = Field(..., min_length=1, max_length=20)
+    source_opt_in: bool = False
+    one_request_override: bool = False
+    allowed_providers: list[str] | None = Field(default=None, max_length=100)
 
 
 # =============================================================================
@@ -894,6 +910,39 @@ def create_app() -> FastAPI:
             "github_oauth_enabled": bool(github_client_id),
             "system_password_enabled": bool(os.getenv("SYSTEM_PASSWORD", "")),
         }
+
+    @app.get("/v2/providers", tags=["Providers"])
+    async def list_provider_capabilities(
+        _auth: AuthContext = Depends(verify_api_key),
+    ) -> dict[str, Any]:
+        """List safe provider metadata without constructing implementations."""
+
+        from synsc.services.provider_service import list_providers
+
+        return {"providers": list_providers()}
+
+    @app.post("/v2/policy/evaluate", tags=["Providers"])
+    async def evaluate_provider_policy(
+        body: ProviderPolicyEvaluateRequest,
+        _auth: AuthContext = Depends(verify_api_key),
+    ) -> dict[str, Any]:
+        """Evaluate policy without performing the provider call."""
+
+        from synsc.providers.registry import ProviderNotFoundError
+        from synsc.services.provider_service import evaluate_egress
+
+        try:
+            return evaluate_egress(body.model_dump(exclude_none=True))
+        except ProviderNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Provider not found.",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid provider policy request.",
+            ) from exc
 
     # ==========================================================================
     # Auth Endpoints
