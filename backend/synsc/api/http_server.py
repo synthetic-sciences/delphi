@@ -455,6 +455,37 @@ class SnapshotCaptureRequest(BaseModel):
     source_type: Literal["repo", "paper", "dataset", "docs"]
 
 
+class ConnectorCreateRequest(BaseModel):
+    """Create an encrypted incremental connector source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: str = Field(..., min_length=1, max_length=100)
+    display_name: str = Field(..., min_length=1, max_length=500)
+    external_ref: str = Field(..., min_length=1, max_length=4000)
+    configuration: dict[str, Any]
+    classification: Literal[
+        "public",
+        "unlisted",
+        "private",
+        "local_sensitive",
+    ] = "private"
+    schedule_seconds: int | None = Field(
+        default=None,
+        ge=60,
+        le=31_536_000,
+    )
+    enabled: bool = True
+
+
+class ConnectorSyncEnqueueRequest(BaseModel):
+    """Queue an immediate connector synchronization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    priority: int = Field(default=0, ge=-100, le=100)
+
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -784,8 +815,10 @@ def create_app() -> FastAPI:
         SEARCH_LIMIT,
         _rate_limit_exceeded_handler,
         limiter,
+        reset_route_limit_definitions,
     )
 
+    reset_route_limit_definitions()
     async def rate_limit_handler(request: Request, exc: Exception) -> Response:
         """Adapt SlowAPI's narrow exception handler to Starlette's contract."""
         if not isinstance(exc, RateLimitExceeded):
@@ -2831,6 +2864,190 @@ def create_app() -> FastAPI:
                 "status": session.status,
             }
         )
+
+    # ==========================================================================
+    # Connectors v2 — encrypted lifecycle and durable incremental sync
+    # ==========================================================================
+
+    @app.get("/v2/connectors/providers", tags=["Connectors"])
+    async def connector_providers(
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """List connector descriptors without constructing provider clients."""
+        from synsc.connectors.registry import (
+            get_connector_provider_registry,
+        )
+
+        providers = get_connector_provider_registry().list()
+        return SafeJSONResponse(
+            content={"providers": providers, "total": len(providers)}
+        )
+
+    @app.post("/v2/connectors", tags=["Connectors"])
+    @limiter.limit(INDEX_LIMIT)
+    async def connector_create(
+        request: Request,
+        body: ConnectorCreateRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Create a connector with encrypted configuration at rest."""
+        from synsc.connectors.service import get_connector_sync_service
+        from synsc.providers.contracts import ContentClassification
+
+        try:
+            source = await asyncio.to_thread(
+                get_connector_sync_service().create_source,
+                user_id=auth.user_id,
+                provider=body.provider,
+                display_name=body.display_name,
+                external_ref=body.external_ref,
+                configuration=body.configuration,
+                classification=ContentClassification(body.classification),
+                schedule_seconds=body.schedule_seconds,
+                enabled=body.enabled,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            logger.error(
+                "Connector source creation unavailable",
+                provider=body.provider,
+                error=type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Encrypted connector storage is unavailable.",
+            ) from exc
+        return SafeJSONResponse(
+            status_code=201,
+            content={"source": source},
+        )
+
+    @app.get("/v2/connectors", tags=["Connectors"])
+    async def connector_list(
+        provider: str | None = Query(default=None, max_length=100),
+        limit: int = Query(default=100, ge=1, le=500),
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """List connector sources visible to the authenticated caller."""
+        from synsc.connectors.service import get_connector_sync_service
+
+        sources = await asyncio.to_thread(
+            get_connector_sync_service().list_sources,
+            user_id=auth.user_id,
+            provider=provider,
+            limit=limit,
+        )
+        return SafeJSONResponse(
+            content={"sources": sources, "total": len(sources)}
+        )
+
+    @app.get("/v2/connectors/{source_id}", tags=["Connectors"])
+    async def connector_get(
+        source_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Return non-secret lifecycle state for one connector."""
+        from synsc.connectors.postgres import ConnectorSourceNotFoundError
+        from synsc.connectors.service import get_connector_sync_service
+
+        try:
+            source = await asyncio.to_thread(
+                get_connector_sync_service().get_source,
+                source_id,
+                user_id=auth.user_id,
+            )
+        except ConnectorSourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Connector source not found.",
+            ) from exc
+        return SafeJSONResponse(content={"source": source})
+
+    @app.delete("/v2/connectors/{source_id}", tags=["Connectors"])
+    async def connector_delete(
+        source_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Delete a connector source owned by the caller."""
+        from synsc.connectors.service import get_connector_sync_service
+
+        deleted = await asyncio.to_thread(
+            get_connector_sync_service().delete_source,
+            source_id,
+            user_id=auth.user_id,
+        )
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail="Connector source not found.",
+            )
+        return SafeJSONResponse(
+            content={"deleted": True, "source_id": source_id}
+        )
+
+    @app.post("/v2/connectors/{source_id}/sync", tags=["Connectors"])
+    @limiter.limit(INDEX_LIMIT)
+    async def connector_sync_enqueue(
+        request: Request,
+        source_id: str,
+        body: ConnectorSyncEnqueueRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Queue one durable sync; repeated requests reuse active work."""
+        from synsc.connectors.postgres import ConnectorSourceNotFoundError
+        from synsc.connectors.service import get_connector_sync_service
+
+        try:
+            job = await asyncio.to_thread(
+                get_connector_sync_service().enqueue_sync,
+                source_id,
+                user_id=auth.user_id,
+                priority=body.priority,
+            )
+        except ConnectorSourceNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Connector source not found.",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return SafeJSONResponse(
+            status_code=202,
+            content={
+                "job": job,
+                "status_url": (
+                    f"/v2/connector-sync-jobs/{job['job_id']}"
+                ),
+            },
+        )
+
+    @app.get(
+        "/v2/connector-sync-jobs/{job_id}",
+        tags=["Connectors"],
+    )
+    async def connector_sync_status(
+        job_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Return owner-scoped durable sync state."""
+        from synsc.connectors.postgres import (
+            ConnectorSyncJobNotFoundError,
+        )
+        from synsc.connectors.service import get_connector_sync_service
+
+        try:
+            job = await asyncio.to_thread(
+                get_connector_sync_service().get_job,
+                job_id,
+                user_id=auth.user_id,
+            )
+        except ConnectorSyncJobNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Connector sync job not found.",
+            ) from exc
+        return SafeJSONResponse(content={"job": job})
 
     # ==========================================================================
     # Sources (unified grep + read + tree surface)

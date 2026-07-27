@@ -266,6 +266,12 @@ class PostgresSnapshotStore:
             "user_documentation_sources",
             "docs_id",
         ),
+        "connector": (
+            "connector_sources",
+            "source_id",
+            "user_connector_sources",
+            "source_id",
+        ),
     }
 
     @classmethod
@@ -500,6 +506,19 @@ class PostgresSnapshotStore:
                    ) AS has_link
             FROM documentation_sources d
             WHERE CAST(d.docs_id AS TEXT) = :source_id
+        """,
+        SnapshotSourceType.CONNECTOR: """
+            SELECT c.is_public, c.classification AS visibility,
+                   CAST(c.indexed_by AS TEXT) AS owner_id,
+                   EXISTS (
+                       SELECT 1
+                       FROM user_connector_sources access
+                       WHERE CAST(access.user_id AS TEXT) = :user_id
+                         AND CAST(access.source_id AS TEXT)
+                             = CAST(c.source_id AS TEXT)
+                   ) AS has_link
+            FROM connector_sources c
+            WHERE CAST(c.source_id AS TEXT) = :source_id
         """,
     }
 

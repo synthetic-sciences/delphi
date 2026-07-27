@@ -21,6 +21,7 @@ class SnapshotSourceType(str, Enum):
     PAPER = "paper"
     DATASET = "dataset"
     DOCUMENTATION = "docs"
+    CONNECTOR = "connector"
 
 
 def _copy_json(value: Any) -> Any:

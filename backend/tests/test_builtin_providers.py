@@ -50,6 +50,7 @@ def test_builtin_catalog_loads_without_remote_credentials(monkeypatch) -> None:
         "huggingface-embeddings",
         "gemini-research",
         "firecrawl-web",
+        "local-folder",
         "slack-connector",
         "gdrive-connector",
         "spreadsheet-connector",
@@ -72,6 +73,10 @@ def test_builtin_catalog_loads_without_remote_credentials(monkeypatch) -> None:
     )
     assert descriptors["firecrawl-web"].supports_cancellation is True
     assert descriptors["firecrawl-web"].supports_retry is True
+    assert descriptors["local-folder"].execution is ExecutionLocation.LOCAL
+    assert descriptors["local-folder"].capabilities == frozenset(
+        {ProviderCapability.CONNECTOR, ProviderCapability.SYNC}
+    )
 
 
 def test_builtin_catalog_registration_does_not_construct_factories() -> None:

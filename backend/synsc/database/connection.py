@@ -20,7 +20,7 @@ logger = structlog.get_logger(__name__)
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
-EXPECTED_ALEMBIC_REVISION = "016_durable_research_jobs"
+EXPECTED_ALEMBIC_REVISION = "017_connector_sync"
 
 
 def get_engine() -> Engine:

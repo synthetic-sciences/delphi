@@ -39,6 +39,7 @@ from synsc.embeddings.generator import get_embedding_generator
 from synsc.indexing.vector_store import get_vector_store
 from synsc.parsing.registry import get_parser_registry
 from synsc.services.job_queue_service import get_job_queue_service
+from synsc.workers.connector_worker import ConnectorSyncRunner
 from synsc.workers.research_worker import ResearchJobRunner
 
 logger = structlog.get_logger(__name__)
@@ -94,6 +95,7 @@ class IndexingWorker:
         self.embedding_generator = get_embedding_generator()
         self.vector_store = get_vector_store()
         self.research_runner = ResearchJobRunner()
+        self.connector_runner = ConnectorSyncRunner()
         self.running = True
         
         # Register signal handlers for graceful shutdown
@@ -160,6 +162,21 @@ class IndexingWorker:
                 name=f"research-worker-{self.worker_id}",
             )
             research_thread.start()
+
+        connector_thread: threading.Thread | None = None
+        connector_runner = getattr(self, "connector_runner", None)
+        if connector_runner is not None:
+            connector_thread = threading.Thread(
+                target=connector_runner.run_forever,
+                kwargs={
+                    "worker_id": f"{self.worker_id}-connectors",
+                    "should_continue": lambda: self.running,
+                    "poll_interval": poll_interval,
+                },
+                daemon=True,
+                name=f"connector-worker-{self.worker_id}",
+            )
+            connector_thread.start()
 
         try:
             recovery = self.job_queue.recover_stale_jobs()
@@ -237,6 +254,8 @@ class IndexingWorker:
         
         if research_thread is not None:
             research_thread.join(timeout=2.0)
+        if connector_thread is not None:
+            connector_thread.join(timeout=2.0)
         logger.info("Worker stopped", worker_id=self.worker_id)
     
     def _process_job(self, job: IndexingJob) -> None:

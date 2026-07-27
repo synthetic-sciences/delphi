@@ -64,6 +64,13 @@ backend/
     ├── embeddings/
     │   └── generator.py    sentence-transformers singleton (all-mpnet-base-v2 by default)
     │
+    ├── connectors/         Incremental provider contracts + durable sync store
+    │   ├── contracts.py    Bounded records, cursors, deadlines, cancellation
+    │   ├── registry.py     Lazy local/optional connector registration
+    │   ├── local_folder.py Built-in network-free directory adapter
+    │   ├── postgres.py     Encrypted state, leases, atomic snapshot activation
+    │   └── service.py      Lifecycle and worker orchestration
+    │
     ├── core/               Domain-agnostic helpers
     │   ├── arxiv_client.py
     │   ├── chunker.py          Code chunker
@@ -106,6 +113,7 @@ backend/
     │
     └── workers/
         ├── indexing_worker.py    Composite background worker process
+        ├── connector_worker.py   Connector scheduler + leased page polling
         └── research_worker.py    Leased research execution + recovery
 ```
 
@@ -117,7 +125,7 @@ backend/
 | `synsc-context-http` | `synsc.api.http_server:run_http_server` | FastAPI server (default port 8742) |
 | `synsc-context-mcp` | `synsc.api.mcp_server:run_server` | Standalone MCP server (stdio) |
 | `synsc-context-proxy` | `synsc.mcp_stdio_proxy:main` | Stdio-to-HTTP proxy for `uvx` users |
-| `synsc-context-worker` | `synsc.workers.indexing_worker:run_worker` | Background source-indexing and research runner |
+| `synsc-context-worker` | `synsc.workers.indexing_worker:run_worker` | Background source-indexing, connector-sync, and research runner |
 
 ### Backend-internal dependency flow
 
@@ -205,7 +213,7 @@ Flags: `--no-worker`, `--no-frontend`, `--docker` (full compose), `--help`.
 |---|---|---|
 | `postgres` | pgvector/pgvector:pg16 | Mounts `./database/supabase/setup_local.sql` on init |
 | `api` | `./backend` (target `api`) | FastAPI + alembic upgrade head on boot |
-| `worker` | `./backend` (target `worker`) | Background source-indexing and durable-research runner |
+| `worker` | `./backend` (target `worker`) | Background source-indexing, connector-sync, and durable-research runner |
 | `frontend` | `./frontend` | Next.js dev server |
 
 `backend/Dockerfile` has two targets (`api`, `worker`). Both copy `synsc/`, `alembic/`, `alembic.ini`, `pyproject.toml`, `uv.lock`, `README.md` into the image and pre-download the sentence-transformers model during the build stage.
