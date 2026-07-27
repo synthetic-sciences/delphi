@@ -162,7 +162,7 @@ class LocalFolderConnector:
         candidate = Path(raw_path).expanduser()
         if not candidate.is_absolute():
             raise ValueError("local folder path must be absolute")
-        root = Path(os.path.abspath(candidate))
+        root = candidate.resolve()
         if not any(
             root == allowed or root.is_relative_to(allowed)
             for allowed in self.allowed_roots

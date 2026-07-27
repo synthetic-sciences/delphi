@@ -141,6 +141,24 @@ def test_sync_rejects_configured_root_swapped_for_symlink(
         connector.sync(_request(configured))
 
 
+def test_sync_accepts_matching_symlinked_ancestor_alias(
+    tmp_path: Path,
+) -> None:
+    physical = tmp_path / "physical"
+    configured = physical / "configured"
+    configured.mkdir(parents=True)
+    (configured / "safe.txt").write_text("safe", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(physical, target_is_directory=True)
+    connector = _connector(alias)
+
+    result = connector.sync(_request(alias / "configured"))
+
+    assert [(record.locator, record.content) for record in result.records] == [
+        ("safe.txt", "safe")
+    ]
+
+
 def test_sync_requires_an_existing_directory(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="directory"):
         _connector(tmp_path).sync(_request(tmp_path / "missing"))
