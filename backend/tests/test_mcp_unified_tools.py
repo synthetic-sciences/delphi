@@ -197,3 +197,32 @@ def test_mcp_read_source_unsupported_type(monkeypatch):
     assert out["success"] is False
     assert out["error_code"] == "invalid_input"
     assert "unsupported source_type" in out["message"]
+
+
+def test_mcp_read_source_connector_uses_current_snapshot(monkeypatch):
+    _isolate_mcp_auth(monkeypatch)
+    import synsc.api.mcp_server as mcp_mod
+    from synsc.api.mcp_server import create_server
+    from synsc.services import source_service
+
+    mcp_mod._current_user_id.set("u1")
+    monkeypatch.setattr(
+        source_service,
+        "read_connector_source",
+        lambda source_id, **_kwargs: {
+            "source_id": source_id,
+            "source_type": "connector",
+            "snapshot_id": "snapshot-1",
+            "items": [{"locator": "notes.md", "content": "connector body"}],
+            "count": 1,
+        },
+    )
+
+    out = create_server()._tool_manager._tools["read_source"].fn(
+        source_id="source-1",
+        source_type="connector",
+    )
+
+    assert out["success"] is True
+    assert out["snapshot_id"] == "snapshot-1"
+    assert out["items"][0]["content"] == "connector body"

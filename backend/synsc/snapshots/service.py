@@ -149,10 +149,12 @@ class SnapshotStore(Protocol):
     def list_items(
         self,
         session: Session,
-        snapshot_id: str,
+        snapshot: SourceSnapshot,
         *,
+        user_id: str | None,
         offset: int,
         limit: int,
+        locator_prefix: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
     def search_items(
@@ -265,6 +267,12 @@ class PostgresSnapshotStore:
             "docs_id",
             "user_documentation_sources",
             "docs_id",
+        ),
+        "connector": (
+            "connector_sources",
+            "source_id",
+            "user_connector_sources",
+            "source_id",
         ),
     }
 
@@ -500,6 +508,19 @@ class PostgresSnapshotStore:
                    ) AS has_link
             FROM documentation_sources d
             WHERE CAST(d.docs_id AS TEXT) = :source_id
+        """,
+        SnapshotSourceType.CONNECTOR: """
+            SELECT c.is_public, c.classification AS visibility,
+                   CAST(c.indexed_by AS TEXT) AS owner_id,
+                   EXISTS (
+                       SELECT 1
+                       FROM user_connector_sources access
+                       WHERE CAST(access.user_id AS TEXT) = :user_id
+                         AND CAST(access.source_id AS TEXT)
+                             = CAST(c.source_id AS TEXT)
+                   ) AS has_link
+            FROM connector_sources c
+            WHERE CAST(c.source_id AS TEXT) = :source_id
         """,
     }
 
@@ -1159,26 +1180,82 @@ class PostgresSnapshotStore:
     def list_items(
         self,
         session: Session,
-        snapshot_id: str,
+        snapshot: SourceSnapshot,
         *,
+        user_id: str | None,
         offset: int,
         limit: int,
+        locator_prefix: str | None = None,
     ) -> list[dict[str, Any]]:
+        connector_acl = ""
+        if snapshot.source_type is SnapshotSourceType.CONNECTOR:
+            connector_acl = """
+              AND EXISTS (
+                  SELECT 1
+                  FROM connector_record_access access
+                  WHERE access.source_id = :source_id
+                    AND access.external_id_hash = encode(
+                        digest(
+                            COALESCE(
+                                source_snapshot_items.metadata
+                                    ->> 'connector_external_id',
+                                ''
+                            ),
+                            'sha256'
+                        ),
+                        'hex'
+                    )
+                    AND access.revoked IS FALSE
+                    AND (
+                        access.principals IS NULL
+                        OR jsonb_exists(access.principals, '*')
+                        OR (
+                            :user_id IS NOT NULL
+                            AND jsonb_exists(
+                                access.principals,
+                                CAST(:user_id AS TEXT)
+                            )
+                        )
+                    )
+              )
+            """
+        locator_filter = ""
+        if locator_prefix is not None:
+            locator_filter = """
+              AND (
+                  BTRIM(source_snapshot_items.locator, '/')
+                      = :locator_prefix
+                  OR LEFT(
+                      BTRIM(source_snapshot_items.locator, '/'),
+                      LENGTH(:locator_descendant)
+                  ) = :locator_descendant
+              )
+            """
         rows = session.execute(
             text(
-                """
+                f"""
                 SELECT ordinal, origin_item_id, locator, content_hash,
                        content, token_count, metadata
                 FROM source_snapshot_items
                 WHERE snapshot_id = :snapshot_id
+                {connector_acl}
+                {locator_filter}
                 ORDER BY ordinal
                 OFFSET :offset LIMIT :limit
                 """
             ),
             {
-                "snapshot_id": snapshot_id,
+                "snapshot_id": snapshot.snapshot_id,
+                "source_id": snapshot.source_id,
+                "user_id": user_id,
                 "offset": offset,
                 "limit": limit,
+                "locator_prefix": locator_prefix,
+                "locator_descendant": (
+                    f"{locator_prefix}/"
+                    if locator_prefix is not None
+                    else None
+                ),
             },
         ).mappings().all()
         return [
@@ -1224,6 +1301,39 @@ class PostgresSnapshotStore:
         access_predicate = self._snapshot_access_predicate(
             source_types=source_types,
         )
+        connector_item_acl = """
+              AND (
+                  snapshot.source_type <> 'connector'
+                  OR EXISTS (
+                      SELECT 1
+                      FROM connector_record_access access
+                      WHERE access.source_id = snapshot.source_id
+                        AND access.external_id_hash = encode(
+                            digest(
+                                COALESCE(
+                                    item.metadata
+                                        ->> 'connector_external_id',
+                                    ''
+                                ),
+                                'sha256'
+                            ),
+                            'hex'
+                        )
+                        AND access.revoked IS FALSE
+                        AND (
+                            access.principals IS NULL
+                            OR jsonb_exists(access.principals, '*')
+                            OR (
+                                :user_id IS NOT NULL
+                                AND jsonb_exists(
+                                    access.principals,
+                                    CAST(:user_id AS TEXT)
+                                )
+                            )
+                        )
+                  )
+              )
+        """
         statement = text(
             f"""
             WITH search_query AS (
@@ -1255,6 +1365,7 @@ class PostgresSnapshotStore:
             WHERE item.snapshot_id IN :snapshot_ids
               AND snapshot.sealed_at IS NOT NULL
               AND {access_predicate}
+              {connector_item_acl}
               AND (
                   to_tsvector('simple', item.content) @@ search_query.value
                   OR strpos(lower(item.content), lower(:query)) > 0
@@ -1393,11 +1504,14 @@ class SnapshotService:
         include_items: bool = False,
         item_offset: int = 0,
         item_limit: int = 100,
+        locator_prefix: str | None = None,
     ) -> dict[str, Any]:
         if item_offset < 0:
             raise ValueError("item_offset must be non-negative")
         if not 1 <= item_limit <= 500:
             raise ValueError("item_limit must be between 1 and 500")
+        if locator_prefix is not None and not locator_prefix.strip():
+            raise ValueError("locator_prefix must not be empty")
         with self.session_factory() as session:
             snapshot = self.store.get_snapshot(session, snapshot_id)
             if snapshot is None:
@@ -1408,9 +1522,11 @@ class SnapshotService:
             if include_items:
                 result["items"] = self.store.list_items(
                     session,
-                    snapshot_id,
+                    snapshot,
+                    user_id=user_id,
                     offset=item_offset,
                     limit=item_limit,
+                    locator_prefix=locator_prefix,
                 )
                 result["item_offset"] = item_offset
                 result["item_limit"] = item_limit

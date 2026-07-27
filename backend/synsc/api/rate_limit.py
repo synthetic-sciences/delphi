@@ -4,6 +4,7 @@ Uses slowapi (built on limits) with per-user or per-IP key extraction.
 """
 
 import os
+from typing import Any, cast
 
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -48,6 +49,22 @@ limiter = Limiter(
     enabled=is_rate_limiting_enabled(),
     storage_uri="memory://",
 )
+
+
+def reset_route_limit_definitions() -> None:
+    """Reset factory-registered rules without clearing live request counters.
+
+    SlowAPI keys route definitions by ``module.function`` and appends a new
+    rule every time a decorated function is defined. Our FastAPI application
+    factory intentionally defines routes inside ``create_app``; without this
+    reset, constructing another app multiplies each request's rate-limit cost.
+    All factory instances expose the same route names and limits, so replacing
+    the definitions is safe while preserving the backing limiter's counters.
+    """
+    internal = cast(Any, limiter)
+    internal._route_limits.clear()
+    internal._dynamic_route_limits.clear()
+    internal._Limiter__marked_for_limiting.clear()
 
 # Tier-specific limit strings (importable by endpoints)
 AUTH_LIMIT = os.getenv("SYNSC_RATE_LIMIT_AUTH", "10/minute")

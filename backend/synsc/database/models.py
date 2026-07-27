@@ -17,6 +17,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -1464,6 +1465,206 @@ class ResearchMessage(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     citations: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class ConnectorSource(Base):
+    """Encrypted connector configuration and its latest durable checkpoint."""
+
+    __tablename__ = "connector_sources"
+    __table_args__ = (
+        CheckConstraint(
+            "user_id = indexed_by",
+            name="ck_connector_sources_owner_identity",
+        ),
+        CheckConstraint(
+            "is_public = (classification = 'public')",
+            name="ck_connector_sources_public_classification",
+        ),
+        Index("idx_connector_sources_user", "user_id", "created_at"),
+        Index("idx_connector_sources_provider", "provider"),
+        Index("idx_connector_sources_due", "enabled", "next_sync_at"),
+    )
+
+    source_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    indexed_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    is_public: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    external_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    classification: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="private"
+    )
+    encrypted_config: Mapped[str] = mapped_column(Text, nullable=False)
+    encrypted_cursor: Mapped[str | None] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    schedule_seconds: Mapped[int | None] = mapped_column(Integer)
+    next_sync_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_snapshot_id: Mapped[str | None] = mapped_column(String(36))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return lifecycle metadata without encrypted secrets or cursors."""
+
+        return {
+            "source_id": self.source_id,
+            "source_type": "connector",
+            "provider": self.provider,
+            "display_name": self.display_name,
+            "external_ref": self.external_ref,
+            "classification": self.classification,
+            "enabled": self.enabled,
+            "schedule_seconds": self.schedule_seconds,
+            "next_sync_at": (
+                self.next_sync_at.isoformat() if self.next_sync_at else None
+            ),
+            "last_synced_at": (
+                self.last_synced_at.isoformat()
+                if self.last_synced_at
+                else None
+            ),
+            "last_snapshot_id": self.last_snapshot_id,
+            "last_error": self.last_error,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
+            "updated_at": (
+                self.updated_at.isoformat() if self.updated_at else None
+            ),
+        }
+
+
+class UserConnectorSource(Base):
+    """Access link for a connector source."""
+
+    __tablename__ = "user_connector_sources"
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("connector_sources.source_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+
+
+class ConnectorRecordAccess(Base):
+    """Current per-record authorization used across immutable snapshots."""
+
+    __tablename__ = "connector_record_access"
+    __table_args__ = (
+        Index(
+            "idx_connector_record_access_source",
+            "source_id",
+            "revoked",
+        ),
+    )
+
+    source_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("connector_sources.source_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    external_id_hash: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    principals: Mapped[list[str] | None] = mapped_column(JSONB)
+    revoked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
+class ConnectorSyncJob(Base):
+    """Durable, leased work item for one bounded connector sync page."""
+
+    __tablename__ = "connector_sync_jobs"
+    __table_args__ = (
+        Index("idx_connector_sync_jobs_status", "status", "priority"),
+        Index("idx_connector_sync_jobs_source", "source_id", "created_at"),
+        Index("idx_connector_sync_jobs_user", "user_id", "created_at"),
+    )
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    source_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("connector_sources.source_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending"
+    )
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_id: Mapped[str | None] = mapped_column(String(100))
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    records_changed: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    result_snapshot_id: Mapped[str | None] = mapped_column(String(36))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "source_id": self.source_id,
+            "status": self.status,
+            "priority": self.priority,
+            "attempt_count": self.attempt_count,
+            "max_attempts": self.max_attempts,
+            "records_changed": self.records_changed,
+            "result_snapshot_id": self.result_snapshot_id,
+            "error_message": self.error_message,
+            "created_at": (
+                self.created_at.isoformat() if self.created_at else None
+            ),
+            "started_at": (
+                self.started_at.isoformat() if self.started_at else None
+            ),
+            "completed_at": (
+                self.completed_at.isoformat() if self.completed_at else None
+            ),
+        }
 
 
 class ContextBlob(Base):

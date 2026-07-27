@@ -2205,6 +2205,152 @@ Provides deep context to AI agents through:
         )
         return {"success": True, "sources": sources, "total": len(sources)}
 
+    @_tool_in("sources")
+    def connector_create(
+        provider: str,
+        display_name: str,
+        external_ref: str,
+        configuration: dict[str, Any],
+        classification: str = "private",
+        schedule_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        """Create an encrypted incremental connector source.
+
+        ``local-folder`` is built in and stays entirely on this machine.
+        Configuration and checkpoints are encrypted at rest and never
+        returned by this tool.
+        """
+        from synsc.connectors.service import get_connector_sync_service
+        from synsc.providers.contracts import ContentClassification
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        try:
+            source = get_connector_sync_service().create_source(
+                user_id=user_id,
+                provider=provider,
+                display_name=display_name,
+                external_ref=external_ref,
+                configuration=configuration,
+                classification=ContentClassification(classification),
+                schedule_seconds=schedule_seconds,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        except RuntimeError:
+            return {
+                "success": False,
+                "error_code": "connector_storage_unavailable",
+                "message": "Encrypted connector storage is unavailable.",
+            }
+        return {"success": True, "source": source}
+
+    @_tool_in("sources")
+    def connector_list(
+        provider: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """List the caller's connector sources without exposing secrets."""
+        from synsc.connectors.service import get_connector_sync_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        try:
+            sources = get_connector_sync_service().list_sources(
+                user_id=user_id,
+                provider=provider,
+                limit=limit,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        return {"success": True, "sources": sources, "total": len(sources)}
+
+    @_tool_in("sources")
+    def connector_sync(
+        source_id: str,
+        priority: int = 0,
+    ) -> dict[str, Any]:
+        """Queue an incremental sync and return its durable job id."""
+        from synsc.connectors.postgres import ConnectorSourceNotFoundError
+        from synsc.connectors.service import get_connector_sync_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        try:
+            job = get_connector_sync_service().enqueue_sync(
+                source_id,
+                user_id=user_id,
+                priority=priority,
+            )
+        except ConnectorSourceNotFoundError:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "Connector source not found.",
+            }
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_state",
+                "message": str(exc),
+            }
+        return {"success": True, "job": job}
+
+    @_tool_in("sources")
+    def connector_status(job_id: str) -> dict[str, Any]:
+        """Inspect one owner-scoped connector sync job."""
+        from synsc.connectors.postgres import (
+            ConnectorSyncJobNotFoundError,
+        )
+        from synsc.connectors.service import get_connector_sync_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        try:
+            job = get_connector_sync_service().get_job(
+                job_id,
+                user_id=user_id,
+            )
+        except ConnectorSyncJobNotFoundError:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "Connector sync job not found.",
+            }
+        return {"success": True, "job": job}
+
+    @_tool_in("sources")
+    def connector_delete(source_id: str) -> dict[str, Any]:
+        """Delete one connector source owned by the caller."""
+        from synsc.connectors.service import get_connector_sync_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        deleted = get_connector_sync_service().delete_source(
+            source_id,
+            user_id=user_id,
+        )
+        if not deleted:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "Connector source not found.",
+            }
+        return {"success": True, "deleted": True, "source_id": source_id}
+
     def _do_read(
         source_id: str,
         source_type: str = "paper",
@@ -2363,6 +2509,50 @@ Provides deep context to AI agents through:
                 "count": len(chunks),
             }
 
+        if source_type == "connector":
+            from synsc.services.source_service import read_connector_source
+            from synsc.snapshots.service import (
+                SnapshotAccessDeniedError,
+                SnapshotNotFoundError,
+            )
+
+            if user_id is None:
+                return {
+                    "success": False,
+                    "error_code": "auth_required",
+                    "message": "connector reads require authentication",
+                }
+            try:
+                result = read_connector_source(
+                    source_id,
+                    user_id=user_id,
+                    path=path,
+                    item_limit=500,
+                )
+            except (SnapshotAccessDeniedError, SnapshotNotFoundError):
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "message": "connector source not found",
+                }
+            items = filter_results_by_topic(
+                list(result.get("items") or []),
+                topic,
+                text_keys=("content", "locator"),
+            )
+            if effective_tokens:
+                items = budget_results(
+                    items,
+                    effective_tokens,
+                    text_key="content",
+                )
+            return {
+                "success": True,
+                **result,
+                "items": items,
+                "count": len(items),
+            }
+
         return {
             "success": False,
             "error_code": "invalid_input",
@@ -2385,6 +2575,7 @@ Provides deep context to AI agents through:
         - paper: supports ``section=`` (canonical token or regex).
         - repo:  requires ``path=``; optional ``start_line``/``end_line``.
         - docs:  whole-docs read; pair with ``topic`` to narrow.
+        - connector: reads the current immutable snapshot; ``path`` narrows.
 
         Args:
             source_id: Paper / repo / docs ID.

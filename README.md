@@ -154,6 +154,17 @@ cloud credential at startup, and cannot run unless both deployment policy and
 the individual request permit public egress. See
 [`docs/env-advanced.md`](docs/env-advanced.md#optional-provider-network-policy).
 
+### Incremental connectors
+
+Connectors ingest changing sources through a durable, local-first sync queue.
+Configuration and checkpoints are encrypted, changes are bounded and
+idempotent, deletions and permission revocations become tombstones, and a
+cursor advances only in the transaction that activates its validated immutable
+snapshot. The built-in `local-folder` adapter never uses the network; hosted
+adapters remain optional. Local-folder access is denied until the operator sets
+`SYNSC_LOCAL_CONNECTOR_ALLOWED_ROOTS`. See
+[`docs/connectors.md`](docs/connectors.md).
+
 ---
 
 ## MCP Tools

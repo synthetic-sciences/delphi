@@ -48,6 +48,12 @@ def _get_dataset_service(user_id: str) -> DatasetService:
     return DatasetService(user_id=user_id)
 
 
+def _get_snapshot_service() -> Any:
+    from synsc.snapshots.service import SnapshotService
+
+    return SnapshotService()
+
+
 def _norm_code_hit(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_type": "repo",
@@ -110,6 +116,21 @@ def _norm_docs_hit(r: dict[str, Any]) -> dict[str, Any]:
             "docs_url": r.get("docs_url"),
             "display_name": r.get("display_name"),
         },
+    }
+
+
+def _norm_connector_hit(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source_type": "connector",
+        "source_id": r.get("source_id", ""),
+        "snapshot_id": r.get("snapshot_id", ""),
+        "chunk_id": r.get("origin_item_id", ""),
+        "text": r.get("content", ""),
+        "score": float(r.get("score", 0.0)),
+        "path": r.get("locator"),
+        "line_no": None,
+        "trust_score": 0.0,
+        "metadata": r.get("metadata", {}),
     }
 
 
@@ -300,7 +321,7 @@ def unified_retrieve(
     types = (
         set(source_types)
         if source_types is not None
-        else {"repo", "paper", "dataset", "docs"}
+        else {"repo", "paper", "dataset", "docs", "connector"}
     )
     if source_bindings:
         types.intersection_update(typed_ids)
@@ -369,6 +390,61 @@ def unified_retrieve(
                 hits.append(_norm_docs_hit(r))
         except Exception as exc:
             logger.warning("unified_retrieve: docs branch failed", error=str(exc))
+
+    if "connector" in types and user_id and not stopped():
+        try:
+            from synsc.connectors.service import get_connector_sync_service
+            from synsc.snapshots.contracts import SnapshotSourceType
+
+            connector_ids = typed_ids.get("connector")
+            if connector_ids is None:
+                if source_ids:
+                    connector_ids = source_ids
+                else:
+                    connector_ids = [
+                        str(item["source_id"])
+                        for item in get_connector_sync_service().list_sources(
+                            user_id=user_id,
+                            provider=None,
+                            limit=500,
+                        )
+                        if item.get("last_snapshot_id")
+                    ]
+            snapshots = _get_snapshot_service()
+            resolved_pairs = [
+                (
+                    source_id,
+                    snapshots.resolve(
+                        SnapshotSourceType.CONNECTOR,
+                        source_id,
+                        user_id=user_id,
+                    ),
+                )
+                for source_id in connector_ids
+            ]
+            for offset in range(0, len(resolved_pairs), 100):
+                batch = resolved_pairs[offset : offset + 100]
+                snapshot_ids = tuple(
+                    str(item["snapshot_id"]) for _, item in batch
+                )
+                results = snapshots.search(
+                    snapshot_ids,
+                    query,
+                    user_id=user_id,
+                    limit=k,
+                    expected_sources=tuple(
+                        ("connector", source_id)
+                        for source_id, _ in batch
+                    ),
+                    timeout_ms=remaining_ms(),
+                    cancellation=token,
+                )
+                hits.extend(_norm_connector_hit(item) for item in results)
+        except Exception as exc:
+            logger.warning(
+                "unified_retrieve: connector branch failed",
+                error=str(exc),
+            )
 
     # Apply per-source trust boost so high-authority sources tie-break above
     # low-authority ones at the same retrieval score. Boost is small (max
@@ -817,12 +893,18 @@ def unified_search(
         )
 
     resolved_ids: list[str] | None = None
+    resolved_bindings: list[tuple[str, str]] | None = None
     if source_ids:
         resolved_ids = []
+        resolved_bindings = []
         for raw in source_ids:
             try:
-                uid, _stype = resolve_source_id(raw, user_id=user_id)
+                uid, resolved_type = resolve_source_id(
+                    raw,
+                    user_id=user_id,
+                )
                 resolved_ids.append(uid)
+                resolved_bindings.append((resolved_type, uid))
             except ValueError as exc:
                 logger.warning(
                     "unified_search: dropping unresolvable source_id",
@@ -834,6 +916,7 @@ def unified_search(
         query=query,
         source_ids=resolved_ids,
         source_types=source_types,
+        source_bindings=resolved_bindings,
         k=max(k * 2, 20),
         user_id=user_id,
     )
@@ -1283,7 +1366,11 @@ def list_sources(
     user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """List indexed sources, optionally filtered by type."""
-    wanted = {source_type} if source_type else {"repo", "paper", "dataset", "docs"}
+    wanted = (
+        {source_type}
+        if source_type
+        else {"repo", "paper", "dataset", "docs", "connector"}
+    )
     out: list[dict[str, Any]] = []
 
     if "repo" in wanted:
@@ -1355,6 +1442,40 @@ def list_sources(
         except Exception as exc:
             logger.warning("list_sources: docs branch failed", error=str(exc))
 
+    if "connector" in wanted and user_id:
+        try:
+            from synsc.connectors.service import get_connector_sync_service
+
+            for connector in get_connector_sync_service().list_sources(
+                user_id=user_id,
+                provider=None,
+                limit=500,
+            ):
+                out.append(
+                    {
+                        "source_id": connector.get("source_id", ""),
+                        "source_type": "connector",
+                        "display_name": connector.get(
+                            "display_name",
+                            "Connector",
+                        ),
+                        "external_ref": connector.get("external_ref", ""),
+                        "status": (
+                            "indexed"
+                            if connector.get("last_snapshot_id")
+                            else "pending"
+                        ),
+                        "created_at": connector.get("created_at"),
+                        "provider": connector.get("provider"),
+                        "snapshot_id": connector.get("last_snapshot_id"),
+                    }
+                )
+        except Exception as exc:
+            logger.warning(
+                "list_sources: connector branch failed",
+                error=str(exc),
+            )
+
     return out
 
 
@@ -1380,7 +1501,48 @@ def _is_uuid(s: str) -> bool:
     return bool(_UUID_RE.match(s or ""))
 
 
-def _lookup_source_type_by_uuid(uid: str) -> str | None:
+def read_connector_source(
+    source_id: str,
+    *,
+    user_id: str,
+    path: str | None = None,
+    item_offset: int = 0,
+    item_limit: int = 100,
+) -> dict[str, Any]:
+    """Read an authorized page from a connector's current immutable head."""
+
+    from synsc.snapshots.contracts import SnapshotSourceType
+
+    snapshots = _get_snapshot_service()
+    current = snapshots.resolve(
+        SnapshotSourceType.CONNECTOR,
+        source_id,
+        user_id=user_id,
+    )
+    result = snapshots.get(
+        str(current["snapshot_id"]),
+        user_id=user_id,
+        include_items=True,
+        item_offset=item_offset,
+        item_limit=item_limit,
+        locator_prefix=path.strip("/") if path else None,
+    )
+    items = list(result.get("items") or [])
+    return {
+        "source_id": source_id,
+        "source_type": "connector",
+        "snapshot_id": str(current["snapshot_id"]),
+        "items": items,
+        "count": len(items),
+        "item_offset": item_offset,
+        "item_limit": item_limit,
+    }
+
+
+def _lookup_source_type_by_uuid(
+    uid: str,
+    user_id: str | None = None,
+) -> str | None:
     """Detect which table a UUID belongs to via SQLAlchemy lookups."""
     from synsc.database.connection import get_session
     from synsc.database.models import (
@@ -1419,6 +1581,30 @@ def _lookup_source_type_by_uuid(uid: str) -> str | None:
                 .first()
             ):
                 return "docs"
+            connector = session.execute(
+                _text(
+                    """
+                    SELECT 1
+                    FROM connector_sources
+                    WHERE source_id = :source_id
+                      AND (
+                          is_public IS TRUE
+                          OR indexed_by = :user_id
+                          OR EXISTS (
+                              SELECT 1
+                              FROM user_connector_sources access
+                              WHERE access.source_id =
+                                    connector_sources.source_id
+                                AND access.user_id = :user_id
+                          )
+                      )
+                    LIMIT 1
+                    """
+                ),
+                {"source_id": uid, "user_id": user_id},
+            ).first()
+            if connector:
+                return "connector"
     except Exception as exc:
         logger.debug("resolver: uuid lookup failed", error=str(exc))
     return None
@@ -1569,7 +1755,9 @@ def resolve_source_name(
         return []
 
     needle = name.strip().lower()
-    wanted = set(source_types or ["repo", "paper", "dataset", "docs"])
+    wanted = set(
+        source_types or ["repo", "paper", "dataset", "docs", "connector"]
+    )
     out: list[dict[str, Any]] = []
 
     if "repo" in wanted:
@@ -1580,6 +1768,8 @@ def resolve_source_name(
         out.extend(_resolve_datasets_by_name(needle, user_id, limit))
     if "docs" in wanted and user_id:
         out.extend(_resolve_docs_by_name(needle, user_id, limit))
+    if "connector" in wanted and user_id:
+        out.extend(_resolve_connectors_by_name(needle, user_id, limit))
 
     out.sort(
         key=lambda r: (
@@ -1815,6 +2005,59 @@ def _resolve_docs_by_name(
         return []
 
 
+def _resolve_connectors_by_name(
+    needle: str,
+    user_id: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    from synsc.connectors.service import get_connector_sync_service
+
+    try:
+        scored: list[dict[str, Any]] = []
+        for source in get_connector_sync_service().list_sources(
+            user_id=user_id,
+            provider=None,
+            limit=500,
+        ):
+            quality = max(
+                _match_quality(
+                    needle,
+                    str(source.get("display_name") or ""),
+                ),
+                _match_quality(
+                    needle,
+                    str(source.get("external_ref") or ""),
+                ),
+            )
+            if quality == 0:
+                continue
+            scored.append(
+                {
+                    "source_id": str(source["source_id"]),
+                    "source_type": "connector",
+                    "display_name": source.get("display_name")
+                    or "Connector",
+                    "external_ref": source.get("external_ref") or "",
+                    "match_quality": quality,
+                    "trust_score": 0.0,
+                    "extra": {"provider": source.get("provider")},
+                }
+            )
+        scored.sort(
+            key=lambda item: (
+                -item["match_quality"],
+                str(item["display_name"]),
+            )
+        )
+        return scored[:limit]
+    except Exception as exc:
+        logger.debug(
+            "resolve_name: connector branch failed",
+            error=str(exc),
+        )
+        return []
+
+
 def resolve_source_id(raw: str, user_id: str | None = None) -> tuple[str, str]:
     """Resolve a raw source reference to ``(canonical_uuid, source_type)``.
 
@@ -1833,7 +2076,7 @@ def resolve_source_id(raw: str, user_id: str | None = None) -> tuple[str, str]:
     candidate = raw.strip()
 
     if _is_uuid(candidate):
-        stype = _lookup_source_type_by_uuid(candidate)
+        stype = _lookup_source_type_by_uuid(candidate, user_id=user_id)
         if stype is None:
             raise ValueError(
                 f"could not resolve source_id: unknown UUID {candidate}"

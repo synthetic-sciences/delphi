@@ -109,3 +109,19 @@ def test_limiter_is_configured():
     assert limiter is not None
     # Limiter wraps default limits in LimitGroup objects
     assert len(limiter._default_limits) == 1
+
+
+def test_repeated_app_factories_do_not_duplicate_route_limits():
+    """Factory-created apps must not multiply SlowAPI rules by function name."""
+    from synsc.api.http_server import create_app
+    from synsc.api.rate_limit import limiter
+
+    create_app()
+    create_app()
+
+    connector_key = next(
+        key
+        for key in limiter._route_limits
+        if key.endswith(".connector_create")
+    )
+    assert len(limiter._route_limits[connector_key]) == 1

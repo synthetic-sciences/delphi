@@ -70,6 +70,12 @@ def _firecrawl_web(**kwargs: Any) -> object:
     )
 
 
+def _local_folder_connector(**_: Any) -> object:
+    from synsc.connectors.local_folder import LocalFolderConnector
+
+    return LocalFolderConnector()
+
+
 def _connector(source_type: str) -> object:
     from synsc.services.connectors import get_connector
 
@@ -189,6 +195,17 @@ def register_builtin_providers(registry: ProviderRegistry) -> None:
         ),
         _firecrawl_web,
         priority=100,
+    )
+    registry.register(
+        _descriptor(
+            "local-folder",
+            ProviderCapability.CONNECTOR,
+            ExecutionLocation.LOCAL,
+            extra_capabilities=frozenset({ProviderCapability.SYNC}),
+            supports_cancellation=True,
+        ),
+        _local_folder_connector,
+        priority=5,
     )
     registry.register(
         _descriptor(
