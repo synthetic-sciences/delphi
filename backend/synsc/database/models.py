@@ -26,7 +26,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Try to import pgvector for PostgreSQL
@@ -1377,6 +1377,93 @@ class IndexingJob(Base):
             "max_attempts": self.max_attempts,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+class ResearchJob(Base):
+    """Durable asynchronous research queue item and latest result."""
+
+    __tablename__ = "research_jobs"
+    __table_args__ = (
+        Index("idx_research_jobs_user", "user_id", "created_at"),
+        Index("idx_research_jobs_status", "status"),
+        Index("idx_research_jobs_claim", "status", "created_at"),
+    )
+
+    job_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="quick")
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    source_ids: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    source_types: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    auto_index: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    answer_markdown: Mapped[str | None] = mapped_column(Text)
+    citations: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    auto_indexed: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+    worker_id: Mapped[str | None] = mapped_column(String(100))
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ResearchEventRecord(Base):
+    """Append-only event in a research job's replay log."""
+
+    __tablename__ = "research_events"
+    __table_args__ = (
+        UniqueConstraint("job_id", "seq", name="uq_research_events_job_seq"),
+        Index("idx_research_events_job_seq", "job_id", "seq"),
+    )
+
+    event_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("research_jobs.job_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+
+class ResearchMessage(Base):
+    """Durable user/assistant turn attached to one research session."""
+
+    __tablename__ = "research_messages"
+    __table_args__ = (
+        Index("idx_research_messages_job_created", "job_id", "created_at"),
+    )
+
+    message_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    job_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("research_jobs.job_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
 class ContextBlob(Base):

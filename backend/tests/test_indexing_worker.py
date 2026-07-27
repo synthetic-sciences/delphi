@@ -335,3 +335,21 @@ def test_worker_recovers_stale_processing_jobs_before_polling():
     worker.run(poll_interval=0)
 
     worker.job_queue.recover_stale_jobs.assert_called_once()
+
+
+def test_worker_runs_durable_research_queue_in_companion_thread():
+    worker = indexing_worker.IndexingWorker.__new__(indexing_worker.IndexingWorker)
+    worker.worker_id = "worker-composite"
+    worker.running = False
+    worker.job_queue = SimpleNamespace(
+        recover_stale_jobs=Mock(return_value={"requeued": 0, "failed": 0}),
+    )
+    worker.research_runner = SimpleNamespace(run_forever=Mock())
+
+    worker.run(poll_interval=0)
+
+    worker.research_runner.run_forever.assert_called_once()
+    kwargs = worker.research_runner.run_forever.call_args.kwargs
+    assert kwargs["worker_id"] == "worker-composite-research"
+    assert kwargs["poll_interval"] == 0
+    assert kwargs["should_continue"]() is False

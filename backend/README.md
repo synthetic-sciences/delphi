@@ -9,7 +9,7 @@ See the main [README](../README.md) for user-facing docs and [docs/architecture.
 ```bash
 uv sync                               # install deps
 uv run synsc-context-http             # run API server (port 8742)
-uv run synsc-context-worker           # run background indexer
+uv run synsc-context-worker           # run source + durable-research worker
 uv run pytest                         # run tests
 uv run alembic upgrade head           # apply migrations
 uv run ruff check synsc/ tests/       # lint

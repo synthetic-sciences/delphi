@@ -34,7 +34,10 @@ def test_gemini_provider_generates_answer():
     assert answer.text == "The answer is 42."
     assert answer.tokens_in == 100
     assert answer.tokens_out == 20
-    mock_genai.Client.assert_called_once_with(api_key="test-key")
+    mock_genai.Client.assert_called_once_with(
+        api_key="test-key",
+        http_options={"timeout": 120_000},
+    )
     _, kwargs = fake_client.models.generate_content.call_args
     assert kwargs["model"] == "gemini-2.5-flash"
 
@@ -222,6 +225,64 @@ def test_research_deep_mode_iterates_up_to_max_hops():
     assert result["answer_markdown"].startswith("# Final")
     assert result["usage"]["tokens_in"] == 370
     assert result["usage"]["tokens_out"] == 40
+
+
+def test_research_service_stops_before_provider_after_cancellation():
+    from synsc.providers.contracts import CancellationToken
+    from synsc.services.research_service import (
+        ResearchCancelledError,
+        ResearchService,
+    )
+
+    token = CancellationToken()
+
+    def cancelling_retrieval(**_kwargs):
+        token.cancel()
+        return []
+
+    provider = MagicMock()
+    service = ResearchService(
+        provider=provider,
+        retrieve_fn=cancelling_retrieval,
+    )
+
+    with pytest.raises(ResearchCancelledError):
+        service.run(
+            query="cancel me",
+            mode="deep",
+            user_id="user-1",
+            cancellation=token,
+        )
+
+    provider.generate.assert_not_called()
+
+
+def test_research_service_emits_progress_for_each_hop():
+    from synsc.services.research_providers.base import GeneratedAnswer
+    from synsc.services.research_service import ResearchService
+
+    provider = MagicMock()
+    provider.generate.return_value = GeneratedAnswer(
+        text="done",
+        tokens_in=2,
+        tokens_out=1,
+    )
+    progress = MagicMock()
+
+    ResearchService(
+        provider=provider,
+        retrieve_fn=MagicMock(return_value=[]),
+    ).run(
+        query="trace me",
+        mode="quick",
+        user_id="user-1",
+        progress_callback=progress,
+    )
+
+    assert [call.args[0] for call in progress.call_args_list] == [
+        "retrieval",
+        "iteration",
+    ]
 
 
 def test_unified_retrieve_merges_code_and_papers(monkeypatch):
@@ -674,3 +735,8 @@ def test_research_config_defaults():
     assert cfg.model_quick.startswith("gemini-")
     assert cfg.model_deep.startswith("gemini-")
     assert cfg.quick_rpm > cfg.deep_rpm > cfg.oracle_rpm  # tighter caps for heavier modes
+    assert cfg.provider_timeout_ms > 0
+    assert cfg.quick_job_timeout_seconds > 0
+    assert cfg.deep_job_timeout_seconds > cfg.quick_job_timeout_seconds
+    assert cfg.oracle_job_timeout_seconds >= cfg.deep_job_timeout_seconds
+    assert cfg.max_execution_threads > 0

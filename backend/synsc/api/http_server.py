@@ -347,7 +347,7 @@ class ResearchV2StartRequest(BaseModel):
     """Request to POST /v2/research (async session)."""
 
     query: str = Field(..., min_length=1, max_length=4000)
-    mode: str = Field(default="quick")
+    mode: Literal["quick", "deep", "oracle"] = Field(default="quick")
     source_ids: list[str] | None = None
     source_types: list[str] | None = None
     auto_index: bool = Field(
@@ -2658,24 +2658,64 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/v2/research", tags=["Research"])
+    async def research_v2_list(
+        limit: int = Query(default=50, ge=1, le=100),
+        status: Literal[
+            "pending",
+            "running",
+            "cancelling",
+            "completed",
+            "failed",
+            "cancelled",
+        ]
+        | None = Query(default=None),
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """List the caller's durable research sessions, newest first."""
+        from synsc.services.research_sessions import list_sessions
+
+        sessions = await asyncio.to_thread(
+            list_sessions,
+            user_id=auth.user_id,
+            limit=limit,
+            status=status,
+        )
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "sessions": sessions,
+                "count": len(sessions),
+            }
+        )
+
     @app.get("/v2/research/{session_id}", tags=["Research"])
     async def research_v2_get(
         session_id: str,
         auth: AuthContext = Depends(verify_api_key),
     ) -> Response:
         """Return the current state of a research session."""
+        from synsc.services.research_job_service import ResearchJobNotFoundError
         from synsc.services.research_sessions import get_session
 
-        session = get_session(session_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="session not found")
-        if session.user_id and auth.user_id and session.user_id != auth.user_id:
-            raise HTTPException(status_code=403, detail="not your session")
+        try:
+            session = get_session(session_id, user_id=auth.user_id)
+        except ResearchJobNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="session not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return SafeJSONResponse(content={"success": True, **session.to_public()})
 
     @app.get("/v2/research/{session_id}/events", tags=["Research"])
     async def research_v2_events(
         session_id: str,
+        last_event_id: Annotated[
+            str | None,
+            Header(alias="Last-Event-ID"),
+        ] = None,
         auth: AuthContext = Depends(verify_api_key),
     ) -> StreamingResponse:
         """SSE stream of session events.
@@ -2684,16 +2724,30 @@ def create_app() -> FastAPI:
         ``answer``, ``error``, and ``done`` events. Replays history so a
         reconnecting client never loses events.
         """
+        from synsc.services.research_job_service import ResearchJobNotFoundError
         from synsc.services.research_sessions import get_session, subscribe
 
-        session = get_session(session_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="session not found")
-        if session.user_id and auth.user_id and session.user_id != auth.user_id:
-            raise HTTPException(status_code=403, detail="not your session")
+        try:
+            get_session(session_id, user_id=auth.user_id)
+        except ResearchJobNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="session not found",
+            ) from exc
+        try:
+            since_seq = int(last_event_id) if last_event_id is not None else -1
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Last-Event-ID must be an integer",
+            ) from exc
 
         async def _stream() -> AsyncIterator[str]:
-            async for ev in subscribe(session_id):
+            async for ev in subscribe(
+                session_id,
+                user_id=auth.user_id,
+                since_seq=since_seq,
+            ):
                 import json as _json
 
                 data = _json.dumps(
@@ -2704,7 +2758,7 @@ def create_app() -> FastAPI:
                         "payload": ev.payload,
                     }
                 )
-                yield f"event: {ev.type}\ndata: {data}\n\n"
+                yield f"id: {ev.seq}\nevent: {ev.type}\ndata: {data}\n\n"
             yield "event: end\ndata: {}\n\n"
 
         return StreamingResponse(
@@ -2725,6 +2779,10 @@ def create_app() -> FastAPI:
         auth: AuthContext = Depends(verify_api_key),
     ) -> Response:
         """Post a follow-up message on a completed research session."""
+        from synsc.services.research_job_service import (
+            ResearchJobNotFoundError,
+            ResearchJobStateError,
+        )
         from synsc.services.research_sessions import post_followup
 
         try:
@@ -2733,11 +2791,46 @@ def create_app() -> FastAPI:
                 message=body.message,
                 user_id=auth.user_id,
             )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ResearchJobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="session not found") from exc
+        except ResearchJobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return SafeJSONResponse(content={"success": True, **result})
+        return SafeJSONResponse(
+            status_code=202,
+            content={"success": True, **result},
+        )
+
+    @app.delete("/v2/research/{session_id}", tags=["Research"])
+    async def research_v2_cancel(
+        session_id: str,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Cancel pending work or request cooperative cancellation."""
+        from synsc.services.research_job_service import (
+            ResearchJobNotFoundError,
+            ResearchJobStateError,
+        )
+        from synsc.services.research_sessions import cancel_session
+
+        try:
+            session = await asyncio.to_thread(
+                cancel_session,
+                session_id,
+                user_id=auth.user_id,
+            )
+        except ResearchJobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="session not found") from exc
+        except ResearchJobStateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return SafeJSONResponse(
+            content={
+                "success": True,
+                "session_id": session.session_id,
+                "status": session.status,
+            }
+        )
 
     # ==========================================================================
     # Sources (unified grep + read + tree surface)

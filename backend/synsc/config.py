@@ -265,6 +265,11 @@ class ResearchConfig(BaseModel):
     quick_rpm: int = Field(default=10)
     deep_rpm: int = Field(default=3)
     oracle_rpm: int = Field(default=1)
+    provider_timeout_ms: int = Field(default=120_000, ge=1_000, le=900_000)
+    quick_job_timeout_seconds: int = Field(default=180, ge=1, le=3_600)
+    deep_job_timeout_seconds: int = Field(default=600, ge=1, le=7_200)
+    oracle_job_timeout_seconds: int = Field(default=900, ge=1, le=10_800)
+    max_execution_threads: int = Field(default=4, ge=1, le=32)
 
 
 class SearchConfig(BaseModel):
@@ -526,6 +531,53 @@ class SynscConfig(BaseModel):
             config.research.model_quick = model_quick
         if model_deep := os.getenv("SYNSC_RESEARCH_MODEL_DEEP"):
             config.research.model_deep = model_deep
+        research_timeouts = {
+            "SYNSC_RESEARCH_PROVIDER_TIMEOUT_MS": (
+                "provider_timeout_ms",
+                1_000,
+                900_000,
+            ),
+            "SYNSC_RESEARCH_QUICK_TIMEOUT_SECONDS": (
+                "quick_job_timeout_seconds",
+                1,
+                3_600,
+            ),
+            "SYNSC_RESEARCH_DEEP_TIMEOUT_SECONDS": (
+                "deep_job_timeout_seconds",
+                1,
+                7_200,
+            ),
+            "SYNSC_RESEARCH_ORACLE_TIMEOUT_SECONDS": (
+                "oracle_job_timeout_seconds",
+                1,
+                10_800,
+            ),
+            "SYNSC_RESEARCH_MAX_EXECUTION_THREADS": (
+                "max_execution_threads",
+                1,
+                32,
+            ),
+        }
+        for env_name, (field_name, minimum, maximum) in research_timeouts.items():
+            raw_timeout = os.getenv(env_name)
+            if raw_timeout is None:
+                continue
+            with contextlib.suppress(ValueError):
+                timeout = int(raw_timeout)
+                if minimum <= timeout <= maximum:
+                    setattr(config.research, field_name, timeout)
+        shortest_job_timeout_ms = (
+            min(
+                config.research.quick_job_timeout_seconds,
+                config.research.deep_job_timeout_seconds,
+                config.research.oracle_job_timeout_seconds,
+            )
+            * 1_000
+        )
+        config.research.provider_timeout_ms = min(
+            config.research.provider_timeout_ms,
+            shortest_job_timeout_ms,
+        )
 
         # Feature flags
         if enable_code := os.getenv("ENABLE_CODE_INDEXING"):

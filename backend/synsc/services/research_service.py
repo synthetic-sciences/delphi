@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 import structlog
 
 from synsc.config import get_config
+from synsc.providers.contracts import CancellationToken
 from synsc.providers.registry import ProviderNotFoundError, get_provider_registry
 from synsc.services.research_credentials import get_user_research_api_key
 from synsc.services.research_providers.base import ResearchProvider
@@ -32,6 +33,10 @@ class ResearchProviderNotConfiguredError(RuntimeError):
     def __init__(self, provider: str):
         self.provider = provider
         super().__init__(f"Research provider '{provider}' is not configured")
+
+
+class ResearchCancelledError(RuntimeError):
+    """Raised between research phases after cooperative cancellation."""
 
 
 class ResearchService:
@@ -84,6 +89,8 @@ class ResearchService:
         source_types: list[str] | None = None,
         k: int | None = None,
         user_id: str | None = None,
+        cancellation: CancellationToken | None = None,
+        progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         t0 = time.monotonic()
         cfg = self.config.research
@@ -105,25 +112,48 @@ class ResearchService:
         tokens_out = 0
         answer_text = ""
         provider = self._provider_for_user(user_id or self._user_id)
+        token = cancellation or CancellationToken()
+
+        def check_cancelled() -> None:
+            if token.cancelled:
+                raise ResearchCancelledError("research cancelled")
 
         for hop in range(max_hops):
+            check_cancelled()
+            if progress_callback is not None:
+                progress_callback(
+                    "retrieval",
+                    {"hop": hop, "query": current_query},
+                )
             hits = self.retrieve(
                 query=current_query,
                 source_ids=source_ids,
                 source_types=source_types,
                 k=top_k,
                 user_id=user_id,
+                cancellation=token,
             )
+            check_cancelled()
             for h in hits:
                 key = f"{h.get('source_id')}:{h.get('chunk_id')}"
                 if key not in all_citations:
                     all_citations[key] = h
 
+            if progress_callback is not None:
+                progress_callback(
+                    "iteration",
+                    {
+                        "phase": "synthesize",
+                        "hop": hop,
+                        "citation_count": len(all_citations),
+                    },
+                )
             ans = provider.generate(
                 prompt=current_query if hop == 0 else self._refine_prompt(query, answer_text),
                 context_blocks=list(all_citations.values()),
                 model=model,
             )
+            check_cancelled()
             tokens_in += ans.tokens_in
             tokens_out += ans.tokens_out
             answer_text = ans.text

@@ -110,6 +110,7 @@ jobs:
             tests/test_atomic_reindex_postgres.py \
             tests/test_job_queue_postgres.py \
             tests/test_paper_access_postgres.py \
+            tests/test_research_job_postgres.py \
             tests/test_snapshot_postgres.py
 
   mcp-proxy:

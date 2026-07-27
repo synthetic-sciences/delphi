@@ -1,48 +1,73 @@
-"""Tests for the async research session lifecycle + auto-index."""
+"""Tests for durable research-session projections and auto-index helpers."""
+
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def _clear_sessions():
-    from synsc.services import research_sessions
-
-    research_sessions._SESSIONS.clear()
-    yield
-    research_sessions._SESSIONS.clear()
+from synsc.services import research_sessions
 
 
-def test_extract_discoverable_refs_github_arxiv_hf():
-    from synsc.services.research_sessions import _extract_discoverable_refs
+def _job(**overrides):
+    values = {
+        "job_id": "job-1",
+        "user_id": "user-1",
+        "query": "q",
+        "mode": "quick",
+        "source_ids": None,
+        "source_types": None,
+        "auto_index": True,
+        "status": "pending",
+        "answer_markdown": None,
+        "citations": [],
+        "usage": {},
+        "auto_indexed": [],
+        "error_message": None,
+        "worker_id": None,
+        "attempt_count": 0,
+        "created_at": datetime.now(timezone.utc),
+        "completed_at": None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
+
+def _session() -> research_sessions.ResearchSession:
+    return research_sessions.ResearchSession(
+        session_id="job-1",
+        user_id="user-1",
+        query="q",
+        mode="quick",
+        source_ids=None,
+        source_types=None,
+    )
+
+
+def test_extract_discoverable_refs_github_arxiv_hf() -> None:
     text = (
         "see https://github.com/tiangolo/fastapi and arxiv:2301.12345 "
         "plus the hf:squad dataset"
     )
-    refs = _extract_discoverable_refs(text)
-    kinds = sorted({k for k, _ in refs})
-    tokens = sorted({tok.lower() for _, tok in refs})
+    refs = research_sessions._extract_discoverable_refs(text)
+    kinds = sorted({kind for kind, _ in refs})
+    tokens = sorted({token.lower() for _, token in refs})
     assert "repo" in kinds and "paper" in kinds and "dataset" in kinds
     assert "https://github.com/tiangolo/fastapi" in tokens
-    assert any("arxiv:2301.12345" in t for t in tokens)
-    assert any(t.startswith("hf:") for t in tokens)
+    assert any("arxiv:2301.12345" in token for token in tokens)
+    assert any(token.startswith("hf:") for token in tokens)
 
 
-def test_extract_discoverable_refs_dedupes():
-    from synsc.services.research_sessions import _extract_discoverable_refs
-
-    refs = _extract_discoverable_refs(
+def test_extract_discoverable_refs_dedupes() -> None:
+    refs = research_sessions._extract_discoverable_refs(
         "arxiv:2301.12345 arxiv:2301.12345 hf:foo hf:foo"
     )
     assert len(refs) == 2
 
 
-def test_auto_index_skips_already_resolved(monkeypatch):
-    """A ref that resolve_source_id can handle is NOT re-indexed."""
-    from synsc.services import research_sessions, source_service
+def test_auto_index_skips_already_resolved(monkeypatch) -> None:
+    from synsc.services import source_service
 
     monkeypatch.setattr(
         source_service,
@@ -50,191 +75,247 @@ def test_auto_index_skips_already_resolved(monkeypatch):
         lambda raw, user_id=None: ("uuid-1", "repo"),
     )
     indexed_calls = []
-
-    def fake_index_source(**kwargs):
-        indexed_calls.append(kwargs)
-        return {"source_id": "x", "status": "indexed"}
-
-    monkeypatch.setattr(source_service, "index_source", fake_index_source)
-    session = research_sessions.create_session("q", user_id="u1")
-    out = research_sessions._auto_index_if_unknown(
-        [("repo", "https://github.com/x/y")], "u1", session
+    monkeypatch.setattr(
+        source_service,
+        "index_source",
+        lambda **kwargs: indexed_calls.append(kwargs),
     )
+    session = _session()
+
+    out = research_sessions._auto_index_if_unknown(
+        [("repo", "https://github.com/x/y")],
+        "user-1",
+        session,
+    )
+
     assert out == []
     assert indexed_calls == []
-    # discover event recorded
-    types = [e.type for e in session.events]
-    assert "discover" in types
+    assert "discover" in [event.type for event in session.events]
 
 
-def test_auto_index_indexes_unknown(monkeypatch):
-    from synsc.services import research_sessions, source_service
-
-    def raise_unresolved(raw, user_id=None):
-        raise ValueError("not indexed")
-
-    monkeypatch.setattr(source_service, "resolve_source_id", raise_unresolved)
-
-    indexed_calls = []
-
-    def fake_index_source(**kwargs):
-        indexed_calls.append(kwargs)
-        return {"source_id": "new-uuid", "status": "indexed"}
-
-    monkeypatch.setattr(source_service, "index_source", fake_index_source)
-
-    session = research_sessions.create_session("q", user_id="u1")
-    out = research_sessions._auto_index_if_unknown(
-        [("repo", "https://github.com/x/y")], "u1", session
-    )
-    assert len(out) == 1
-    assert out[0]["source_id"] == "new-uuid"
-    assert len(indexed_calls) == 1
-    assert any(e.type == "index" for e in session.events)
-
-
-def test_auto_index_respects_budget(monkeypatch):
-    from synsc.services import research_sessions, source_service
+def test_auto_index_indexes_unknown(monkeypatch) -> None:
+    from synsc.services import source_service
 
     monkeypatch.setattr(
         source_service,
         "resolve_source_id",
-        lambda raw, user_id=None: (_ for _ in ()).throw(ValueError("nope")),
+        lambda raw, user_id=None: (_ for _ in ()).throw(ValueError("not indexed")),
     )
     monkeypatch.setattr(
         source_service,
         "index_source",
-        lambda **kw: {"source_id": "x", "status": "indexed"},
+        lambda **kwargs: {"source_id": "new-uuid", "status": "indexed"},
+    )
+    session = _session()
+
+    out = research_sessions._auto_index_if_unknown(
+        [("repo", "https://github.com/x/y")],
+        "user-1",
+        session,
     )
 
-    session = research_sessions.create_session("q", user_id="u1")
+    assert out[0]["source_id"] == "new-uuid"
+    assert any(event.type == "index" for event in session.events)
+
+
+def test_auto_index_respects_budget(monkeypatch) -> None:
+    from synsc.services import source_service
+
+    monkeypatch.setattr(
+        source_service,
+        "resolve_source_id",
+        lambda raw, user_id=None: (_ for _ in ()).throw(ValueError("not indexed")),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "index_source",
+        lambda **kwargs: {"source_id": "x", "status": "indexed"},
+    )
+    session = _session()
+
     out = research_sessions._auto_index_if_unknown(
         [
             ("repo", "https://github.com/a/b"),
             ("repo", "https://github.com/c/d"),
             ("repo", "https://github.com/e/f"),
             ("repo", "https://github.com/g/h"),
-            ("repo", "https://github.com/i/j"),
         ],
-        "u1",
+        "user-1",
         session,
         budget=3,
     )
+
     assert len(out) == 3
     assert len(session.auto_indexed) == 3
 
 
-def test_start_session_runs_to_completion(monkeypatch):
-    """Run a session with a fake runner — should reach status=completed."""
-    from synsc.services import research_sessions
+def test_auto_index_does_not_expose_exception_text(monkeypatch) -> None:
+    from synsc.services import source_service
 
-    async def fake_runner(session):
-        session.answer_markdown = "the answer"
-        session.citations = [{"source_id": "x", "chunk_id": "y", "text": "z"}]
-        research_sessions._emit(session, "answer", length=10)
+    monkeypatch.setattr(
+        source_service,
+        "resolve_source_id",
+        lambda raw, user_id=None: (_ for _ in ()).throw(ValueError("not indexed")),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "index_source",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("sk-secret")),
+    )
+    session = _session()
 
-    async def go():
-        s = await research_sessions.start_session(
-            query="anything",
-            mode="quick",
-            user_id="u1",
-            runner=fake_runner,
-        )
-        # Wait for completion
-        await s.task
-        return s
+    research_sessions._auto_index_if_unknown(
+        [("repo", "https://github.com/x/y")],
+        "user-1",
+        session,
+    )
 
-    s = asyncio.run(go())
-    assert s.status == "completed"
-    assert s.answer_markdown == "the answer"
-    assert len(s.citations) == 1
-    types = [e.type for e in s.events]
-    assert "done" in types
-    assert "answer" in types
+    event = session.events[-1]
+    assert event.payload["error"] == "Auto-indexing failed"
+    assert "secret" not in str(event.payload)
 
 
-def test_subscribe_replays_history_then_streams(monkeypatch):
-    from synsc.services import research_sessions
+def test_start_session_only_enqueues_durable_work() -> None:
+    service = MagicMock()
+    service.create_job.return_value = _job()
 
-    async def fake_runner(session):
-        research_sessions._emit(session, "iteration", phase="r1")
-        # Yield to allow subscribe loop to attach
-        await asyncio.sleep(0)
-        research_sessions._emit(session, "iteration", phase="r2")
-
-    async def go():
-        s = await research_sessions.start_session(
+    session = asyncio.run(
+        research_sessions.start_session(
             query="q",
-            user_id="u1",
-            runner=fake_runner,
+            user_id="user-1",
+            service=service,
         )
-        seen = []
-        async for ev in research_sessions.subscribe(s.session_id):
-            seen.append(ev.type)
-            if len(seen) >= 4:
-                break
-        await s.task
-        return seen, s
+    )
 
-    seen, s = asyncio.run(go())
-    assert "iteration" in seen
-    assert "done" in seen
-    assert s.status == "completed"
+    assert session.status == "pending"
+    service.create_job.assert_called_once_with(
+        user_id="user-1",
+        query="q",
+        mode="quick",
+        source_ids=None,
+        source_types=None,
+        auto_index=True,
+    )
 
 
-def test_post_followup_requires_completed(monkeypatch):
-    from synsc.services import research_sessions
+def test_get_session_is_owner_scoped() -> None:
+    service = MagicMock()
+    service.get_job.return_value = _job(status="completed")
 
-    async def slow_runner(session):
-        await asyncio.sleep(10)  # never completes during test
+    session = research_sessions.get_session(
+        "job-1",
+        user_id="user-1",
+        service=service,
+    )
 
-    async def go():
-        s = await research_sessions.start_session(
-            query="q",
-            user_id="u1",
-            runner=slow_runner,
-        )
-        # session is still 'running'
-        with pytest.raises(ValueError):
-            await research_sessions.post_followup(
-                s.session_id, "follow-up", user_id="u1"
+    assert session.status == "completed"
+    service.get_job.assert_called_once_with("job-1", user_id="user-1")
+
+
+def test_subscribe_replays_persisted_events_then_stops() -> None:
+    service = MagicMock()
+    service.list_events.side_effect = [
+        [
+            SimpleNamespace(
+                seq=4,
+                event_type="answer",
+                created_at=datetime.now(timezone.utc),
+                payload={"length": 4},
+            ),
+            SimpleNamespace(
+                seq=5,
+                event_type="done",
+                created_at=datetime.now(timezone.utc),
+                payload={"status": "completed"},
+            ),
+        ],
+        [],
+    ]
+    service.get_job.return_value = _job(status="completed")
+
+    async def collect():
+        return [
+            event
+            async for event in research_sessions.subscribe(
+                "job-1",
+                user_id="user-1",
+                since_seq=3,
+                poll_interval=0,
+                service=service,
             )
-        s.task.cancel()
-        return s
+        ]
 
-    asyncio.run(go())
+    events = asyncio.run(collect())
+    assert [event.seq for event in events] == [4, 5]
+    assert service.list_events.call_args_list[-1].kwargs["since_seq"] == 5
 
 
-def test_post_followup_runs_followup(monkeypatch):
-    from synsc.services import research_service, research_sessions
+def test_subscribe_reads_final_events_after_observing_terminal_state() -> None:
+    service = MagicMock()
+    terminal_observed = False
+    final_delivered = False
 
-    async def fake_runner(session):
-        session.answer_markdown = "first answer"
+    def get_terminal_job(*_args, **_kwargs):
+        nonlocal terminal_observed
+        terminal_observed = True
+        return _job(status="completed")
 
-    async def go():
-        s = await research_sessions.start_session(
-            query="q1",
-            user_id="u1",
-            runner=fake_runner,
+    def list_committed_events(*_args, **_kwargs):
+        nonlocal final_delivered
+        if terminal_observed and not final_delivered:
+            final_delivered = True
+            return [
+                SimpleNamespace(
+                    seq=5,
+                    event_type="done",
+                    created_at=datetime.now(timezone.utc),
+                    payload={"status": "completed"},
+                )
+            ]
+        return []
+
+    service.get_job.side_effect = get_terminal_job
+    service.list_events.side_effect = list_committed_events
+
+    async def collect():
+        return [
+            event
+            async for event in research_sessions.subscribe(
+                "job-1",
+                user_id="user-1",
+                since_seq=4,
+                poll_interval=0,
+                service=service,
+            )
+        ]
+
+    events = asyncio.run(collect())
+
+    assert [event.seq for event in events] == [5]
+    assert service.get_job.call_count == 2
+    assert service.list_events.call_args_list[-1].kwargs["since_seq"] == 5
+
+
+def test_post_followup_persists_and_requeues() -> None:
+    service = MagicMock()
+    service.enqueue_followup.return_value = _job(status="pending")
+
+    result = asyncio.run(
+        research_sessions.post_followup(
+            "job-1",
+            "What about Linux?",
+            user_id="user-1",
+            service=service,
         )
-        await s.task
+    )
 
-        class FakeService:
-            def run(self, **kw):
-                return {
-                    "answer_markdown": "follow-up answer",
-                    "citations": [],
-                    "usage": {},
-                }
-
-        monkeypatch.setattr(
-            research_service, "ResearchService", lambda: FakeService()
-        )
-        result = await research_sessions.post_followup(
-            s.session_id, "what about X?", user_id="u1"
-        )
-        return result, s
-
-    result, s = asyncio.run(go())
-    assert result["answer_markdown"] == "follow-up answer"
-    assert s.answer_markdown == "follow-up answer"
+    assert result == {
+        "session_id": "job-1",
+        "status": "pending",
+        "accepted": True,
+    }
+    service.enqueue_followup.assert_called_once_with(
+        "job-1",
+        message="What about Linux?",
+        user_id="user-1",
+    )

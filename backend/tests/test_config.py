@@ -114,3 +114,36 @@ def test_provider_policy_model_contains_no_credential_fields():
 
     assert "key" not in repr(policy).lower()
     assert "credential" not in repr(policy).lower()
+
+
+def test_research_deadlines_load_from_environment(monkeypatch):
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("SYNSC_RESEARCH_PROVIDER_TIMEOUT_MS", "45000")
+    monkeypatch.setenv("SYNSC_RESEARCH_QUICK_TIMEOUT_SECONDS", "90")
+    monkeypatch.setenv("SYNSC_RESEARCH_DEEP_TIMEOUT_SECONDS", "360")
+    monkeypatch.setenv("SYNSC_RESEARCH_ORACLE_TIMEOUT_SECONDS", "720")
+    monkeypatch.setenv("SYNSC_RESEARCH_MAX_EXECUTION_THREADS", "6")
+
+    research = SynscConfig.from_env().research
+
+    assert research.provider_timeout_ms == 45_000
+    assert research.quick_job_timeout_seconds == 90
+    assert research.deep_job_timeout_seconds == 360
+    assert research.oracle_job_timeout_seconds == 720
+    assert research.max_execution_threads == 6
+
+
+def test_research_provider_timeout_is_capped_by_shortest_job_deadline(
+    monkeypatch,
+):
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("SYNSC_RESEARCH_PROVIDER_TIMEOUT_MS", "900000")
+    monkeypatch.setenv("SYNSC_RESEARCH_QUICK_TIMEOUT_SECONDS", "2")
+    monkeypatch.setenv("SYNSC_RESEARCH_DEEP_TIMEOUT_SECONDS", "3")
+    monkeypatch.setenv("SYNSC_RESEARCH_ORACLE_TIMEOUT_SECONDS", "4")
+
+    research = SynscConfig.from_env().research
+
+    assert research.provider_timeout_ms == 2_000
