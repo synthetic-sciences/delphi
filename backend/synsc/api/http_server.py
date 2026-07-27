@@ -10,10 +10,11 @@ import json
 import os
 import time
 import uuid as _uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 import requests
@@ -24,7 +25,9 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager as _SHSM
 from pydantic import BaseModel, Field, SecretStr
 from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from synsc import __version__
 from synsc.api.mcp_server import (
@@ -41,7 +44,8 @@ from synsc.database.connection import get_session, init_db
 
 class _SafeEncoder(json.JSONEncoder):
     """JSON encoder that handles UUID, datetime, and other DB types."""
-    def default(self, obj):
+
+    def default(self, obj: object) -> Any:
         if isinstance(obj, UUID):
             return str(obj)
         if isinstance(obj, datetime):
@@ -51,10 +55,11 @@ class _SafeEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def SafeJSONResponse(content, **kwargs):
-    """JSONResponse that auto-serializes UUIDs and datetimes."""
-    body = json.dumps(content, cls=_SafeEncoder).encode("utf-8")
-    return Response(content=body, media_type="application/json", **kwargs)
+class SafeJSONResponse(JSONResponse):
+    """JSON response that auto-serializes UUIDs and datetimes."""
+
+    def render(self, content: Any) -> bytes:
+        return json.dumps(content, cls=_SafeEncoder).encode("utf-8")
 
 
 def _log_activity(
@@ -65,7 +70,7 @@ def _log_activity(
     query: str | None = None,
     results_count: int | None = None,
     duration_ms: int | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Log a user activity to the activity_log table (best-effort)."""
     try:
@@ -103,7 +108,7 @@ SESSION_COOKIE_NAME = "synsc_session"
 SESSION_COOKIE_MAX_AGE = 72 * 3600  # 3 days, matches JWT expiry
 
 
-def _set_session_cookie(response, token: str) -> None:
+def _set_session_cookie(response: Response, token: str) -> None:
     """Set an httpOnly session cookie on a response."""
     secure = os.getenv("SYNSC_COOKIE_SECURE", "").lower() in ("true", "1", "yes") or \
              os.getenv("SYNSC_ENABLE_HSTS", "false").lower() in ("true", "1", "yes")
@@ -118,7 +123,7 @@ def _set_session_cookie(response, token: str) -> None:
     )
 
 
-def _clear_session_cookie(response) -> None:
+def _clear_session_cookie(response: Response) -> None:
     """Delete the session cookie."""
     response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
 
@@ -390,7 +395,7 @@ class IndexSourceRequest(BaseModel):
     source_type: Literal["repo", "paper", "dataset", "docs"] = Field(...)
     url: str = Field(..., min_length=1)
     display_name: str | None = None
-    options: dict | None = None
+    options: dict[str, Any] | None = None
     async_mode: bool = Field(
         default=False,
         description=(
@@ -458,7 +463,8 @@ def _validate_api_key_db(api_key: str) -> str | None:
             except Exception:
                 pass
 
-            return row["user_id"]
+            user_id = row["user_id"]
+            return str(user_id) if user_id is not None else None
     except Exception as e:
         logger.error("Error validating API key", error=str(e))
         return None
@@ -555,11 +561,11 @@ async def verify_admin(auth: AuthContext = Depends(verify_api_key)) -> AuthConte
 # Response Cache (short TTL, per-user)
 # =============================================================================
 
-_RESPONSE_CACHE: dict[str, tuple[dict, float]] = {}
+_RESPONSE_CACHE: dict[str, tuple[dict[str, Any], float]] = {}
 _RESPONSE_CACHE_TTL = 30  # 30 seconds
 
 
-def _cache_get(user_id: str, key: str) -> dict | None:
+def _cache_get(user_id: str, key: str) -> dict[str, Any] | None:
     """Get a cached response, or None if expired/missing."""
     entry = _RESPONSE_CACHE.get(f"{user_id}:{key}")
     if entry and time.monotonic() < entry[1]:
@@ -567,7 +573,7 @@ def _cache_get(user_id: str, key: str) -> dict | None:
     return None
 
 
-def _cache_set(user_id: str, key: str, data: dict) -> None:
+def _cache_set(user_id: str, key: str, data: dict[str, Any]) -> None:
     """Cache a response with TTL."""
     _RESPONSE_CACHE[f"{user_id}:{key}"] = (data, time.monotonic() + _RESPONSE_CACHE_TTL)
 
@@ -591,7 +597,7 @@ class SecurityHeadersMiddleware:
     HSTS is opt-in via SYNSC_ENABLE_HSTS env var.
     """
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
         enable_hsts = os.getenv("SYNSC_ENABLE_HSTS", "false").lower() in ("true", "1", "yes")
         self.headers: list[tuple[bytes, bytes]] = [
@@ -607,12 +613,17 @@ class SecurityHeadersMiddleware:
                 (b"strict-transport-security", b"max-age=63072000; includeSubDomains")
             )
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        async def send_with_headers(message):
+        async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
                 headers.extend(self.headers)
@@ -645,7 +656,7 @@ def create_app() -> FastAPI:
     config = get_config()
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Init DB connection for this worker.
         init_db()
 
@@ -657,7 +668,7 @@ def create_app() -> FastAPI:
         # but the API is reachable immediately.
         from synsc.embeddings.generator import get_paper_embedding_generator
 
-        async def _warm_embeddings():
+        async def _warm_embeddings() -> None:
             try:
                 gen = await asyncio.to_thread(get_paper_embedding_generator)
                 await asyncio.to_thread(gen.generate_single, "warmup")
@@ -727,15 +738,22 @@ def create_app() -> FastAPI:
         _rate_limit_exceeded_handler,
         limiter,
     )
+
+    async def rate_limit_handler(request: Request, exc: Exception) -> Response:
+        """Adapt SlowAPI's narrow exception handler to Starlette's contract."""
+        if not isinstance(exc, RateLimitExceeded):
+            raise exc
+        return _rate_limit_exceeded_handler(request, exc)
+
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
 
     # ==========================================================================
     # Health & Info Endpoints
     # ==========================================================================
 
     @app.get("/", tags=["Info"])
-    async def root() -> dict:
+    async def root() -> dict[str, Any]:
         """API root - basic info."""
         return {
             "name": "Synsc Context API",
@@ -790,7 +808,7 @@ def create_app() -> FastAPI:
         config` to validate a new provider/model/key combo *before*
         committing the .env change.
         """
-        checks: dict[str, dict] = {}
+        checks: dict[str, dict[str, Any]] = {}
         ok = True
 
         # 1. Database — single trivial query confirms the pool is alive
@@ -868,7 +886,7 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/config", tags=["Info"])
-    async def get_public_config() -> dict:
+    async def get_public_config() -> dict[str, Any]:
         """Get public configuration for frontend."""
         github_client_id = os.getenv("GITHUB_CLIENT_ID", "")
         return {
@@ -1012,7 +1030,7 @@ def create_app() -> FastAPI:
 
     @app.post("/auth/login", tags=["Auth"])
     @limiter.limit(AUTH_LIMIT)
-    async def login(request: Request, body: LoginRequest) -> dict:
+    async def login(request: Request, body: LoginRequest) -> Response:
         """Authenticate with the system password (admin fallback).
 
         Returns a JWT session token for the admin user.
@@ -1035,7 +1053,7 @@ def create_app() -> FastAPI:
         return response
 
     @app.get("/auth/check", tags=["Auth"])
-    async def auth_check(request: Request) -> dict:
+    async def auth_check(request: Request) -> dict[str, Any]:
         """Check if the current session is valid. Never returns 401."""
         token = request.cookies.get(SESSION_COOKIE_NAME)
         if token:
@@ -1068,7 +1086,10 @@ def create_app() -> FastAPI:
 
     @app.post("/auth/magic/create", tags=["Auth"])
     @limiter.limit(AUTH_LIMIT)
-    async def magic_create(request: Request, body: LoginRequest) -> dict:
+    async def magic_create(
+        request: Request,
+        body: LoginRequest,
+    ) -> dict[str, Any]:
         """Issue a single-use magic link backed by SYSTEM_PASSWORD.
 
         The CLI calls this with the dashboard password; the browser then
@@ -1099,7 +1120,7 @@ def create_app() -> FastAPI:
         return {"magic_id": magic_id, "ttl_seconds": int(_MAGIC_TTL_SECONDS)}
 
     @app.get("/auth/magic/{magic_id}", tags=["Auth"])
-    async def magic_consume(magic_id: str) -> JSONResponse:
+    async def magic_consume(magic_id: str) -> Response:
         """Consume a magic link → session cookie → redirect to /overview.
 
         The redirect target lives on the dashboard (port 3000). We send
@@ -1184,7 +1205,9 @@ def create_app() -> FastAPI:
         return response
 
     @app.get("/auth/me", tags=["Auth"])
-    async def auth_me(auth: AuthContext = Depends(verify_api_key)) -> dict:
+    async def auth_me(
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> dict[str, Any]:
         """Get the current authenticated user's profile."""
         with get_session() as session:
             row = session.execute(
@@ -1303,21 +1326,26 @@ def create_app() -> FastAPI:
         request: Request,
         body: IndexRepositoryRequest,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> StreamingResponse:
         """Index a repository with Server-Sent Events for progress updates."""
         logger.info("API: Streaming index repository", url=body.url, branch=body.branch, user_id=auth.user_id)
 
-        async def event_stream():
+        async def event_stream() -> AsyncIterator[str]:
             """Generate SSE events during indexing."""
             import asyncio
             import json
 
-            progress_queue = asyncio.Queue()
+            progress_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
             # CRITICAL: capture the running event loop NOW (on the async thread).
             loop = asyncio.get_running_loop()
 
-            def progress_callback(stage: str, message: str, progress: float = 0, **kwargs):
+            def progress_callback(
+                stage: str,
+                message: str,
+                progress: float = 0,
+                **kwargs: Any,
+            ) -> None:
                 """Callback to receive progress updates (called from worker thread)."""
                 with suppress(Exception):
                     loop.call_soon_threadsafe(
@@ -1325,7 +1353,7 @@ def create_app() -> FastAPI:
                         {"stage": stage, "message": message, "progress": progress, **kwargs}
                     )
 
-            async def run_indexing():
+            async def run_indexing() -> dict[str, Any]:
                 """Run indexing in thread pool."""
                 import concurrent.futures
                 loop = asyncio.get_event_loop()
@@ -2186,7 +2214,7 @@ def create_app() -> FastAPI:
         request: Request,
         body: ResearchRequest,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """RAG synthesis across indexed sources. Modes: quick / deep / oracle.
 
         Quick mode runs a single retrieve→synthesize pass. Deep mode iterates
@@ -2313,7 +2341,7 @@ def create_app() -> FastAPI:
     def store_research_credential(
         body: StoreResearchCredentialRequest,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Encrypt and store a research-provider key for the current user."""
         from synsc.services.research_credentials import (
             store_user_research_api_key,
@@ -2367,7 +2395,7 @@ def create_app() -> FastAPI:
     def get_research_credential_status(
         provider: Literal["gemini"] = "gemini",
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Return credential metadata for the current user, never the key."""
         from synsc.services.research_credentials import (
             get_user_research_credential_status,
@@ -2394,7 +2422,7 @@ def create_app() -> FastAPI:
     def delete_research_credential(
         provider: Literal["gemini"] = "gemini",
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Delete one provider credential belonging to the current user."""
         from synsc.services.research_credentials import (
             delete_user_research_api_key,
@@ -2433,7 +2461,7 @@ def create_app() -> FastAPI:
         request: Request,
         body: ResearchV2StartRequest,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Start an async research session. Returns session_id immediately.
 
         Stream events via GET /v2/research/{session_id}/events (SSE) and
@@ -2462,7 +2490,7 @@ def create_app() -> FastAPI:
     async def research_v2_get(
         session_id: str,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Return the current state of a research session."""
         from synsc.services.research_sessions import get_session
 
@@ -2477,7 +2505,7 @@ def create_app() -> FastAPI:
     async def research_v2_events(
         session_id: str,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> StreamingResponse:
         """SSE stream of session events.
 
         Emits ``iteration``, ``retrieval``, ``discover``, ``index``,
@@ -2492,7 +2520,7 @@ def create_app() -> FastAPI:
         if session.user_id and auth.user_id and session.user_id != auth.user_id:
             raise HTTPException(status_code=403, detail="not your session")
 
-        async def _stream():
+        async def _stream() -> AsyncIterator[str]:
             async for ev in subscribe(session_id):
                 import json as _json
 
@@ -2523,7 +2551,7 @@ def create_app() -> FastAPI:
         session_id: str,
         body: ResearchFollowupRequest,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Post a follow-up message on a completed research session."""
         from synsc.services.research_sessions import post_followup
 
@@ -2549,7 +2577,7 @@ def create_app() -> FastAPI:
         request: Request,
         body: UnifiedSearchRequest,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Unified search across indexed code + papers + datasets.
 
         Modes: ``precise``, ``thorough``, ``web`` (web is a stub until a
@@ -2593,7 +2621,7 @@ def create_app() -> FastAPI:
         start_line: int | None = None,
         end_line: int | None = None,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Read content from an indexed source.
 
         - ``paper``: supports ``section=`` (canonical synonym or regex).
@@ -2653,7 +2681,7 @@ def create_app() -> FastAPI:
         q: str,
         source_types: str | None = None,
         k: int = 5,
-    ):
+    ) -> Response:
         """Public anonymous search endpoint.
 
         Gated by ``SYNSC_PUBLIC_TRY_ENABLED=true``. Searches only sources
@@ -2724,9 +2752,9 @@ def create_app() -> FastAPI:
     @limiter.limit(SEARCH_LIMIT)
     async def save_context_endpoint(
         request: Request,
-        body: dict,
+        body: dict[str, Any],
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Save a named context blob for the authenticated user."""
         from synsc.services.context_blob_service import save_context
 
@@ -2756,7 +2784,7 @@ def create_app() -> FastAPI:
     async def list_contexts_endpoint(
         request: Request,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         from synsc.services.context_blob_service import list_contexts
 
         blobs = list_contexts(user_id=auth.user_id)
@@ -2770,7 +2798,7 @@ def create_app() -> FastAPI:
         request: Request,
         name: str,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         from synsc.services.context_blob_service import load_context
 
         blob = load_context(user_id=auth.user_id, name=name)
@@ -2784,7 +2812,7 @@ def create_app() -> FastAPI:
         request: Request,
         name: str,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         from synsc.services.context_blob_service import delete_context
 
         deleted = delete_context(user_id=auth.user_id, name=name)
@@ -2799,7 +2827,7 @@ def create_app() -> FastAPI:
         max_symbols: int = 50,
         max_edges: int = 100,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Structural JSON graph of an indexed repository."""
         from synsc.services.visualization_service import visualize_codebase
 
@@ -2827,7 +2855,7 @@ def create_app() -> FastAPI:
         source_types: str | None = None,
         limit: int = 10,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Context7-style name→source resolver.
 
         ``name`` is a free-form library / repo / dataset / paper name.
@@ -2888,7 +2916,7 @@ def create_app() -> FastAPI:
         request: Request,
         type: str | None = None,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Unified listing across all indexed sources (repo / paper / dataset).
 
         ``type`` query param filters to a single source_type when present.
@@ -2906,7 +2934,7 @@ def create_app() -> FastAPI:
         request: Request,
         body: IndexSourceRequest,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Unified indexing dispatch (repo / paper / dataset / docs).
 
         Sync path (``async_mode=false``, default): runs the full chunk +
@@ -2997,7 +3025,7 @@ def create_app() -> FastAPI:
         source_id: str,
         body: GrepSourceRequest,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Regex search within a single indexed source (repo or paper)."""
         from synsc.services.grep_service import GrepService
 
@@ -3039,7 +3067,7 @@ def create_app() -> FastAPI:
         max_depth: int = 4,
         annotate: bool = True,
         auth: AuthContext = Depends(verify_api_key),
-    ):
+    ) -> Response:
         """Browse the directory structure of an indexed repo source.
 
         ``action=tree`` (default): recursive tree, optional ``max_depth`` +
@@ -3225,9 +3253,15 @@ def create_app() -> FastAPI:
         """Revoke an API key (it will no longer work)."""
         try:
             with get_session() as session:
-                result = session.execute(
-                    text("UPDATE api_keys SET is_revoked = true WHERE id = :kid AND user_id = :uid"),
-                    {"kid": key_id, "uid": auth.user_id},
+                result = cast(
+                    CursorResult[Any],
+                    session.execute(
+                        text(
+                            "UPDATE api_keys SET is_revoked = true "
+                            "WHERE id = :kid AND user_id = :uid"
+                        ),
+                        {"kid": key_id, "uid": auth.user_id},
+                    ),
                 )
                 session.commit()
                 success = result.rowcount > 0
@@ -3252,9 +3286,15 @@ def create_app() -> FastAPI:
         """Permanently delete an API key."""
         try:
             with get_session() as session:
-                result = session.execute(
-                    text("DELETE FROM api_keys WHERE id = :kid AND user_id = :uid"),
-                    {"kid": key_id, "uid": auth.user_id},
+                result = cast(
+                    CursorResult[Any],
+                    session.execute(
+                        text(
+                            "DELETE FROM api_keys "
+                            "WHERE id = :kid AND user_id = :uid"
+                        ),
+                        {"kid": key_id, "uid": auth.user_id},
+                    ),
                 )
                 session.commit()
                 success = result.rowcount > 0
@@ -3406,9 +3446,12 @@ def create_app() -> FastAPI:
         """Delete the stored GitHub token for the current user."""
         try:
             with get_session() as session:
-                result = session.execute(
-                    text("DELETE FROM github_tokens WHERE user_id = :uid"),
-                    {"uid": auth.user_id},
+                result = cast(
+                    CursorResult[Any],
+                    session.execute(
+                        text("DELETE FROM github_tokens WHERE user_id = :uid"),
+                        {"uid": auth.user_id},
+                    ),
                 )
                 session.commit()
                 deleted = result.rowcount > 0
@@ -3469,15 +3512,16 @@ def create_app() -> FastAPI:
 
             if q:
                 # Use the search API to filter by name
+                search_params: dict[str, str | int] = {
+                    "q": f"{q} in:name fork:true",
+                    "per_page": per_page,
+                    "page": page,
+                    "sort": "updated",
+                }
                 resp = requests.get(
                     "https://api.github.com/search/repositories",
                     headers=headers,
-                    params={
-                        "q": f"{q} in:name fork:true",
-                        "per_page": per_page,
-                        "page": page,
-                        "sort": "updated",
-                    },
+                    params=search_params,
                     timeout=15,
                 )
                 if resp.status_code != 200:
@@ -3490,15 +3534,16 @@ def create_app() -> FastAPI:
                 total = data.get("total_count", 0)
             else:
                 # List all repos the user has access to
+                list_params: dict[str, str | int] = {
+                    "per_page": per_page,
+                    "page": page,
+                    "sort": "updated",
+                    "direction": "desc",
+                }
                 resp = requests.get(
                     "https://api.github.com/user/repos",
                     headers=headers,
-                    params={
-                        "per_page": per_page,
-                        "page": page,
-                        "sort": "updated",
-                        "direction": "desc",
-                    },
+                    params=list_params,
                     timeout=15,
                 )
                 if resp.status_code != 200:
@@ -3783,9 +3828,14 @@ def create_app() -> FastAPI:
         """Delete the stored HuggingFace token for the current user."""
         try:
             with get_session() as session:
-                result = session.execute(
-                    text("DELETE FROM huggingface_tokens WHERE user_id = :uid"),
-                    {"uid": auth.user_id},
+                result = cast(
+                    CursorResult[Any],
+                    session.execute(
+                        text(
+                            "DELETE FROM huggingface_tokens WHERE user_id = :uid"
+                        ),
+                        {"uid": auth.user_id},
+                    ),
                 )
                 session.commit()
                 deleted = result.rowcount > 0
@@ -3807,7 +3857,9 @@ def create_app() -> FastAPI:
     # ==========================================================================
 
     @app.get("/v1/user/profile", tags=["User"])
-    async def get_user_profile(auth: AuthContext = Depends(verify_api_key)):
+    async def get_user_profile(
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> dict[str, Any]:
         """Get user profile. Tier/credits are always unlimited in Delphi."""
         with get_session() as session:
             row = session.execute(
@@ -3858,7 +3910,10 @@ def create_app() -> FastAPI:
                     "FROM activity_log WHERE user_id = :uid "
                     "AND created_at > now() - interval ':hours hours' "
                 )
-                params: dict = {"uid": auth.user_id, "hours": hours}
+                params: dict[str, Any] = {
+                    "uid": auth.user_id,
+                    "hours": hours,
+                }
 
                 if action:
                     query += "AND action = :action "
@@ -3949,14 +4004,14 @@ def create_app() -> FastAPI:
 
     # Return empty 404 (not JSON) for OAuth discovery so clients skip OAuth gracefully
     @app.get("/.well-known/{path:path}", include_in_schema=False)
-    async def well_known_fallback(path: str):
+    async def well_known_fallback(path: str) -> JSONResponse:
         return JSONResponse(
             {"error": "not_supported", "error_description": "OAuth not supported"},
             status_code=404,
         )
 
     @app.post("/register", include_in_schema=False)
-    async def register_fallback():
+    async def register_fallback() -> JSONResponse:
         return JSONResponse(
             {"error": "not_supported", "error_description": "OAuth not supported"},
             status_code=404,
@@ -3968,11 +4023,16 @@ def create_app() -> FastAPI:
 class _MCPMiddleware:
     """ASGI middleware that intercepts /mcp and routes to MCP transport."""
 
-    def __init__(self, app, session_mgr):
+    def __init__(self, app: ASGIApp, session_mgr: _SHSM) -> None:
         self.app = app
         self.session_mgr = session_mgr
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
         # Pass lifespan events to the inner app (triggers startup/shutdown hooks)
         if scope["type"] == "lifespan":
             await self.app(scope, receive, send)

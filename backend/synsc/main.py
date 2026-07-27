@@ -8,19 +8,19 @@ from synsc.logging import configure_logging
 configure_logging()
 
 
-def main():
+def main() -> int:
     """Run the Synsc Context server (CLI entry point)."""
     from synsc.cli import main as cli_main
     return cli_main()
 
 
-def run_mcp():
+def run_mcp() -> None:
     """Run the MCP server (stdio transport)."""
     from synsc.api.mcp_server import run_server
     run_server()
 
 
-def run_http(host: str = "0.0.0.0", port: int = 8000):
+def run_http(host: str = "0.0.0.0", port: int = 8000) -> None:
     """Run the HTTP API server."""
     from synsc.api.http_server import run_http_server
     run_http_server(host, port)

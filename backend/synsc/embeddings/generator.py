@@ -35,6 +35,8 @@ class EmbeddingProvider(Protocol):
 
     def generate_single(self, text: str) -> np.ndarray: ...
 
+    def embed_query(self, query: str) -> np.ndarray: ...
+
 
 class EmbeddingGenerator:
     """Generate embeddings using a local sentence-transformers model.
