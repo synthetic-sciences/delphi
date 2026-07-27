@@ -411,18 +411,22 @@ def unified_retrieve(
                         if item.get("last_snapshot_id")
                     ]
             snapshots = _get_snapshot_service()
-            resolved = [
-                snapshots.resolve(
-                    SnapshotSourceType.CONNECTOR,
+            resolved_pairs = [
+                (
                     source_id,
-                    user_id=user_id,
+                    snapshots.resolve(
+                        SnapshotSourceType.CONNECTOR,
+                        source_id,
+                        user_id=user_id,
+                    ),
                 )
                 for source_id in connector_ids
             ]
-            snapshot_ids = tuple(
-                str(item["snapshot_id"]) for item in resolved
-            )
-            if snapshot_ids:
+            for offset in range(0, len(resolved_pairs), 100):
+                batch = resolved_pairs[offset : offset + 100]
+                snapshot_ids = tuple(
+                    str(item["snapshot_id"]) for _, item in batch
+                )
                 results = snapshots.search(
                     snapshot_ids,
                     query,
@@ -430,7 +434,7 @@ def unified_retrieve(
                     limit=k,
                     expected_sources=tuple(
                         ("connector", source_id)
-                        for source_id in connector_ids
+                        for source_id, _ in batch
                     ),
                     timeout_ms=remaining_ms(),
                     cancellation=token,
@@ -1497,7 +1501,57 @@ def _is_uuid(s: str) -> bool:
     return bool(_UUID_RE.match(s or ""))
 
 
-def _lookup_source_type_by_uuid(uid: str) -> str | None:
+def read_connector_source(
+    source_id: str,
+    *,
+    user_id: str,
+    path: str | None = None,
+    item_offset: int = 0,
+    item_limit: int = 100,
+) -> dict[str, Any]:
+    """Read an authorized page from a connector's current immutable head."""
+
+    from synsc.snapshots.contracts import SnapshotSourceType
+
+    snapshots = _get_snapshot_service()
+    current = snapshots.resolve(
+        SnapshotSourceType.CONNECTOR,
+        source_id,
+        user_id=user_id,
+    )
+    result = snapshots.get(
+        str(current["snapshot_id"]),
+        user_id=user_id,
+        include_items=True,
+        item_offset=item_offset,
+        item_limit=item_limit,
+    )
+    items = list(result.get("items") or [])
+    if path:
+        normalized = path.strip("/")
+        items = [
+            item
+            for item in items
+            if str(item.get("locator") or "").strip("/") == normalized
+            or str(item.get("locator") or "").strip("/").startswith(
+                f"{normalized}/"
+            )
+        ]
+    return {
+        "source_id": source_id,
+        "source_type": "connector",
+        "snapshot_id": str(current["snapshot_id"]),
+        "items": items,
+        "count": len(items),
+        "item_offset": item_offset,
+        "item_limit": item_limit,
+    }
+
+
+def _lookup_source_type_by_uuid(
+    uid: str,
+    user_id: str | None = None,
+) -> str | None:
     """Detect which table a UUID belongs to via SQLAlchemy lookups."""
     from synsc.database.connection import get_session
     from synsc.database.models import (
@@ -1542,10 +1596,21 @@ def _lookup_source_type_by_uuid(uid: str) -> str | None:
                     SELECT 1
                     FROM connector_sources
                     WHERE source_id = :source_id
+                      AND (
+                          is_public IS TRUE
+                          OR indexed_by = :user_id
+                          OR EXISTS (
+                              SELECT 1
+                              FROM user_connector_sources access
+                              WHERE access.source_id =
+                                    connector_sources.source_id
+                                AND access.user_id = :user_id
+                          )
+                      )
                     LIMIT 1
                     """
                 ),
-                {"source_id": uid},
+                {"source_id": uid, "user_id": user_id},
             ).first()
             if connector:
                 return "connector"
@@ -2020,7 +2085,7 @@ def resolve_source_id(raw: str, user_id: str | None = None) -> tuple[str, str]:
     candidate = raw.strip()
 
     if _is_uuid(candidate):
-        stype = _lookup_source_type_by_uuid(candidate)
+        stype = _lookup_source_type_by_uuid(candidate, user_id=user_id)
         if stype is None:
             raise ValueError(
                 f"could not resolve source_id: unknown UUID {candidate}"

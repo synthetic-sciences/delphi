@@ -54,6 +54,59 @@ def test_unified_retrieve_searches_current_connector_snapshot(
     snapshots.search.assert_called_once()
 
 
+def test_unified_retrieve_batches_more_than_one_hundred_connectors(
+    monkeypatch,
+) -> None:
+    from synsc.connectors import service as connector_service
+    from synsc.services import source_service
+
+    connectors = MagicMock()
+    connectors.list_sources.return_value = [
+        {
+            "source_id": f"source-{index}",
+            "last_snapshot_id": f"snapshot-{index}",
+        }
+        for index in range(205)
+    ]
+    snapshots = MagicMock()
+    snapshots.resolve.side_effect = lambda _type, source_id, **_kwargs: {
+        "snapshot_id": source_id.replace("source", "snapshot")
+    }
+    snapshots.search.return_value = []
+    monkeypatch.setattr(
+        connector_service,
+        "get_connector_sync_service",
+        lambda: connectors,
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_get_snapshot_service",
+        lambda: snapshots,
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_attach_trust_scores",
+        lambda hits, **kwargs: hits,
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_maybe_cross_source_rerank",
+        lambda query, hits, **kwargs: hits,
+    )
+
+    source_service.unified_retrieve(
+        query="connector",
+        source_types=["connector"],
+        user_id="user-1",
+    )
+
+    assert [len(call.args[0]) for call in snapshots.search.call_args_list] == [
+        100,
+        100,
+        5,
+    ]
+
+
 def test_list_sources_includes_connector_lifecycle_state(
     monkeypatch,
 ) -> None:

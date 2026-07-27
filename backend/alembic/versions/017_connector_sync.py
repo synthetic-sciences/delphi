@@ -106,6 +106,26 @@ def upgrade() -> None:
     )
     op.execute(
         """
+        CREATE TABLE IF NOT EXISTS connector_record_access (
+            source_id VARCHAR(36) NOT NULL
+                REFERENCES connector_sources(source_id) ON DELETE CASCADE,
+            external_id_hash VARCHAR(64) NOT NULL,
+            external_id TEXT NOT NULL,
+            principals JSONB,
+            revoked BOOLEAN NOT NULL DEFAULT FALSE,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (source_id, external_id_hash)
+        )
+        """
+    )
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_connector_record_access_source
+        ON connector_record_access (source_id, revoked)
+        """
+    )
+    op.execute(
+        """
         CREATE TABLE IF NOT EXISTS connector_sync_jobs (
             job_id VARCHAR(36) PRIMARY KEY
                 DEFAULT gen_random_uuid()::text,
@@ -167,6 +187,7 @@ def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS connector_sync_jobs")
     op.execute("DELETE FROM source_snapshot_heads WHERE source_type = 'connector'")
     op.execute("DELETE FROM source_snapshots WHERE source_type = 'connector'")
+    op.execute("DROP TABLE IF EXISTS connector_record_access")
     op.execute("DROP TABLE IF EXISTS user_connector_sources")
     op.execute("DROP TABLE IF EXISTS connector_sources")
     op.execute(

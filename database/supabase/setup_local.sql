@@ -1396,6 +1396,20 @@ CREATE TABLE IF NOT EXISTS user_connector_sources (
 CREATE INDEX IF NOT EXISTS idx_user_connector_sources_source
     ON user_connector_sources(source_id);
 
+CREATE TABLE IF NOT EXISTS connector_record_access (
+    source_id VARCHAR(36) NOT NULL
+        REFERENCES connector_sources(source_id) ON DELETE CASCADE,
+    external_id_hash VARCHAR(64) NOT NULL,
+    external_id TEXT NOT NULL,
+    principals JSONB,
+    revoked BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (source_id, external_id_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_connector_record_access_source
+    ON connector_record_access(source_id, revoked);
+
 CREATE TABLE IF NOT EXISTS connector_sync_jobs (
     job_id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
     source_id VARCHAR(36) NOT NULL
@@ -1472,7 +1486,8 @@ AND table_name IN (
     'datasets', 'user_datasets', 'dataset_chunks', 'dataset_chunk_embeddings',
     'source_snapshots', 'source_snapshot_heads', 'source_snapshot_items', 'source_snapshot_item_embeddings',
     'indexing_jobs', 'research_jobs', 'research_events', 'research_messages',
-    'connector_sources', 'user_connector_sources', 'connector_sync_jobs',
+    'connector_sources', 'user_connector_sources',
+    'connector_record_access', 'connector_sync_jobs',
     'activity_log'
 )
 ORDER BY table_name;
@@ -1510,6 +1525,7 @@ ORDER BY table_name;
 --   - research_events: Replayable research event log
 --   - research_messages: Durable research conversation turns
 --   - connector_sources: Encrypted connector configuration and checkpoints
+--   - connector_record_access: Current authorization for immutable records
 --   - connector_sync_jobs: Durable incremental connector queue
 --   - activity_log: User activity tracking
 --

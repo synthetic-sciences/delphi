@@ -10,7 +10,9 @@ def test_resolve_uuid_detected_as_repo(monkeypatch):
     from synsc.services import source_service
 
     monkeypatch.setattr(
-        source_service, "_lookup_source_type_by_uuid", lambda uid: "repo"
+        source_service,
+        "_lookup_source_type_by_uuid",
+        lambda uid, user_id=None: "repo",
     )
     sid, stype = source_service.resolve_source_id(_VALID_UUID, user_id="u1")
     assert sid == _VALID_UUID
@@ -21,7 +23,9 @@ def test_resolve_uuid_unknown_type_raises(monkeypatch):
     from synsc.services import source_service
 
     monkeypatch.setattr(
-        source_service, "_lookup_source_type_by_uuid", lambda uid: None
+        source_service,
+        "_lookup_source_type_by_uuid",
+        lambda uid, user_id=None: None,
     )
     with pytest.raises(ValueError, match="could not resolve"):
         source_service.resolve_source_id(_VALID_UUID, user_id="u1")

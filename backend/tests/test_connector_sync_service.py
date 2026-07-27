@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from typing import Any
 
@@ -36,11 +37,19 @@ class FakeProvider:
         execution=ExecutionLocation.LOCAL,
         accepted_classifications=frozenset(ContentClassification),
         supports_cancellation=True,
+        supports_retry=True,
     )
 
     def __init__(self) -> None:
         self.requests: list[ConnectorSyncRequest] = []
         self.failure: Exception | None = None
+        self.validated: dict[str, Any] | None = None
+
+    def validate_configuration(
+        self,
+        configuration: dict[str, Any],
+    ) -> None:
+        self.validated = dict(configuration)
 
     def sync(self, request: ConnectorSyncRequest) -> ConnectorSyncResponse:
         self.requests.append(request)
@@ -84,6 +93,7 @@ class FakeStore:
         self.created: dict[str, Any] | None = None
         self.applied: ConnectorSyncResponse | None = None
         self.failed: str | None = None
+        self.retryable: bool | None = None
 
     def create_source(self, **kwargs: Any) -> dict[str, Any]:
         self.created = kwargs
@@ -147,9 +157,11 @@ class FakeStore:
         job: ConnectorSyncJobState,
         *,
         error_message: str,
-    ) -> bool:
+        retryable: bool,
+    ) -> str:
         self.failed = error_message
-        return True
+        self.retryable = retryable
+        return "pending" if retryable else "failed"
 
     def enqueue_due(self, *, limit: int) -> int:
         return 2
@@ -164,7 +176,7 @@ def _service() -> tuple[ConnectorSyncService, FakeProvider, FakeStore]:
 
 
 def test_create_source_validates_provider_and_never_returns_configuration() -> None:
-    service, _, store = _service()
+    service, provider, store = _service()
 
     result = service.create_source(
         user_id="user-1",
@@ -178,6 +190,7 @@ def test_create_source_validates_provider_and_never_returns_configuration() -> N
 
     assert store.created is not None
     assert store.created["configuration"] == {"token": "secret"}
+    assert provider.validated == {"token": "secret"}
     assert "configuration" not in result
     assert "token" not in repr(result)
 
@@ -250,6 +263,7 @@ def test_run_once_records_failure_without_applying_cursor() -> None:
     }
     assert store.applied is None
     assert store.failed == "provider unavailable"
+    assert store.retryable is False
 
 
 def test_run_once_redacts_configuration_values_from_failures() -> None:
@@ -326,3 +340,24 @@ def test_run_once_rejects_non_advancing_paginated_cursor() -> None:
     assert result["status"] == "failed"
     assert "advance cursor" in result["error"]
     assert store.applied is None
+
+
+def test_run_once_enforces_deadline_and_requeues_retryable_timeout() -> None:
+    service, provider, store = _service()
+    service.timeout_ms = 10
+
+    def blocking(request):
+        while not request.cancellation.cancelled:
+            time.sleep(0.001)
+        raise TimeoutError("provider observed cancellation")
+
+    provider.sync = blocking
+    started = time.monotonic()
+
+    result = service.run_once(worker_id="worker-1")
+
+    assert time.monotonic() - started < 0.5
+    assert result is not None
+    assert result["status"] == "pending"
+    assert store.retryable is True
+    assert "timed out" in result["error"]

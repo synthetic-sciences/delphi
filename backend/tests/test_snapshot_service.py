@@ -175,14 +175,16 @@ class FakeSnapshotStore:
     def list_items(
         self,
         _session: object,
-        snapshot_id: str,
+        snapshot,
         *,
+        user_id: str | None,
         offset: int,
         limit: int,
     ) -> list[dict[str, Any]]:
+        assert user_id == "user-1"
         return [
             item.to_dict(include_content=True)
-            for item in self.items[snapshot_id][offset : offset + limit]
+            for item in self.items[snapshot.snapshot_id][offset : offset + limit]
         ]
 
 

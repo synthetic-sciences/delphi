@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
+from synsc.connectors import local_folder
 from synsc.connectors.contracts import ConnectorSyncRequest
 from synsc.connectors.local_folder import LocalFolderConnector
 
@@ -19,6 +21,10 @@ def _request(path: Path, **configuration: object) -> ConnectorSyncRequest:
     )
 
 
+def _connector(allowed_root: Path) -> LocalFolderConnector:
+    return LocalFolderConnector(allowed_roots=(allowed_root,))
+
+
 def test_initial_sync_is_deterministic_and_skips_binary_files(
     tmp_path: Path,
 ) -> None:
@@ -26,7 +32,7 @@ def test_initial_sync_is_deterministic_and_skips_binary_files(
     (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
     (tmp_path / "image.bin").write_bytes(b"\x00\x01\x02")
 
-    result = LocalFolderConnector().sync(_request(tmp_path))
+    result = _connector(tmp_path).sync(_request(tmp_path))
 
     assert [record.locator for record in result.records] == ["a.txt", "b.md"]
     assert [record.content for record in result.records] == ["alpha", "beta"]
@@ -39,7 +45,7 @@ def test_followup_sync_emits_only_changes_and_tombstones(tmp_path: Path) -> None
     second_path = tmp_path / "second.md"
     first_path.write_text("one", encoding="utf-8")
     second_path.write_text("two", encoding="utf-8")
-    connector = LocalFolderConnector()
+    connector = _connector(tmp_path)
 
     initial = connector.sync(_request(tmp_path))
     first_path.write_text("updated", encoding="utf-8")
@@ -69,7 +75,7 @@ def test_bounded_pages_advance_without_losing_remaining_changes(
 ) -> None:
     for name in ("a.md", "b.md", "c.md"):
         (tmp_path / name).write_text(name, encoding="utf-8")
-    connector = LocalFolderConnector()
+    connector = _connector(tmp_path)
 
     first = connector.sync(
         ConnectorSyncRequest(
@@ -100,20 +106,20 @@ def test_sync_rejects_root_escape_and_symlink_targets(tmp_path: Path) -> None:
     outside.write_text("secret", encoding="utf-8")
     (tmp_path / "escape.txt").symlink_to(outside)
 
-    result = LocalFolderConnector().sync(_request(tmp_path))
+    result = _connector(tmp_path).sync(_request(tmp_path))
 
     assert result.records == ()
 
 
 def test_sync_requires_an_existing_directory(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="directory"):
-        LocalFolderConnector().sync(_request(tmp_path / "missing"))
+        _connector(tmp_path).sync(_request(tmp_path / "missing"))
 
 
 def test_sync_honors_file_and_total_byte_limits(tmp_path: Path) -> None:
     (tmp_path / "large.md").write_text("1234567890", encoding="utf-8")
     with pytest.raises(ValueError, match="max_file_bytes"):
-        LocalFolderConnector().sync(
+        _connector(tmp_path).sync(
             _request(tmp_path, max_file_bytes=5, max_total_bytes=100)
         )
 
@@ -124,4 +130,62 @@ def test_sync_honors_cancellation(tmp_path: Path) -> None:
     request.cancellation.cancel()
 
     with pytest.raises(TimeoutError, match="cancelled"):
-        LocalFolderConnector().sync(request)
+        _connector(tmp_path).sync(request)
+
+
+def test_sync_denies_paths_outside_operator_allowed_roots(
+    tmp_path: Path,
+) -> None:
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("host secret", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="allowed roots"):
+        _connector(allowed).sync(_request(outside))
+
+
+def test_sync_denies_all_paths_when_no_allowed_roots_are_configured(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(
+        "SYNSC_LOCAL_CONNECTOR_ALLOWED_ROOTS",
+        raising=False,
+    )
+
+    with pytest.raises(ValueError, match="not configured"):
+        LocalFolderConnector().sync(_request(tmp_path))
+
+
+def test_excluded_directories_are_pruned_before_traversal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hidden = tmp_path / ".git"
+    hidden.mkdir()
+    (hidden / "credentials.txt").write_text("secret", encoding="utf-8")
+    (tmp_path / "safe.txt").write_text("safe", encoding="utf-8")
+    real_scandir = os.scandir
+
+    def guarded_scandir(path):
+        if Path(path).name == ".git":
+            raise AssertionError("excluded directory was traversed")
+        return real_scandir(path)
+
+    monkeypatch.setattr(local_folder.os, "scandir", guarded_scandir)
+
+    result = _connector(tmp_path).sync(_request(tmp_path))
+
+    assert [record.locator for record in result.records] == ["safe.txt"]
+
+
+def test_directory_only_traversal_is_bounded_by_max_entries(
+    tmp_path: Path,
+) -> None:
+    for name in ("one", "two", "three"):
+        (tmp_path / name).mkdir()
+
+    with pytest.raises(ValueError, match="max_entries"):
+        _connector(tmp_path).sync(_request(tmp_path, max_entries=2))

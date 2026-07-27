@@ -152,6 +152,32 @@ def test_connector_routes_are_in_openapi(client) -> None:
     assert paths["/v2/connector-sync-jobs/{job_id}"]["get"]
 
 
+def test_standard_http_read_supports_connector_snapshots(
+    client,
+    monkeypatch,
+) -> None:
+    from synsc.services import source_service
+
+    monkeypatch.setattr(
+        source_service,
+        "read_connector_source",
+        lambda source_id, **_kwargs: {
+            "source_id": source_id,
+            "source_type": "connector",
+            "snapshot_id": "snapshot-1",
+            "items": [{"locator": "notes.md", "content": "safe"}],
+            "count": 1,
+        },
+    )
+
+    response = client.get(
+        "/v1/sources/source-1/read?source_type=connector"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["snapshot_id"] == "snapshot-1"
+
+
 def test_mcp_connector_tools_are_compact_and_registered(monkeypatch) -> None:
     monkeypatch.setenv("SYNSC_MCP_PROFILE", "all")
     from synsc.api.mcp_server import create_server

@@ -2509,6 +2509,50 @@ Provides deep context to AI agents through:
                 "count": len(chunks),
             }
 
+        if source_type == "connector":
+            from synsc.services.source_service import read_connector_source
+            from synsc.snapshots.service import (
+                SnapshotAccessDeniedError,
+                SnapshotNotFoundError,
+            )
+
+            if user_id is None:
+                return {
+                    "success": False,
+                    "error_code": "auth_required",
+                    "message": "connector reads require authentication",
+                }
+            try:
+                result = read_connector_source(
+                    source_id,
+                    user_id=user_id,
+                    path=path,
+                    item_limit=500,
+                )
+            except (SnapshotAccessDeniedError, SnapshotNotFoundError):
+                return {
+                    "success": False,
+                    "error_code": "not_found",
+                    "message": "connector source not found",
+                }
+            items = filter_results_by_topic(
+                list(result.get("items") or []),
+                topic,
+                text_keys=("content", "locator"),
+            )
+            if effective_tokens:
+                items = budget_results(
+                    items,
+                    effective_tokens,
+                    text_key="content",
+                )
+            return {
+                "success": True,
+                **result,
+                "items": items,
+                "count": len(items),
+            }
+
         return {
             "success": False,
             "error_code": "invalid_input",
@@ -2531,6 +2575,7 @@ Provides deep context to AI agents through:
         - paper: supports ``section=`` (canonical token or regex).
         - repo:  requires ``path=``; optional ``start_line``/``end_line``.
         - docs:  whole-docs read; pair with ``topic`` to narrow.
+        - connector: reads the current immutable snapshot; ``path`` narrows.
 
         Args:
             source_id: Paper / repo / docs ID.

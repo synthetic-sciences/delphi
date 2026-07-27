@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from synsc.connectors.contracts import (
+    ConnectorProvider,
     ConnectorSyncRequest,
     ConnectorSyncResponse,
 )
@@ -15,7 +18,11 @@ from synsc.connectors.registry import (
     ConnectorProviderRegistry,
     get_connector_provider_registry,
 )
-from synsc.providers.contracts import ContentClassification
+from synsc.providers.contracts import (
+    CancellationToken,
+    ContentClassification,
+    ProviderUnavailableError,
+)
 
 
 def _secret_strings(value: Any) -> list[str]:
@@ -45,6 +52,52 @@ def _safe_provider_error(
     for secret in sorted(set(secrets), key=len, reverse=True):
         message = message.replace(secret, "[redacted]")
     return message
+
+
+def _provider_failure_is_retryable(
+    exc: Exception,
+    *,
+    supports_retry: bool,
+) -> bool:
+    if isinstance(exc, ProviderUnavailableError):
+        return bool(exc.failure.retryable)
+    return bool(
+        supports_retry
+        and isinstance(exc, (TimeoutError, ConnectionError, OSError))
+    )
+
+
+def _sync_with_deadline(
+    provider: ConnectorProvider,
+    request: ConnectorSyncRequest,
+) -> ConnectorSyncResponse:
+    """Enforce the provider deadline even for a non-cooperative adapter."""
+
+    outcome: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
+
+    def invoke() -> None:
+        try:
+            outcome.put((True, provider.sync(request)))
+        except Exception as exc:
+            outcome.put((False, exc))
+
+    thread = threading.Thread(
+        target=invoke,
+        daemon=True,
+        name=f"connector-provider-{provider.descriptor.name}",
+    )
+    thread.start()
+    thread.join(request.timeout_ms / 1000)
+    if thread.is_alive():
+        request.cancellation.cancel()
+        raise TimeoutError("Connector provider timed out.")
+    succeeded, value = outcome.get_nowait()
+    if not succeeded:
+        assert isinstance(value, Exception)
+        raise value
+    if not isinstance(value, ConnectorSyncResponse):
+        raise TypeError("Connector provider returned an invalid response.")
+    return value
 
 
 @dataclass(frozen=True)
@@ -158,7 +211,8 @@ class ConnectorSyncStore(Protocol):
         job: ConnectorSyncJobState,
         *,
         error_message: str,
-    ) -> bool: ...
+        retryable: bool,
+    ) -> str | None: ...
 
     def enqueue_due(self, *, limit: int) -> int: ...
 
@@ -221,6 +275,8 @@ class ConnectorSyncService:
                 f"connector provider '{provider}' does not accept "
                 f"classification '{classification.value}'"
             )
+        connector = self.registry.create(provider)
+        connector.validate_configuration(configuration)
         result = self.store.create_source(
             user_id=user_id,
             provider=provider,
@@ -290,16 +346,19 @@ class ConnectorSyncService:
             raise RuntimeError(
                 f"connector job {job.job_id} has an invalid worker lease"
             )
+        provider: ConnectorProvider | None = None
         try:
             provider = self.registry.create(source.provider)
-            response = provider.sync(
+            response = _sync_with_deadline(
+                provider,
                 ConnectorSyncRequest(
                     user_id=source.user_id,
                     configuration=source.configuration,
                     cursor=source.cursor,
                     limit=self.page_limit,
                     timeout_ms=self.timeout_ms,
-                )
+                    cancellation=CancellationToken(),
+                ),
             )
             if len(response.records) > self.page_limit:
                 raise ValueError(
@@ -336,10 +395,25 @@ class ConnectorSyncService:
             )
         except Exception as exc:
             error_message = _safe_provider_error(exc, source)
-            self.store.fail_job(job, error_message=error_message)
+            retryable = _provider_failure_is_retryable(
+                exc,
+                supports_retry=bool(
+                    provider is not None
+                    and provider.descriptor.supports_retry
+                ),
+            )
+            status = self.store.fail_job(
+                job,
+                error_message=error_message,
+                retryable=retryable,
+            )
+            if status is None:
+                raise RuntimeError(
+                    f"connector job {job.job_id} lost its failure lease"
+                ) from exc
             return {
                 "job_id": job.job_id,
-                "status": "failed",
+                "status": status,
                 "error": error_message,
             }
 

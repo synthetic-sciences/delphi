@@ -1014,7 +1014,13 @@ def create_app() -> FastAPI:
     )
     async def list_source_snapshots(
         source_id: str,
-        source_type: Literal["repo", "paper", "dataset", "docs"] = Query(
+        source_type: Literal[
+            "repo",
+            "paper",
+            "dataset",
+            "docs",
+            "connector",
+        ] = Query(
             ...,
             alias="type",
         ),
@@ -3105,6 +3111,8 @@ def create_app() -> FastAPI:
         section: str | None = None,
         start_line: int | None = None,
         end_line: int | None = None,
+        item_offset: int = 0,
+        item_limit: int = 100,
         auth: AuthContext = Depends(verify_api_key),
     ) -> Response:
         """Read content from an indexed source.
@@ -3151,6 +3159,31 @@ def create_app() -> FastAPI:
             return SafeJSONResponse(
                 content={**res, "source_id": source_id, "source_type": "repo"}
             )
+
+        if source_type == "connector":
+            from synsc.services.source_service import read_connector_source
+            from synsc.snapshots.service import (
+                SnapshotAccessDeniedError,
+                SnapshotNotFoundError,
+            )
+
+            try:
+                result = await asyncio.to_thread(
+                    read_connector_source,
+                    source_id,
+                    user_id=auth.user_id,
+                    path=path,
+                    item_offset=item_offset,
+                    item_limit=item_limit,
+                )
+            except (SnapshotAccessDeniedError, SnapshotNotFoundError) as exc:
+                raise HTTPException(
+                    status_code=404,
+                    detail="connector source not found",
+                ) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            return SafeJSONResponse(content={"success": True, **result})
 
         raise HTTPException(
             status_code=400, detail=f"unsupported source_type: {source_type}"

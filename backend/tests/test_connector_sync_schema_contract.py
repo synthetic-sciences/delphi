@@ -12,6 +12,7 @@ from alembic.script import ScriptDirectory
 
 from synsc.database.connection import EXPECTED_ALEMBIC_REVISION
 from synsc.database.models import (
+    ConnectorRecordAccess,
     ConnectorSource,
     ConnectorSyncJob,
     UserConnectorSource,
@@ -39,6 +40,7 @@ def _load_migration(path: Path, module_name: str) -> ModuleType:
 
 def test_connector_models_and_snapshot_type_are_registered() -> None:
     assert ConnectorSource.__tablename__ == "connector_sources"
+    assert ConnectorRecordAccess.__tablename__ == "connector_record_access"
     assert UserConnectorSource.__tablename__ == "user_connector_sources"
     assert ConnectorSyncJob.__tablename__ == "connector_sync_jobs"
     assert SnapshotSourceType.CONNECTOR.value == "connector"
@@ -81,6 +83,7 @@ def test_connector_migration_builds_queue_and_expands_snapshot_type(
 
     sql = " ".join("\n".join(statements).split())
     assert "CREATE TABLE IF NOT EXISTS connector_sources" in sql
+    assert "CREATE TABLE IF NOT EXISTS connector_record_access" in sql
     assert "CREATE TABLE IF NOT EXISTS connector_sync_jobs" in sql
     assert "CREATE TABLE IF NOT EXISTS user_connector_sources" in sql
     assert "encrypted_config" in sql
@@ -93,6 +96,7 @@ def test_connector_migration_builds_queue_and_expands_snapshot_type(
 def test_bootstrap_sql_contains_connector_sync_schema() -> None:
     sql = " ".join(SETUP_SQL.read_text().split())
     assert "CREATE TABLE IF NOT EXISTS connector_sources" in sql
+    assert "CREATE TABLE IF NOT EXISTS connector_record_access" in sql
     assert "CREATE TABLE IF NOT EXISTS connector_sync_jobs" in sql
     assert "CREATE TABLE IF NOT EXISTS user_connector_sources" in sql
     assert "idx_connector_sources_due" in sql

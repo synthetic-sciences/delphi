@@ -1563,6 +1563,42 @@ class UserConnectorSource(Base):
     )
 
 
+class ConnectorRecordAccess(Base):
+    """Current per-record authorization used across immutable snapshots."""
+
+    __tablename__ = "connector_record_access"
+    __table_args__ = (
+        Index(
+            "idx_connector_record_access_source",
+            "source_id",
+            "revoked",
+        ),
+    )
+
+    source_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("connector_sources.source_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    external_id_hash: Mapped[str] = mapped_column(
+        String(64),
+        primary_key=True,
+    )
+    external_id: Mapped[str] = mapped_column(Text, nullable=False)
+    principals: Mapped[list[str] | None] = mapped_column(JSONB)
+    revoked: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
 class ConnectorSyncJob(Base):
     """Durable, leased work item for one bounded connector sync page."""
 

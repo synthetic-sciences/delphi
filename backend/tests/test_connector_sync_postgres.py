@@ -212,6 +212,17 @@ def test_page_apply_activates_snapshot_then_advances_cursor(
     assert row["snapshot_id"] == snapshot_id
     assert row["status"] == "completed"
     assert row["sealed_at"] is not None
+    from synsc.snapshots.service import SnapshotService
+
+    published = SnapshotService().get(
+        snapshot_id,
+        user_id=connector_runtime,
+        include_items=True,
+    )
+    assert all(
+        "accessible_principals" not in item["metadata"]
+        for item in published["items"]
+    )
 
     store.enqueue_sync(
         source_id,
@@ -263,7 +274,14 @@ def test_failure_does_not_advance_checkpoint(
     claimed = store.claim_next_job(worker_id="worker-failing")
     assert claimed is not None
     job, _ = claimed
-    assert store.fail_job(job, error_message="network failed")
+    assert (
+        store.fail_job(
+            job,
+            error_message="network failed",
+            retryable=False,
+        )
+        == "failed"
+    )
 
     with get_session() as session:
         row = session.execute(
@@ -284,6 +302,41 @@ def test_failure_does_not_advance_checkpoint(
     assert row["status"] == "failed"
 
 
+def test_retryable_failure_requeues_until_attempt_budget_exhausted(
+    connector_runtime: str,
+) -> None:
+    from synsc.connectors.postgres import PostgresConnectorSyncStore
+
+    store = PostgresConnectorSyncStore()
+    source_id = str(_create(store, connector_runtime)["source_id"])
+    queued = store.enqueue_sync(
+        source_id,
+        user_id=connector_runtime,
+        priority=0,
+    )
+
+    statuses: list[str | None] = []
+    for attempt in range(3):
+        claimed = store.claim_next_job(worker_id=f"worker-retry-{attempt}")
+        assert claimed is not None
+        job, _ = claimed
+        statuses.append(
+            store.fail_job(
+                job,
+                error_message="temporary timeout",
+                retryable=True,
+            )
+        )
+
+    assert statuses == ["pending", "pending", "failed"]
+    terminal = store.get_job(
+        str(queued["job_id"]),
+        user_id=connector_runtime,
+    )
+    assert terminal["status"] == "failed"
+    assert terminal["attempt_count"] == 3
+
+
 def test_permission_revocation_is_materialized_as_tombstone(
     connector_runtime: str,
 ) -> None:
@@ -296,7 +349,7 @@ def test_permission_revocation_is_materialized_as_tombstone(
     first = store.claim_next_job(worker_id="worker-one")
     assert first is not None
     first_job, first_source = first
-    store.apply_sync_page(
+    first_result = store.apply_sync_page(
         first_job,
         first_source,
         ConnectorSyncResponse(
@@ -344,6 +397,127 @@ def test_permission_revocation_is_materialized_as_tombstone(
             {"snapshot_id": result["snapshot_id"]},
         ).scalar_one()
     assert item_count == 0
+
+    from synsc.snapshots.service import SnapshotService
+
+    historical = SnapshotService().get(
+        str(first_result["snapshot_id"]),
+        user_id=connector_runtime,
+        include_items=True,
+    )
+    assert historical["items"] == []
+    assert SnapshotService().search(
+        (str(first_result["snapshot_id"]),),
+        "visible now",
+        user_id=connector_runtime,
+    ) == []
+
+
+def test_public_connector_items_still_enforce_record_principals(
+    connector_runtime: str,
+) -> None:
+    from synsc.connectors.postgres import PostgresConnectorSyncStore
+    from synsc.snapshots.service import SnapshotService
+
+    store = PostgresConnectorSyncStore()
+    source = store.create_source(
+        user_id=connector_runtime,
+        provider="fixture",
+        display_name="Public shell",
+        external_ref="fixture://public",
+        configuration={},
+        classification=ContentClassification.PUBLIC,
+        schedule_seconds=None,
+        enabled=True,
+    )
+    source_id = str(source["source_id"])
+    store.enqueue_sync(source_id, user_id=connector_runtime, priority=0)
+    claimed = store.claim_next_job(worker_id="worker-public")
+    assert claimed is not None
+    job, state = claimed
+    result = store.apply_sync_page(
+        job,
+        state,
+        ConnectorSyncResponse(
+            records=(
+                ConnectorRecord(
+                    external_id="restricted",
+                    locator="restricted.md",
+                    content="not public despite source shell",
+                    accessible_principals=(connector_runtime,),
+                ),
+            ),
+            next_cursor={"generation": 1},
+        ),
+    )
+    other_user = str(uuid.uuid4())
+
+    visible_shell = SnapshotService().get(
+        str(result["snapshot_id"]),
+        user_id=other_user,
+        include_items=True,
+    )
+    assert visible_shell["items"] == []
+    assert SnapshotService().search(
+        (str(result["snapshot_id"]),),
+        "not public",
+        user_id=other_user,
+    ) == []
+
+
+def test_manual_and_scheduled_enqueue_share_one_active_job(
+    connector_runtime: str,
+) -> None:
+    from synsc.connectors.postgres import PostgresConnectorSyncStore
+    from synsc.database.connection import get_session
+
+    store = PostgresConnectorSyncStore()
+    source_id = str(_create(store, connector_runtime)["source_id"])
+    with get_session() as session:
+        session.execute(
+            text(
+                """
+                UPDATE connector_sources
+                SET next_sync_at = NOW() - INTERVAL '1 minute'
+                WHERE source_id = :source_id
+                """
+            ),
+            {"source_id": source_id},
+        )
+    barrier = threading.Barrier(2)
+
+    def manual() -> object:
+        barrier.wait()
+        return PostgresConnectorSyncStore().enqueue_sync(
+            source_id,
+            user_id=connector_runtime,
+            priority=4,
+        )
+
+    def scheduled() -> object:
+        barrier.wait()
+        return PostgresConnectorSyncStore().enqueue_due(limit=100)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = [
+            executor.submit(manual),
+            executor.submit(scheduled),
+        ]
+        [future.result() for future in outcomes]
+
+    with get_session() as session:
+        active_jobs = session.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM connector_sync_jobs
+                WHERE source_id = :source_id
+                  AND status IN ('pending', 'running')
+                """
+            ),
+            {"source_id": source_id},
+        ).scalar_one()
+    assert active_jobs == 1
 
 
 def test_snapshot_failure_rolls_back_checkpoint_and_head(
@@ -411,6 +585,7 @@ def test_snapshot_failure_rolls_back_checkpoint_and_head(
 def test_local_folder_service_runs_end_to_end(
     connector_runtime: str,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from synsc.connectors.postgres import PostgresConnectorSyncStore
     from synsc.connectors.service import ConnectorSyncService
@@ -426,6 +601,10 @@ def test_local_folder_service_runs_end_to_end(
     (tmp_path / "notes.md").write_text(
         "durable local context",
         encoding="utf-8",
+    )
+    monkeypatch.setenv(
+        "SYNSC_LOCAL_CONNECTOR_ALLOWED_ROOTS",
+        str(tmp_path),
     )
     service = ConnectorSyncService(store=PostgresConnectorSyncStore())
     source = service.create_source(
@@ -457,6 +636,11 @@ def test_local_folder_service_runs_end_to_end(
         str(source["source_id"]),
         user_id=connector_runtime,
     ) == (str(source["source_id"]), "connector")
+    with pytest.raises(ValueError, match="unknown UUID"):
+        resolve_source_id(
+            str(source["source_id"]),
+            user_id=str(uuid.uuid4()),
+        )
     search = unified_search(
         query="durable local",
         source_ids=[str(source["source_id"])],
@@ -531,6 +715,7 @@ def test_migration_downgrade_removes_connector_snapshots_before_constraint(
 def test_many_bounded_pages_do_not_exhaust_retry_budget(
     connector_runtime: str,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from synsc.connectors.postgres import PostgresConnectorSyncStore
     from synsc.connectors.service import ConnectorSyncService
@@ -540,6 +725,10 @@ def test_many_bounded_pages_do_not_exhaust_retry_budget(
             f"record {index}",
             encoding="utf-8",
         )
+    monkeypatch.setenv(
+        "SYNSC_LOCAL_CONNECTOR_ALLOWED_ROOTS",
+        str(tmp_path),
+    )
     service = ConnectorSyncService(
         store=PostgresConnectorSyncStore(),
         page_limit=1,

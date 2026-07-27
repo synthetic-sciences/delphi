@@ -317,6 +317,7 @@ class PostgresConnectorSyncStore:
                           WHERE access.source_id = connector_sources.source_id
                             AND access.user_id = :user_id
                       )
+                    FOR UPDATE
                     """
                 ),
                 {"source_id": source_id, "user_id": user_id},
@@ -622,13 +623,42 @@ class PostgresConnectorSyncStore:
                     and source.user_id not in principals
                     and "*" not in principals
                 )
+                session.execute(
+                    text(
+                        """
+                        INSERT INTO connector_record_access (
+                            source_id, external_id_hash, external_id,
+                            principals, revoked
+                        ) VALUES (
+                            :source_id, :external_id_hash, :external_id,
+                            CAST(:principals AS JSONB), :revoked
+                        )
+                        ON CONFLICT (source_id, external_id_hash) DO UPDATE
+                        SET external_id = EXCLUDED.external_id,
+                            principals = EXCLUDED.principals,
+                            revoked = EXCLUDED.revoked,
+                            updated_at = NOW()
+                        """
+                    ),
+                    {
+                        "source_id": source.source_id,
+                        "external_id_hash": hashlib.sha256(
+                            record.external_id.encode("utf-8")
+                        ).hexdigest(),
+                        "external_id": record.external_id,
+                        "principals": (
+                            json.dumps(list(principals))
+                            if principals is not None
+                            else None
+                        ),
+                        "revoked": bool(record.deleted or revoked),
+                    },
+                )
                 if record.deleted or revoked:
                     current.pop(record.external_id, None)
                     continue
                 metadata = dict(record.to_dict()["metadata"])
                 metadata["connector_external_id"] = record.external_id
-                if principals is not None:
-                    metadata["accessible_principals"] = list(principals)
                 current[record.external_id] = {
                     "locator": record.locator,
                     "content": record.content,
@@ -786,16 +816,27 @@ class PostgresConnectorSyncStore:
         job: ConnectorSyncJobState,
         *,
         error_message: str,
-    ) -> bool:
+        retryable: bool,
+    ) -> str | None:
         safe_error = error_message[:2000]
         with get_session() as session:
             row = session.execute(
                 text(
                     """
                     UPDATE connector_sync_jobs
-                    SET status = 'failed',
+                    SET status = CASE
+                            WHEN :retryable
+                             AND attempt_count < max_attempts
+                            THEN 'pending'
+                            ELSE 'failed'
+                        END,
                         error_message = :error_message,
-                        completed_at = NOW(),
+                        completed_at = CASE
+                            WHEN :retryable
+                             AND attempt_count < max_attempts
+                            THEN NULL
+                            ELSE NOW()
+                        END,
                         worker_id = NULL,
                         lease_expires_at = NULL,
                         updated_at = NOW()
@@ -803,7 +844,7 @@ class PostgresConnectorSyncStore:
                       AND status = 'running'
                       AND worker_id = :worker_id
                       AND attempt_count = :attempt_count
-                    RETURNING source_id
+                    RETURNING source_id, status
                     """
                 ),
                 {
@@ -811,16 +852,19 @@ class PostgresConnectorSyncStore:
                     "worker_id": job.worker_id,
                     "attempt_count": job.attempt_count,
                     "error_message": safe_error,
+                    "retryable": retryable,
                 },
             ).mappings().first()
             if row is None:
-                return False
+                return None
             session.execute(
                 text(
                     """
                     UPDATE connector_sources
                     SET last_error = :error_message,
                         next_sync_at = CASE
+                            WHEN :job_status = 'pending'
+                            THEN next_sync_at
                             WHEN enabled AND schedule_seconds IS NOT NULL
                             THEN NOW() + (
                                 schedule_seconds * INTERVAL '1 second'
@@ -834,9 +878,10 @@ class PostgresConnectorSyncStore:
                 {
                     "source_id": row["source_id"],
                     "error_message": safe_error,
+                    "job_status": row["status"],
                 },
             )
-        return True
+        return str(row["status"])
 
     def enqueue_due(self, *, limit: int) -> int:
         with get_session() as session:

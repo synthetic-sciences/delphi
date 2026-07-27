@@ -194,4 +194,9 @@ class ConnectorProvider(Protocol):
 
     descriptor: ProviderDescriptor
 
+    def validate_configuration(
+        self,
+        configuration: Mapping[str, Any],
+    ) -> None: ...
+
     def sync(self, request: ConnectorSyncRequest) -> ConnectorSyncResponse: ...
