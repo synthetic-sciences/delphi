@@ -29,7 +29,6 @@ dependencies = [
     # ===========================================
     # Vector Search & Embeddings (all local)
     # ===========================================
-    "faiss-cpu>=1.9.0",
     "google-genai>=1.0.0",
     "sentence-transformers>=5.0,<6.0",
     "transformers>=4.51,<6.0",
@@ -138,6 +137,7 @@ dev = [
     "pytest-timeout>=2.3.1",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    "types-requests>=2.32.0",
 ]
 
 [project.scripts]
@@ -175,6 +175,7 @@ python_version = "3.10"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
+
 
 [tool.pytest.ini_options]
 minversion = "8.0"
