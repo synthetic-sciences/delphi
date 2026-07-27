@@ -106,6 +106,14 @@ class _ProviderWorkerError(RuntimeError):
     """Safe marker for provider-originated process-control exceptions."""
 
 
+class _ProviderReportedTimeout(RuntimeError):
+    """Safe marker for a timeout raised by provider code itself."""
+
+
+class _ProviderDeadlineExceeded(RuntimeError):
+    """Raised only when the executor's Future wait reaches its deadline."""
+
+
 @dataclass
 class _FusedHit:
     hit: ProviderSearchHit
@@ -230,13 +238,17 @@ class QueryExecutor:
             try:
                 future.set_result(call())
             except BaseException as exc:
-                future.set_exception(
-                    exc
-                    if isinstance(exc, Exception)
-                    else _ProviderWorkerError(
+                if isinstance(exc, TimeoutError):
+                    normalized: Exception = _ProviderReportedTimeout(
+                        "Provider operation timed out."
+                    )
+                elif isinstance(exc, Exception):
+                    normalized = exc
+                else:
+                    normalized = _ProviderWorkerError(
                         "Provider execution failed."
                     )
-                )
+                future.set_exception(normalized)
             finally:
                 _PROVIDER_CALLS.release(state)
 
@@ -257,7 +269,7 @@ class QueryExecutor:
         except FutureTimeoutError:
             effective_request.cancellation.cancel()
             _PROVIDER_CALLS.quarantine(state)
-            raise TimeoutError from None
+            raise _ProviderDeadlineExceeded from None
 
     @staticmethod
     def _record(
@@ -448,9 +460,20 @@ class QueryExecutor:
                     )
                 )
                 continue
-            except TimeoutError:
-                if self.clock() >= deadline:
-                    stop_reason = "deadline_exhausted"
+            except _ProviderReportedTimeout:
+                records.append(
+                    self._record(
+                        step,
+                        status="failure",
+                        reason_code="timeout",
+                        elapsed_ms=int(
+                            (self.clock() - step_started) * 1000
+                        ),
+                    )
+                )
+                continue
+            except _ProviderDeadlineExceeded:
+                stop_reason = "deadline_exhausted"
                 records.append(
                     self._record(
                         step,
@@ -459,7 +482,7 @@ class QueryExecutor:
                         elapsed_ms=int((self.clock() - step_started) * 1000),
                     )
                 )
-                continue
+                break
             except Exception:
                 records.append(
                     self._record(

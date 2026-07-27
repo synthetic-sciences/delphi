@@ -294,25 +294,36 @@ def test_executor_rejects_budget_mutation_before_provider_construction() -> None
 
 
 def test_executor_returns_at_deadline_when_provider_blocks() -> None:
+    remote = FakeSearchProvider(ProviderSearchResponse())
     registry = ProviderRegistry()
     registry.register(
         _descriptor("local-index", ExecutionLocation.LOCAL),
         lambda **_: BlockingSearchProvider(),
     )
+    registry.register(
+        _descriptor("remote-search", ExecutionLocation.REMOTE),
+        lambda **_: remote,
+    )
     plan = QueryPlanner(registry=registry).plan(
         QueryRequest(
             query="bounded latency",
             user_id="u1",
+            include_web=True,
+            query_classification=ContentClassification.PUBLIC,
+            network=NetworkPolicy.ONLINE,
             budget=QueryBudget(
-                max_calls=1,
-                max_remote_calls=0,
+                max_calls=2,
+                max_remote_calls=1,
                 deadline_ms=10,
             ),
         )
     )
 
     started = time.monotonic()
-    result = QueryExecutor(registry=registry).execute(
+    result = QueryExecutor(
+        registry=registry,
+        clock=lambda: 0.0,
+    ).execute(
         plan,
         authenticated_user_id="u1",
     )
@@ -322,6 +333,37 @@ def test_executor_returns_at_deadline_when_provider_blocks() -> None:
     assert result.records[0].status == "failure"
     assert result.records[0].reason_code == "timeout"
     assert result.stop_reason == "deadline_exhausted"
+    assert result.calls_used == 1
+    assert remote.requests == []
+
+
+def test_provider_reported_timeout_does_not_exhaust_plan_deadline() -> None:
+    class ProviderReportedTimeout:
+        def search(
+            self,
+            request: ProviderSearchRequest,
+        ) -> ProviderSearchResponse:
+            raise TimeoutError("provider transport timeout")
+
+    registry = ProviderRegistry()
+    registry.register(
+        _descriptor("local-index", ExecutionLocation.LOCAL),
+        lambda **_: ProviderReportedTimeout(),
+    )
+    plan = QueryPlanner(registry=registry).plan(
+        QueryRequest(query="provider timeout", user_id="u1")
+    )
+
+    result = QueryExecutor(
+        registry=registry,
+        clock=lambda: 0.0,
+    ).execute(
+        plan,
+        authenticated_user_id="u1",
+    )
+
+    assert result.records[0].reason_code == "timeout"
+    assert result.stop_reason == "completed_with_failures"
 
 
 def test_executor_failure_record_never_leaks_provider_cause() -> None:
