@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import structlog
 
 from synsc.config import get_config
+from synsc.providers.registry import ProviderNotFoundError, get_provider_registry
 from synsc.services.research_credentials import get_user_research_api_key
 from synsc.services.research_providers.base import ResearchProvider
 
@@ -58,11 +59,14 @@ class ResearchService:
         if not api_key:
             raise ResearchProviderNotConfiguredError(cfg.provider)
 
-        if cfg.provider == "gemini":
-            from synsc.services.research_providers.gemini import GeminiResearchProvider
-
-            return GeminiResearchProvider(api_key=api_key)
-        raise ValueError(f"Unknown research provider: {cfg.provider}")
+        provider_name = f"{cfg.provider}-research"
+        try:
+            return cast(
+                ResearchProvider,
+                get_provider_registry().create(provider_name, api_key=api_key),
+            )
+        except ProviderNotFoundError as exc:
+            raise ValueError(f"Unknown research provider: {cfg.provider}") from exc
 
     @property
     def retrieve(self) -> RetrieveFn:

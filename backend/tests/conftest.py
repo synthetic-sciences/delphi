@@ -76,12 +76,18 @@ def _reset_config():
     """Reset the global config singleton and DB engine between tests."""
     import synsc.config as cfg
     import synsc.database.connection as conn
+    from synsc.api.http_server import _RESEARCH_RATE_BUCKETS
+    from synsc.api.rate_limit import limiter
 
     cfg._config = None
     conn.reset_engine()
+    limiter.reset()
+    _RESEARCH_RATE_BUCKETS.clear()
     yield
     cfg._config = None
     conn.reset_engine()
+    limiter.reset()
+    _RESEARCH_RATE_BUCKETS.clear()
 
 
 @pytest.fixture()

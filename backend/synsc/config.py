@@ -11,6 +11,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from synsc.providers.policy import NetworkPolicy
+
 
 class EmbeddingConfig(BaseModel):
     """Configuration for embeddings (all local via sentence-transformers)."""
@@ -343,6 +345,44 @@ class FeatureFlags(BaseModel):
     enable_job_queue: bool = Field(default=True, description="Enable background job queue")
 
 
+class ProviderPolicyConfig(BaseModel):
+    """Default network ceiling and remote-provider allowlist."""
+
+    network_policy: NetworkPolicy = Field(
+        default=NetworkPolicy.LOCAL_ONLY,
+        description="Maximum network access for provider-aware operations",
+    )
+    allowed_remote_providers: list[str] = Field(
+        default_factory=list,
+        description="Remote provider names available under allowlisted policy",
+    )
+
+    @classmethod
+    def from_env(cls) -> "ProviderPolicyConfig":
+        """Load provider policy without initializing database-backed config."""
+
+        config = cls()
+        if network_policy := os.getenv("SYNSC_NETWORK_POLICY"):
+            try:
+                config.network_policy = NetworkPolicy(
+                    network_policy.strip().lower()
+                )
+            except ValueError as exc:
+                valid = ", ".join(item.value for item in NetworkPolicy)
+                raise ValueError(
+                    f"SYNSC_NETWORK_POLICY must be one of: {valid}"
+                ) from exc
+        if allowed_providers := os.getenv("SYNSC_ALLOWED_REMOTE_PROVIDERS"):
+            config.allowed_remote_providers = list(
+                dict.fromkeys(
+                    item.strip()
+                    for item in allowed_providers.split(",")
+                    if item.strip()
+                )
+            )
+        return config
+
+
 class SynscConfig(BaseModel):
     """Main configuration for Delphi.
 
@@ -365,6 +405,9 @@ class SynscConfig(BaseModel):
     api: APIConfig = Field(default_factory=APIConfig)
     features: FeatureFlags = Field(default_factory=FeatureFlags)
     quality: QualityConfig = Field(default_factory=QualityConfig)
+    provider_policy: ProviderPolicyConfig = Field(
+        default_factory=ProviderPolicyConfig
+    )
 
     # Server settings
     server_name: str = Field(default="synsc-context", description="MCP server name")
@@ -375,7 +418,7 @@ class SynscConfig(BaseModel):
     @classmethod
     def from_env(cls) -> "SynscConfig":
         """Create configuration from environment variables."""
-        config = cls()
+        config = cls(provider_policy=ProviderPolicyConfig.from_env())
 
         # Database — individual parts or full URL
         if db_host := os.getenv("POSTGRES_HOST"):
@@ -528,6 +571,14 @@ def get_config() -> SynscConfig:
         _config = SynscConfig.from_env()
         _config.initialize()
     return _config
+
+
+def get_provider_policy_config() -> ProviderPolicyConfig:
+    """Load policy defaults without requiring database configuration."""
+
+    if _config is not None:
+        return _config.provider_policy
+    return ProviderPolicyConfig.from_env()
 
 
 def set_config(config: SynscConfig) -> None:
