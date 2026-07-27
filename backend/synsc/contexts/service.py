@@ -16,7 +16,7 @@ class ContextSessionNotFoundError(LookupError):
 
 
 class ContextRevisionConflictError(RuntimeError):
-    """Raised when a writer uses a stale expected revision."""
+    """Raised when a writer uses a stale session write version."""
 
 
 class ContextSessionExpiredError(RuntimeError):
@@ -46,6 +46,7 @@ class ContextSessionStore(Protocol):
         *,
         session: dict[str, Any],
         revision: dict[str, Any],
+        parent_expected_version: int | None = None,
     ) -> dict[str, Any]: ...
 
     def append(
@@ -53,7 +54,7 @@ class ContextSessionStore(Protocol):
         session_id: str,
         *,
         user_id: str,
-        expected_revision: int,
+        expected_version: int,
         revision: dict[str, Any],
     ) -> dict[str, Any]: ...
 
@@ -78,7 +79,7 @@ class ContextSessionStore(Protocol):
         session_id: str,
         *,
         user_id: str,
-        expected_revision: int,
+        expected_version: int,
         sharing_policy: str,
         expires_at: datetime | None,
         status: str,
@@ -90,6 +91,7 @@ _MAX_ITEMS = 10_000
 _MAX_STATE_BYTES = 2_000_000
 _SHARING_POLICIES = frozenset({"private", "shared"})
 _SESSION_STATUSES = frozenset({"active", "completed", "archived"})
+_UNSET = object()
 
 
 def _canonical_json(value: Any) -> str:
@@ -536,6 +538,7 @@ class ContextSessionService:
         parent_session_id: str | None = None,
         parent_revision_id: str | None = None,
         handoff_note: str | None = None,
+        parent_expected_version: int | None = None,
     ) -> dict[str, Any]:
         now = self.clock().astimezone(timezone.utc)
         normalized_expires_at = (
@@ -586,7 +589,11 @@ class ContextSessionService:
             "parent_revision_id": parent_revision_id,
             **revision_data,
         }
-        created = self.store.create(session=session, revision=revision)
+        created = self.store.create(
+            session=session,
+            revision=revision,
+            parent_expected_version=parent_expected_version,
+        )
         return self._hydrate_bundle(created, user_id=user_id)
 
     def revise_session(
@@ -594,7 +601,7 @@ class ContextSessionService:
         session_id: str,
         *,
         user_id: str,
-        expected_revision: int,
+        expected_version: int,
         snapshot_ids: Sequence[str] | None = None,
         token_budget: int | None = None,
         task_state: Mapping[str, Any] | None = None,
@@ -609,8 +616,8 @@ class ContextSessionService:
         current = self.store.get(session_id, user_id=user_id)
         self._require_active(current["session"])
         previous = current["revision"]
-        if int(previous["revision_number"]) != expected_revision:
-            raise ContextRevisionConflictError("Context revision changed.")
+        if int(current["session"]["write_version"]) != expected_version:
+            raise ContextRevisionConflictError("Context session changed.")
         state = previous["state"]
         existing_summary = state.get("summary")
         if (
@@ -668,14 +675,14 @@ class ContextSessionService:
         revision = {
             "revision_id": str(uuid4()),
             "session_id": session_id,
-            "revision_number": expected_revision + 1,
+            "revision_number": int(previous["revision_number"]) + 1,
             "parent_revision_id": previous["revision_id"],
             **revision_data,
         }
         updated = self.store.append(
             session_id,
             user_id=user_id,
-            expected_revision=expected_revision,
+            expected_version=expected_version,
             revision=revision,
         )
         return self._hydrate_bundle(updated, user_id=user_id)
@@ -790,7 +797,7 @@ class ContextSessionService:
         rows = self.store.list(
             user_id=user_id,
             limit=limit,
-            include_expired=True,
+            include_expired=include_expired,
         )
         public_rows = []
         for row in rows:
@@ -815,18 +822,45 @@ class ContextSessionService:
         session_id: str,
         *,
         user_id: str,
-        expected_revision: int,
-        sharing_policy: str,
-        expires_at: datetime | None,
-        status: str,
+        expected_version: int,
+        sharing_policy: str | None = None,
+        expires_at: object = _UNSET,
+        status: str | None = None,
     ) -> dict[str, Any]:
-        if sharing_policy not in _SHARING_POLICIES:
+        if (
+            sharing_policy is None
+            and expires_at is _UNSET
+            and status is None
+        ):
+            raise ValueError("at least one context policy field is required")
+        current = self.store.get(session_id, user_id=user_id)
+        self._require_active(current["session"])
+        if int(current["session"]["write_version"]) != expected_version:
+            raise ContextRevisionConflictError("Context session changed.")
+        if sharing_policy is not None and sharing_policy not in _SHARING_POLICIES:
             raise ValueError("sharing_policy must be private or shared")
-        if status not in _SESSION_STATUSES:
+        if status is not None and status not in _SESSION_STATUSES:
             raise ValueError("context status is invalid")
-        normalized_expires_at = (
-            _as_datetime(expires_at) if expires_at is not None else None
+        next_sharing_policy = (
+            sharing_policy
+            if sharing_policy is not None
+            else str(current["session"]["sharing_policy"])
         )
+        next_status = (
+            status
+            if status is not None
+            else str(current["session"]["status"])
+        )
+        if expires_at is _UNSET:
+            normalized_expires_at = _as_datetime(
+                current["session"].get("expires_at")
+            )
+        elif expires_at is None:
+            normalized_expires_at = None
+        else:
+            normalized_expires_at = _as_datetime(expires_at)
+            if normalized_expires_at is None:
+                raise ValueError("expires_at is invalid")
         if (
             normalized_expires_at is not None
             and normalized_expires_at <= self.clock().astimezone(timezone.utc)
@@ -835,10 +869,10 @@ class ContextSessionService:
         updated = self.store.update_policy(
             session_id,
             user_id=user_id,
-            expected_revision=expected_revision,
-            sharing_policy=sharing_policy,
+            expected_version=expected_version,
+            sharing_policy=next_sharing_policy,
             expires_at=normalized_expires_at,
-            status=status,
+            status=next_status,
         )
         result = deepcopy(updated)
         result.pop("user_id", None)
@@ -886,6 +920,9 @@ class ContextSessionService:
             parent_session_id=parent_session_id,
             parent_revision_id=revision["revision_id"],
             handoff_note=handoff_note,
+            parent_expected_version=int(
+                parent["session"]["write_version"]
+            ),
         )
 
     def export_session(

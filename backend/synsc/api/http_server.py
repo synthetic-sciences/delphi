@@ -540,7 +540,7 @@ class ContextRevisionCreateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    expected_revision: int = Field(..., ge=1)
+    expected_version: int = Field(..., ge=1)
     snapshot_ids: list[str] | None = Field(default=None, max_length=100)
     token_budget: int | None = Field(default=None, ge=1, le=200_000)
     task_state: dict[str, Any] | None = None
@@ -570,10 +570,10 @@ class ContextSessionPolicyRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    expected_revision: int = Field(..., ge=1)
-    sharing_policy: Literal["private", "shared"]
+    expected_version: int = Field(..., ge=1)
+    sharing_policy: Literal["private", "shared"] | None = None
     expires_at: datetime | None = None
-    status: Literal["active", "completed", "archived"]
+    status: Literal["active", "completed", "archived"] | None = None
 
 
 class ContextHandoffRequest(BaseModel):
@@ -3178,7 +3178,7 @@ def create_app() -> FastAPI:
         if isinstance(exc, ContextRevisionConflictError):
             return HTTPException(
                 status_code=409,
-                detail="Context revision changed.",
+                detail="Context session changed.",
             )
         if isinstance(exc, ContextSessionExpiredError):
             return HTTPException(
@@ -3287,13 +3287,13 @@ def create_app() -> FastAPI:
         from synsc.contexts.service import get_context_session_service
 
         payload = body.model_dump(exclude_none=True)
-        expected_revision = int(payload.pop("expected_revision"))
+        expected_version = int(payload.pop("expected_version"))
         try:
             result = await asyncio.to_thread(
                 get_context_session_service().revise_session,
                 session_id,
                 user_id=auth.user_id,
-                expected_revision=expected_revision,
+                expected_version=expected_version,
                 **payload,
             )
         except Exception as exc:
@@ -3313,12 +3313,15 @@ def create_app() -> FastAPI:
 
         from synsc.contexts.service import get_context_session_service
 
+        payload = body.model_dump(exclude_unset=True)
+        expected_version = int(payload.pop("expected_version"))
         try:
             session = await asyncio.to_thread(
                 get_context_session_service().update_policy,
                 session_id,
                 user_id=auth.user_id,
-                **body.model_dump(),
+                expected_version=expected_version,
+                **payload,
             )
         except Exception as exc:
             raise _context_http_exception(exc) from exc

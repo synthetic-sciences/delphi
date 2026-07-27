@@ -12,6 +12,10 @@ revisions containing:
 - an optional model-generated summary with an explicit model and version;
 - parent session and revision references for handoffs.
 
+Every mutation advances a session-wide `write_version`. Revision appends,
+sharing/lifecycle changes, and handoff parent checks all use that version so
+concurrent writers cannot silently overwrite or continue archived work.
+
 The existing `/v1/contexts` named-blob API remains available for compatibility.
 New reproducible workflows use `/v2/context-sessions`.
 
@@ -60,14 +64,14 @@ curl -X POST \
   -H "Authorization: Bearer $DELPHI_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "expected_revision": 1,
+    "expected_version": 1,
     "task_state": {"status": "completed"},
     "decisions": [{"decision": "release"}],
     "unresolved_questions": []
   }'
 ```
 
-A stale `expected_revision` returns HTTP `409`; the service never overwrites an
+A stale `expected_version` returns HTTP `409`; the service never overwrites an
 intervening revision.
 
 Create an explicitly linked child:

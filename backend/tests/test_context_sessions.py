@@ -93,9 +93,20 @@ class FakeContextStore:
         *,
         session: dict[str, Any],
         revision: dict[str, Any],
+        parent_expected_version: int | None = None,
     ) -> dict[str, Any]:
+        parent_session_id = session.get("parent_session_id")
+        if parent_session_id is not None:
+            parent = self.sessions[str(parent_session_id)]
+            if parent["write_version"] != parent_expected_version:
+                raise ContextRevisionConflictError("parent changed")
+            if parent["status"] == "archived":
+                raise ContextSessionExpiredError("parent archived")
+            if parent["current_revision_id"] != session["parent_revision_id"]:
+                raise ContextRevisionConflictError("parent revision changed")
         self.sessions[session["session_id"]] = deepcopy(session)
         self.sessions[session["session_id"]]["current_revision"] = 1
+        self.sessions[session["session_id"]]["write_version"] = 1
         self.sessions[session["session_id"]]["current_revision_id"] = revision[
             "revision_id"
         ]
@@ -110,17 +121,20 @@ class FakeContextStore:
         session_id: str,
         *,
         user_id: str,
-        expected_revision: int,
+        expected_version: int,
         revision: dict[str, Any],
     ) -> dict[str, Any]:
         session = self.sessions[session_id]
         if session["user_id"] != user_id:
             raise LookupError("context not found")
-        if session["current_revision"] != expected_revision:
+        if session["write_version"] != expected_version:
             raise ContextRevisionConflictError("revision changed")
+        if session["status"] == "archived":
+            raise ContextSessionExpiredError("context is archived")
         self.revisions[session_id].append(deepcopy(revision))
         session["current_revision"] = revision["revision_number"]
         session["current_revision_id"] = revision["revision_id"]
+        session["write_version"] += 1
         return self.get(session_id, user_id=user_id)
 
     def get(
@@ -171,7 +185,7 @@ class FakeContextStore:
         session_id: str,
         *,
         user_id: str,
-        expected_revision: int,
+        expected_version: int,
         sharing_policy: str,
         expires_at: datetime | None,
         status: str,
@@ -179,7 +193,7 @@ class FakeContextStore:
         session = self.sessions[session_id]
         if (
             session["user_id"] != user_id
-            or session["current_revision"] != expected_revision
+            or session["write_version"] != expected_version
         ):
             raise ContextRevisionConflictError("revision changed")
         session.update(
@@ -187,6 +201,7 @@ class FakeContextStore:
             expires_at=expires_at,
             status=status,
         )
+        session["write_version"] += 1
         return deepcopy(session)
 
 
@@ -287,7 +302,7 @@ def test_revision_conflict_prevents_lost_update() -> None:
     revised = service.revise_session(
         created["session"]["session_id"],
         user_id="user-1",
-        expected_revision=1,
+        expected_version=1,
         task_state={"status": "in_progress", "next": "verify"},
     )
     assert revised["revision"]["revision_number"] == 2
@@ -296,7 +311,7 @@ def test_revision_conflict_prevents_lost_update() -> None:
         service.revise_session(
             created["session"]["session_id"],
             user_id="user-1",
-            expected_revision=1,
+            expected_version=1,
             task_state={"status": "stale writer"},
         )
 
@@ -396,6 +411,35 @@ def test_expired_session_fails_closed_but_can_be_listed_explicitly() -> None:
     ) == 1
 
 
+def test_list_filters_expired_rows_before_applying_limit() -> None:
+    now = datetime(2026, 7, 27, tzinfo=UTC)
+    service, store, _ = _service(now=now)
+    expired = service.create_session(
+        user_id="user-1",
+        name="newer-expired",
+        objective="Should not hide active work",
+        snapshot_ids=[],
+        token_budget=10,
+        expires_at=now + timedelta(hours=1),
+    )
+    active = service.create_session(
+        user_id="user-1",
+        name="older-active",
+        objective="Must remain visible",
+        snapshot_ids=[],
+        token_budget=10,
+    )
+    store.sessions[expired["session"]["session_id"]]["expires_at"] = (
+        now - timedelta(seconds=1)
+    )
+
+    listed = service.list_sessions(user_id="user-1", limit=1)
+
+    assert [row["session_id"] for row in listed] == [
+        active["session"]["session_id"]
+    ]
+
+
 def test_session_output_hides_owner_and_normalizes_naive_expiry() -> None:
     service, store, _ = _service()
 
@@ -415,13 +459,32 @@ def test_session_output_hides_owner_and_normalizes_naive_expiry() -> None:
     updated = service.update_policy(
         created["session"]["session_id"],
         user_id="user-1",
-        expected_revision=1,
+        expected_version=1,
         sharing_policy="shared",
-        expires_at=datetime(2026, 7, 29),
         status="active",
     )
-    assert updated["expires_at"] == datetime(2026, 7, 29, tzinfo=UTC)
+    assert updated["expires_at"] == datetime(2026, 7, 28, tzinfo=UTC)
+    assert updated["write_version"] == 2
     assert "user_id" not in updated
+
+    with pytest.raises(ContextRevisionConflictError):
+        service.update_policy(
+            created["session"]["session_id"],
+            user_id="user-1",
+            expected_version=1,
+            sharing_policy="private",
+            expires_at=None,
+            status="active",
+        )
+
+    cleared = service.update_policy(
+        created["session"]["session_id"],
+        user_id="user-1",
+        expected_version=2,
+        expires_at=None,
+    )
+    assert cleared["expires_at"] is None
+    assert cleared["write_version"] == 3
 
 
 def test_model_summary_requires_explicit_model_and_version() -> None:

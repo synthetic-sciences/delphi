@@ -19,6 +19,7 @@ def _bundle(session_id: str = "session-1") -> dict[str, object]:
             "handoff_note": None,
             "current_revision_id": "revision-1",
             "current_revision": 1,
+            "write_version": 1,
         },
         "revision": {
             "revision_id": "revision-1",
@@ -106,14 +107,14 @@ def test_list_get_revise_policy_handoff_and_export(
     revised = client.post(
         "/v2/context-sessions/session-1/revisions",
         json={
-            "expected_revision": 1,
+            "expected_version": 1,
             "task_state": {"status": "done"},
         },
     )
     policy = client.patch(
         "/v2/context-sessions/session-1",
         json={
-            "expected_revision": 1,
+            "expected_version": 1,
             "sharing_policy": "shared",
             "status": "completed",
         },
@@ -133,6 +134,7 @@ def test_list_get_revise_policy_handoff_and_export(
     assert loaded.status_code == 200
     assert revised.status_code == 201
     assert policy.status_code == 200
+    assert "expires_at" not in fake.update_policy.call_args.kwargs
     assert handoff.status_code == 201
     assert handoff.json()["session"]["session_id"] == "session-child"
     assert exported.status_code == 200
@@ -157,7 +159,7 @@ def test_context_conflict_expiry_and_not_found_have_stable_statuses(
     fake.revise_session.side_effect = ContextRevisionConflictError()
     conflict = client.post(
         "/v2/context-sessions/session-1/revisions",
-        json={"expected_revision": 1},
+        json={"expected_version": 1},
     )
 
     fake.export_session.side_effect = ContextSessionExpiredError()
@@ -166,7 +168,7 @@ def test_context_conflict_expiry_and_not_found_have_stable_statuses(
     assert not_found.status_code == 404
     assert not_found.json() == {"detail": "Context session not found."}
     assert conflict.status_code == 409
-    assert conflict.json() == {"detail": "Context revision changed."}
+    assert conflict.json() == {"detail": "Context session changed."}
     assert expired.status_code == 410
     assert expired.json() == {"detail": "Context session has expired."}
 

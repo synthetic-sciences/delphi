@@ -42,6 +42,7 @@ def test_context_session_models_are_registered() -> None:
         "parent_revision_id",
         "current_revision_id",
         "current_revision",
+        "write_version",
     ):
         assert column in ContextSession.__table__.columns
     for column in (
@@ -87,6 +88,7 @@ def test_context_migration_builds_revision_and_immutability_schema(
     assert "UNIQUE (session_id, revision_number)" in sql
     assert "prevent_context_revision_update" in sql
     assert "current_revision_id" in sql
+    assert "write_version" in sql
     assert "sharing_policy IN ('private', 'shared')" in sql
 
 

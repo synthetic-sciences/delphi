@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from synsc.contexts.service import (
     ContextRevisionConflictError,
+    ContextSessionExpiredError,
     ContextSessionNotFoundError,
 )
 from synsc.database.connection import get_session
@@ -54,6 +55,7 @@ def _session_public(
             else None
         ),
         "current_revision": int(row.get("current_revision") or 0),
+        "write_version": int(row.get("write_version") or 0),
         "created_at": _iso(row.get("created_at")),
         "updated_at": _iso(row.get("updated_at")),
     }
@@ -212,13 +214,60 @@ class PostgresContextSessionStore:
         *,
         session: dict[str, Any],
         revision: dict[str, Any],
+        parent_expected_version: int | None = None,
     ) -> dict[str, Any]:
         if revision["session_id"] != session["session_id"]:
             raise ValueError("revision session_id must match the session")
         if int(revision["revision_number"]) != 1:
             raise ValueError("initial context revision must be revision 1")
+        parent_session_id = session.get("parent_session_id")
+        if (parent_session_id is None) != (parent_expected_version is None):
+            raise ValueError(
+                "parent session and expected version must be provided together"
+            )
         try:
             with get_session() as database:
+                if parent_session_id is not None:
+                    parent = database.execute(
+                        text(
+                            """
+                            SELECT write_version, current_revision_id, status,
+                                   (
+                                       expires_at IS NOT NULL
+                                       AND expires_at <= NOW()
+                                   ) AS is_expired
+                            FROM context_sessions
+                            WHERE session_id = :session_id
+                              AND user_id = :user_id
+                            FOR UPDATE
+                            """
+                        ),
+                        {
+                            "session_id": parent_session_id,
+                            "user_id": session["user_id"],
+                        },
+                    ).mappings().first()
+                    if parent is None:
+                        raise ContextSessionNotFoundError(
+                            "Parent context session not found."
+                        )
+                    if int(parent["write_version"]) != parent_expected_version:
+                        raise ContextRevisionConflictError(
+                            "Parent context session changed."
+                        )
+                    if (
+                        parent["status"] == "archived"
+                        or bool(parent["is_expired"])
+                    ):
+                        raise ContextSessionExpiredError(
+                            "Parent context session is archived or expired."
+                        )
+                    if str(parent["current_revision_id"]) != str(
+                        session.get("parent_revision_id")
+                    ):
+                        raise ContextRevisionConflictError(
+                            "Parent context revision changed."
+                        )
                 database.execute(
                     text(
                         """
@@ -226,12 +275,12 @@ class PostgresContextSessionStore:
                             session_id, user_id, name, objective, status,
                             sharing_policy, expires_at, parent_session_id,
                             parent_revision_id, handoff_note,
-                            current_revision
+                            current_revision, write_version
                         ) VALUES (
                             :session_id, :user_id, :name, :objective,
                             :status, :sharing_policy, :expires_at,
                             :parent_session_id, :parent_revision_id,
-                            :handoff_note, 0
+                            :handoff_note, 0, 0
                         )
                         """
                     ),
@@ -248,6 +297,7 @@ class PostgresContextSessionStore:
                         UPDATE context_sessions
                         SET current_revision = 1,
                             current_revision_id = :revision_id,
+                            write_version = 1,
                             updated_at = NOW()
                         WHERE session_id = :session_id
                         """
@@ -272,18 +322,20 @@ class PostgresContextSessionStore:
         session_id: str,
         *,
         user_id: str,
-        expected_revision: int,
+        expected_version: int,
         revision: dict[str, Any],
     ) -> dict[str, Any]:
         if revision["session_id"] != session_id:
             raise ValueError("revision session_id must match the session")
-        if int(revision["revision_number"]) != expected_revision + 1:
-            raise ValueError("revision_number must follow expected_revision")
         with get_session() as database:
             row = database.execute(
                 text(
                     """
-                    SELECT current_revision
+                    SELECT current_revision, write_version, status,
+                           (
+                               expires_at IS NOT NULL
+                               AND expires_at <= NOW()
+                           ) AS is_expired
                     FROM context_sessions
                     WHERE session_id = :session_id
                       AND user_id = :user_id
@@ -296,9 +348,19 @@ class PostgresContextSessionStore:
                 raise ContextSessionNotFoundError(
                     "Context session not found."
                 )
-            if int(row["current_revision"]) != expected_revision:
+            if int(row["write_version"]) != expected_version:
                 raise ContextRevisionConflictError(
-                    "Context revision changed."
+                    "Context session changed."
+                )
+            if row["status"] == "archived" or bool(row["is_expired"]):
+                raise ContextSessionExpiredError(
+                    "Context session is archived or expired."
+                )
+            if int(revision["revision_number"]) != (
+                int(row["current_revision"]) + 1
+            ):
+                raise ValueError(
+                    "revision_number must follow current_revision"
                 )
             self._insert_revision(
                 database,
@@ -311,6 +373,7 @@ class PostgresContextSessionStore:
                     UPDATE context_sessions
                     SET current_revision = :revision_number,
                         current_revision_id = :revision_id,
+                        write_version = write_version + 1,
                         updated_at = NOW()
                     WHERE session_id = :session_id
                       AND user_id = :user_id
@@ -378,7 +441,7 @@ class PostgresContextSessionStore:
         session_id: str,
         *,
         user_id: str,
-        expected_revision: int,
+        expected_version: int,
         sharing_policy: str,
         expires_at: datetime | None,
         status: str,
@@ -387,7 +450,11 @@ class PostgresContextSessionStore:
             row = database.execute(
                 text(
                     """
-                    SELECT current_revision
+                    SELECT write_version, status,
+                           (
+                               expires_at IS NOT NULL
+                               AND expires_at <= NOW()
+                           ) AS is_expired
                     FROM context_sessions
                     WHERE session_id = :session_id
                       AND user_id = :user_id
@@ -400,9 +467,13 @@ class PostgresContextSessionStore:
                 raise ContextSessionNotFoundError(
                     "Context session not found."
                 )
-            if int(row["current_revision"]) != expected_revision:
+            if int(row["write_version"]) != expected_version:
                 raise ContextRevisionConflictError(
-                    "Context revision changed."
+                    "Context session changed."
+                )
+            if row["status"] == "archived" or bool(row["is_expired"]):
+                raise ContextSessionExpiredError(
+                    "Context session is archived or expired."
                 )
             updated = database.execute(
                 text(
@@ -411,6 +482,7 @@ class PostgresContextSessionStore:
                     SET sharing_policy = :sharing_policy,
                         expires_at = :expires_at,
                         status = :status,
+                        write_version = write_version + 1,
                         updated_at = NOW()
                     WHERE session_id = :session_id
                       AND user_id = :user_id

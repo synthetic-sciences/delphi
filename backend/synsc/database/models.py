@@ -1689,6 +1689,10 @@ class ContextSession(Base):
             "current_revision >= 0",
             name="ck_context_sessions_current_revision",
         ),
+        CheckConstraint(
+            "write_version >= 0",
+            name="ck_context_sessions_write_version",
+        ),
         Index("idx_context_sessions_user", "user_id", "updated_at"),
         Index("idx_context_sessions_parent", "parent_session_id"),
     )
@@ -1722,6 +1726,9 @@ class ContextSession(Base):
         ForeignKey("context_revisions.revision_id", ondelete="SET NULL"),
     )
     current_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    write_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0
     )
     created_at: Mapped[datetime] = mapped_column(

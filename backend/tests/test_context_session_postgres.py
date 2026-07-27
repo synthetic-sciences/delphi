@@ -121,6 +121,7 @@ def test_create_get_list_and_owner_scope(context_user_id: str) -> None:
     created = store.create(session=session, revision=revision)
 
     assert created["session"]["current_revision"] == 1
+    assert created["session"]["write_version"] == 1
     assert created["revision"]["revision_id"] == revision["revision_id"]
     assert store.list(
         user_id=context_user_id,
@@ -149,7 +150,7 @@ def test_concurrent_append_has_one_revision_winner(
             result = PostgresContextSessionStore().append(
                 str(session["session_id"]),
                 user_id=context_user_id,
-                expected_revision=1,
+                expected_version=1,
                 revision=_revision(
                     str(session["session_id"]),
                     2,
@@ -170,6 +171,7 @@ def test_concurrent_append_has_one_revision_winner(
         user_id=context_user_id,
     )
     assert loaded["session"]["current_revision"] == 2
+    assert loaded["session"]["write_version"] == 2
 
 
 def test_revision_rows_cannot_be_updated(context_user_id: str) -> None:
@@ -191,7 +193,9 @@ def test_revision_rows_cannot_be_updated(context_user_id: str) -> None:
         )
 
 
-def test_policy_update_uses_revision_fence(context_user_id: str) -> None:
+def test_policy_update_advances_shared_write_fence(
+    context_user_id: str,
+) -> None:
     store = PostgresContextSessionStore()
     session = _session(context_user_id)
     revision = _revision(str(session["session_id"]), 1)
@@ -200,22 +204,118 @@ def test_policy_update_uses_revision_fence(context_user_id: str) -> None:
     updated = store.update_policy(
         str(session["session_id"]),
         user_id=context_user_id,
-        expected_revision=1,
+        expected_version=1,
         sharing_policy="shared",
         expires_at=None,
         status="completed",
     )
     assert updated["sharing_policy"] == "shared"
     assert updated["status"] == "completed"
+    assert updated["write_version"] == 2
 
     with pytest.raises(ContextRevisionConflictError):
         store.update_policy(
             str(session["session_id"]),
             user_id=context_user_id,
-            expected_revision=0,
+            expected_version=1,
             sharing_policy="private",
             expires_at=None,
             status="active",
+        )
+
+
+def test_archive_and_append_cannot_both_win(context_user_id: str) -> None:
+    store = PostgresContextSessionStore()
+    session = _session(context_user_id)
+    first = _revision(str(session["session_id"]), 1)
+    store.create(session=session, revision=first)
+    barrier = threading.Barrier(2)
+
+    def append() -> str:
+        barrier.wait()
+        try:
+            PostgresContextSessionStore().append(
+                str(session["session_id"]),
+                user_id=context_user_id,
+                expected_version=1,
+                revision=_revision(
+                    str(session["session_id"]),
+                    2,
+                    parent_revision_id=str(first["revision_id"]),
+                ),
+            )
+            return "append"
+        except ContextRevisionConflictError:
+            return "conflict"
+
+    def archive() -> str:
+        barrier.wait()
+        try:
+            PostgresContextSessionStore().update_policy(
+                str(session["session_id"]),
+                user_id=context_user_id,
+                expected_version=1,
+                sharing_policy="private",
+                expires_at=None,
+                status="archived",
+            )
+            return "archive"
+        except ContextRevisionConflictError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        append_future = executor.submit(append)
+        archive_future = executor.submit(archive)
+        results = [append_future.result(), archive_future.result()]
+
+    assert results.count("conflict") == 1
+    assert len([result for result in results if result != "conflict"]) == 1
+    loaded = store.get(
+        str(session["session_id"]),
+        user_id=context_user_id,
+    )
+    assert loaded["session"]["write_version"] == 2
+    if "archive" in results:
+        assert loaded["session"]["status"] == "archived"
+        assert loaded["session"]["current_revision"] == 1
+    else:
+        assert loaded["session"]["status"] == "active"
+        assert loaded["session"]["current_revision"] == 2
+
+
+def test_handoff_rechecks_parent_version_and_lifecycle(
+    context_user_id: str,
+) -> None:
+    store = PostgresContextSessionStore()
+    parent_session = _session(context_user_id)
+    parent_revision = _revision(
+        str(parent_session["session_id"]),
+        1,
+    )
+    parent = store.create(
+        session=parent_session,
+        revision=parent_revision,
+    )
+    store.update_policy(
+        str(parent_session["session_id"]),
+        user_id=context_user_id,
+        expected_version=1,
+        sharing_policy="private",
+        expires_at=None,
+        status="archived",
+    )
+    child_session = {
+        **_session(context_user_id),
+        "parent_session_id": parent_session["session_id"],
+        "parent_revision_id": parent["revision"]["revision_id"],
+    }
+    child_revision = _revision(str(child_session["session_id"]), 1)
+
+    with pytest.raises(ContextRevisionConflictError):
+        store.create(
+            session=child_session,
+            revision=child_revision,
+            parent_expected_version=1,
         )
 
 
