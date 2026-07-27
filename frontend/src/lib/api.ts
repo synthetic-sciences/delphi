@@ -261,6 +261,152 @@ export async function getHealth() {
 }
 
 // ---------------------------------------------------------------------------
+// Unified workspace
+// ---------------------------------------------------------------------------
+
+export interface ProviderDescriptor {
+  name: string;
+  version?: string;
+  capabilities: string[];
+  execution?: string;
+  accepted_classifications?: string[];
+  health?: string;
+}
+
+export interface ConnectorSource {
+  source_id: string;
+  provider: string;
+  display_name: string;
+  classification?: string;
+  enabled: boolean;
+  schedule_seconds?: number | null;
+  last_synced_at?: string | null;
+  last_snapshot_id?: string | null;
+  last_error?: string | null;
+  updated_at?: string | null;
+}
+
+export interface ResearchSession {
+  session_id: string;
+  query: string;
+  mode: string;
+  status: string;
+  created_at?: string | number | null;
+  completed_at?: string | number | null;
+}
+
+export interface ContextSession {
+  session_id: string;
+  name: string;
+  objective: string;
+  status: string;
+  sharing_policy: string;
+  current_revision: number;
+  write_version: number;
+  parent_session_id?: string | null;
+  expires_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface WorkspaceSnapshot {
+  providers: ProviderDescriptor[];
+  connectorProviders: ProviderDescriptor[];
+  connectors: ConnectorSource[];
+  researchSessions: ResearchSession[];
+  contextSessions: ContextSession[];
+  unavailable: string[];
+}
+
+interface CollectionRequest {
+  label: string;
+  path: string;
+  key: string;
+}
+
+async function fetchWorkspaceCollection<T>(
+  request: CollectionRequest
+): Promise<{ label: string; values: T[]; available: boolean }> {
+  try {
+    const response = await apiFetch(request.path);
+    if (!response.ok) {
+      return { label: request.label, values: [], available: false };
+    }
+    const payload = (await response.json()) as Record<string, unknown>;
+    const value = payload[request.key];
+    return {
+      label: request.label,
+      values: Array.isArray(value) ? (value as T[]) : [],
+      available: true,
+    };
+  } catch {
+    return { label: request.label, values: [], available: false };
+  }
+}
+
+export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
+  const [providers, connectorProviders, connectors, research, contexts] =
+    await Promise.all([
+      fetchWorkspaceCollection<ProviderDescriptor>({
+        label: "providers",
+        path: "/v2/providers",
+        key: "providers",
+      }),
+      fetchWorkspaceCollection<ProviderDescriptor>({
+        label: "connector providers",
+        path: "/v2/connectors/providers",
+        key: "providers",
+      }),
+      fetchWorkspaceCollection<ConnectorSource>({
+        label: "connector sources",
+        path: "/v2/connectors?limit=100",
+        key: "sources",
+      }),
+      fetchWorkspaceCollection<ResearchSession>({
+        label: "research sessions",
+        path: "/v2/research?limit=50",
+        key: "sessions",
+      }),
+      fetchWorkspaceCollection<ContextSession>({
+        label: "context sessions",
+        path: "/v2/context-sessions?limit=100",
+        key: "sessions",
+      }),
+    ]);
+
+  const results = [
+    providers,
+    connectorProviders,
+    connectors,
+    research,
+    contexts,
+  ];
+
+  return {
+    providers: providers.values,
+    connectorProviders: connectorProviders.values,
+    connectors: connectors.values,
+    researchSessions: research.values,
+    contextSessions: contexts.values,
+    unavailable: results
+      .filter((result) => !result.available)
+      .map((result) => result.label),
+  };
+}
+
+export async function syncConnectorSource(sourceId: string, priority = 0) {
+  return apiFetch(`/v2/connectors/${encodeURIComponent(sourceId)}/sync`, {
+    method: "POST",
+    body: JSON.stringify({ priority }),
+  });
+}
+
+export async function exportContextSession(sessionId: string) {
+  return apiFetch(
+    `/v2/context-sessions/${encodeURIComponent(sessionId)}/export`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Generic helpers
 // ---------------------------------------------------------------------------
 

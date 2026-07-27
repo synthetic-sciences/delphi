@@ -174,6 +174,35 @@ the exact revision they continue from. Reads and exports re-check current source
 authorization, so a later permission revocation does not leak content through a
 saved context. See [`docs/context-sessions.md`](docs/context-sessions.md).
 
+### One workspace, three interfaces
+
+The dashboard's `/workspace` route brings provider health, connector sources,
+durable research, and reproducible contexts into one local-first control plane.
+The same safe surface is available to scripts through the Python client and CLI:
+
+```bash
+export SYNSC_API_URL=http://localhost:8742
+export SYNSC_API_KEY=your-api-key
+
+synsc-context workspace
+synsc-context connectors list
+synsc-context connectors sync SOURCE_ID
+synsc-context contexts create release-review \
+  --objective "Verify the release against pinned evidence" \
+  --snapshot-id SNAPSHOT_ID
+synsc-context contexts export SESSION_ID --json
+```
+
+```python
+from synsc.client import SynscClient
+
+with SynscClient() as client:
+    workspace = client.workspace()
+```
+
+Authentication stays in environment variables; neither the dashboard nor these
+commands returns connector configuration or provider credentials.
+
 ---
 
 ## MCP Tools
@@ -239,6 +268,19 @@ worker uses leased claims, heartbeats, bounded retries, stale-job recovery, and
 generation fencing so an interrupted or superseded worker cannot publish a
 late answer. The HTTP equivalents are under `/v2/research`; SSE reconnects can
 send `Last-Event-ID` and receive only later persisted events.
+
+### Reproducible contexts
+
+| Tool | Description |
+|------|-------------|
+| `context_session_create` | Create a private-by-default session from pinned snapshot references. |
+| `context_session_list` | List the caller's current context-session metadata. |
+| `context_session_get` | Rehydrate an authorized current or historical revision. |
+| `context_session_revise` | Append an immutable revision behind an optimistic write fence. |
+| `context_session_handoff` | Create an explicitly linked child from the current parent revision. |
+
+These tools are included in the `all`, `code`, `papers`, `docs`, and `atlas`
+profiles. The compact `minimal` profile omits them.
 
 ### Atlas integration (optional)
 

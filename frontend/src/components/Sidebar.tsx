@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BarChart3, Activity, Code2, FileText,
-  Key, BookOpen, Database, Shield,
+  Key, BookOpen, Database, Shield, Workflow,
 } from "lucide-react";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 
@@ -14,6 +14,7 @@ type NavEntry =
 
 const nav: NavEntry[] = [
   { icon: BarChart3, label: "overview", href: "/overview" },
+  { icon: Workflow, label: "workspace", href: "/workspace" },
   { icon: Activity, label: "activity", href: "/activity" },
   { icon: FileText, label: "papers", href: "/papers" },
   { icon: Database, label: "datasets", href: "/datasets" },

@@ -121,6 +121,13 @@ Provides deep context to AI agents through:
 - `search_datasets(query, top_k)` - Semantic dataset search
 - `get_dataset(dataset_id)` - Get dataset details
 - `delete_dataset(dataset_id)` - Delete a dataset
+
+## Reproducible Context Tools:
+- `context_session_create(...)` - Pin snapshots into a deterministic context
+- `context_session_list()` - List active context sessions
+- `context_session_get(session_id)` - Rehydrate or export one revision
+- `context_session_revise(...)` - Append behind a session write fence
+- `context_session_handoff(...)` - Create an explicitly linked child
 """
 
     transport_security = TransportSecuritySettings(
@@ -165,11 +172,11 @@ Provides deep context to AI agents through:
     # ------------------------------------------------------------------
     _profile = os.environ.get("SYNSC_MCP_PROFILE", "code").strip().lower()
     _profile_groups: dict[str, set[str]] = {
-        "all": {"code", "papers", "datasets", "research", "docs", "atlas", "sources", "minimal"},
-        "code": {"code", "sources", "minimal"},
-        "papers": {"papers", "research", "datasets", "sources", "minimal"},
-        "docs": {"docs", "sources", "minimal"},
-        "atlas": {"atlas", "sources", "minimal"},
+        "all": {"code", "papers", "datasets", "research", "docs", "atlas", "contexts", "sources", "minimal"},
+        "code": {"code", "contexts", "sources", "minimal"},
+        "papers": {"papers", "research", "datasets", "contexts", "sources", "minimal"},
+        "docs": {"docs", "contexts", "sources", "minimal"},
+        "atlas": {"atlas", "contexts", "sources", "minimal"},
         "minimal": {"minimal"},
     }
     _enabled_groups = _profile_groups.get(_profile, _profile_groups["code"])
@@ -2350,6 +2357,186 @@ Provides deep context to AI agents through:
                 "message": "Connector source not found.",
             }
         return {"success": True, "deleted": True, "source_id": source_id}
+
+    def _context_error(exc: Exception) -> dict[str, Any]:
+        from synsc.contexts.service import (
+            ContextRevisionConflictError,
+            ContextSessionExpiredError,
+            ContextSessionNotFoundError,
+            ContextSnapshotUnavailableError,
+        )
+
+        if isinstance(exc, ContextSessionNotFoundError):
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "Context session not found.",
+            }
+        if isinstance(exc, ContextRevisionConflictError):
+            return {
+                "success": False,
+                "error_code": "conflict",
+                "message": "Context session changed.",
+            }
+        if isinstance(exc, ContextSessionExpiredError):
+            return {
+                "success": False,
+                "error_code": "expired",
+                "message": "Context session is archived or expired.",
+            }
+        if isinstance(exc, (ContextSnapshotUnavailableError, ValueError)):
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        logger.error(
+            "Context session operation failed",
+            error_type=type(exc).__name__,
+        )
+        return {
+            "success": False,
+            "error_code": "internal_error",
+            "message": "Context session operation failed.",
+        }
+
+    @_tool_in("contexts")
+    def context_session_create(
+        name: str,
+        objective: str,
+        snapshot_ids: list[str] | None = None,
+        token_budget: int = 8_000,
+        task_state: dict[str, Any] | None = None,
+        sharing_policy: str = "private",
+    ) -> dict[str, Any]:
+        """Create a deterministic context revision from immutable snapshots."""
+        from synsc.contexts.service import get_context_session_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        try:
+            context = get_context_session_service().create_session(
+                user_id=user_id,
+                name=name,
+                objective=objective,
+                snapshot_ids=snapshot_ids or [],
+                token_budget=token_budget,
+                task_state=task_state,
+                sharing_policy=sharing_policy,
+            )
+        except Exception as exc:
+            return _context_error(exc)
+        return {"success": True, "context": context}
+
+    @_tool_in("contexts")
+    def context_session_list(
+        limit: int = 50,
+        include_expired: bool = False,
+    ) -> dict[str, Any]:
+        """List context-session metadata visible to the current owner."""
+        from synsc.contexts.service import get_context_session_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        try:
+            sessions = get_context_session_service().list_sessions(
+                user_id=user_id,
+                limit=limit,
+                include_expired=include_expired,
+            )
+        except Exception as exc:
+            return _context_error(exc)
+        return {"success": True, "sessions": sessions, "total": len(sessions)}
+
+    @_tool_in("contexts")
+    def context_session_get(
+        session_id: str,
+        revision: int | None = None,
+        export: bool = False,
+    ) -> dict[str, Any]:
+        """Read one authorized revision, or export its selected content."""
+        from synsc.contexts.service import get_context_session_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        service = get_context_session_service()
+        try:
+            if export:
+                context = service.export_session(
+                    session_id,
+                    user_id=user_id,
+                    revision_number=revision,
+                )
+            else:
+                context = service.get_session(
+                    session_id,
+                    user_id=user_id,
+                    revision_number=revision,
+                )
+        except Exception as exc:
+            return _context_error(exc)
+        return {"success": True, "context": context}
+
+    @_tool_in("contexts")
+    def context_session_revise(
+        session_id: str,
+        expected_version: int,
+        task_state: dict[str, Any] | None = None,
+        decisions: list[dict[str, Any]] | None = None,
+        unresolved_questions: list[str] | None = None,
+        token_budget: int | None = None,
+    ) -> dict[str, Any]:
+        """Append a revision if the session-wide write version still matches."""
+        from synsc.contexts.service import get_context_session_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        try:
+            context = get_context_session_service().revise_session(
+                session_id,
+                user_id=user_id,
+                expected_version=expected_version,
+                task_state=task_state,
+                decisions=decisions,
+                unresolved_questions=unresolved_questions,
+                token_budget=token_budget,
+            )
+        except Exception as exc:
+            return _context_error(exc)
+        return {"success": True, "context": context}
+
+    @_tool_in("contexts")
+    def context_session_handoff(
+        session_id: str,
+        name: str,
+        objective: str,
+        handoff_note: str,
+        token_budget: int | None = None,
+        sharing_policy: str = "private",
+    ) -> dict[str, Any]:
+        """Create a child pinned to the current authorized parent revision."""
+        from synsc.contexts.service import get_context_session_service
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {"success": False, "error_code": "auth_required"}
+        try:
+            context = get_context_session_service().handoff(
+                session_id,
+                user_id=user_id,
+                name=name,
+                objective=objective,
+                handoff_note=handoff_note,
+                token_budget=token_budget,
+                sharing_policy=sharing_policy,
+            )
+        except Exception as exc:
+            return _context_error(exc)
+        return {"success": True, "context": context}
 
     def _do_read(
         source_id: str,

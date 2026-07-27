@@ -105,6 +105,15 @@ The `sources` and `all` MCP profiles expose five lifecycle tools:
 Search the resulting content through the regular `search` tool with
 `source_types=["connector"]`, or scope by the connector's `source_id`.
 
+The public CLI can inspect and queue syncs without exposing encrypted
+configuration:
+
+```bash
+export SYNSC_API_KEY=your-api-key
+synsc-context connectors list
+synsc-context connectors sync SOURCE_ID --priority 2
+```
+
 ## Provider contract
 
 Adapters implement `ConnectorProvider.sync(ConnectorSyncRequest)` and return a
