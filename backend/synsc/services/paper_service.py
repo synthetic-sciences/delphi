@@ -391,6 +391,9 @@ class PaperService:
                 if chunk_ids:
                     try:
                         embedding_gen = self._get_embedding_generator()
+                        paper.embedding_model = str(
+                            embedding_gen.model_name
+                        )
                         chunk_texts = [c.get("content", "") for c in chunks[: len(chunk_ids)]]
                         embeddings = embedding_gen.generate_batched(chunk_texts)
 

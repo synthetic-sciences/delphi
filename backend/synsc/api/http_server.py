@@ -424,6 +424,14 @@ class ProviderPolicyEvaluateRequest(BaseModel):
     allowed_providers: list[str] | None = Field(default=None, max_length=100)
 
 
+class SnapshotCaptureRequest(BaseModel):
+    """Request to publish the current indexed state of one core source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal["repo", "paper", "dataset", "docs"]
+
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -943,6 +951,98 @@ def create_app() -> FastAPI:
                 status_code=422,
                 detail="Invalid provider policy request.",
             ) from exc
+
+    @app.get(
+        "/v2/sources/{source_id}/snapshots",
+        tags=["Snapshots"],
+    )
+    async def list_source_snapshots(
+        source_id: str,
+        source_type: Literal["repo", "paper", "dataset", "docs"] = Query(
+            ...,
+            alias="type",
+        ),
+        limit: int = Query(default=100, ge=1, le=500),
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> dict[str, Any]:
+        """List accessible immutable versions of one logical source."""
+
+        from synsc.snapshots.contracts import SnapshotSourceType
+        from synsc.snapshots.service import SnapshotService
+
+        snapshots = SnapshotService().list(
+            user_id=auth.user_id,
+            source_type=SnapshotSourceType(source_type),
+            source_id=source_id,
+            limit=limit,
+        )
+        return {"snapshots": snapshots, "total": len(snapshots)}
+
+    @app.post(
+        "/v2/sources/{source_id}/snapshots",
+        tags=["Snapshots"],
+        status_code=201,
+    )
+    async def capture_source_snapshot(
+        source_id: str,
+        body: SnapshotCaptureRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> dict[str, Any]:
+        """Idempotently publish the source's current indexed state."""
+
+        from synsc.snapshots.contracts import SnapshotSourceType
+        from synsc.snapshots.service import (
+            SnapshotAccessDeniedError,
+            SnapshotService,
+            SnapshotSourceNotFoundError,
+        )
+
+        try:
+            snapshot = SnapshotService().publish(
+                SnapshotSourceType(body.source_type),
+                source_id,
+                user_id=auth.user_id,
+            )
+        except (
+            SnapshotAccessDeniedError,
+            SnapshotSourceNotFoundError,
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Source not found.",
+            ) from None
+        return {"snapshot": snapshot.to_dict()}
+
+    @app.get("/v2/snapshots/{snapshot_id}", tags=["Snapshots"])
+    async def get_source_snapshot(
+        snapshot_id: str,
+        include_items: bool = False,
+        item_offset: int = Query(default=0, ge=0),
+        item_limit: int = Query(default=100, ge=1, le=500),
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> dict[str, Any]:
+        """Read accessible snapshot metadata and optional copied items."""
+
+        from synsc.snapshots.service import (
+            SnapshotAccessDeniedError,
+            SnapshotNotFoundError,
+            SnapshotService,
+        )
+
+        try:
+            snapshot = SnapshotService().get(
+                snapshot_id,
+                user_id=auth.user_id,
+                include_items=include_items,
+                item_offset=item_offset,
+                item_limit=item_limit,
+            )
+        except (SnapshotAccessDeniedError, SnapshotNotFoundError):
+            raise HTTPException(
+                status_code=404,
+                detail="Snapshot not found.",
+            ) from None
+        return {"snapshot": snapshot}
 
     # ==========================================================================
     # Auth Endpoints

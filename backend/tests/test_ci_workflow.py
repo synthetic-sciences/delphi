@@ -68,6 +68,7 @@ def test_backend_and_postgres_jobs_enforce_locked_migrations_and_tests() -> None
     assert "uv run alembic upgrade head" in postgres
     assert "test_atomic_reindex_postgres.py" in postgres
     assert "test_job_queue_postgres.py" in postgres
+    assert "test_snapshot_postgres.py" in postgres
 
 
 def test_package_and_frontend_jobs_use_reproducible_checks() -> None:

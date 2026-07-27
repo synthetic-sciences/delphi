@@ -117,6 +117,11 @@ def test_index_source_routes_generic_pdf_url(monkeypatch):
         "_get_paper_service",
         lambda uid: FakePaperService(),
     )
+    monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        lambda *args, **kwargs: {"snapshot_id": "snapshot-paper"},
+    )
 
     class FakeResp:
         content = b"%PDF-1.4 fake pdf bytes"

@@ -148,6 +148,7 @@ class DocsService:
 
     def __init__(self, user_id: str | None = None):
         self.user_id = user_id
+        self._last_embedding_model = "unknown"
 
     # ------------------------------------------------------------------
     # Embedding helper (lazy — same singleton as papers)
@@ -157,6 +158,7 @@ class DocsService:
         from synsc.embeddings.generator import get_paper_embedding_generator
 
         gen = get_paper_embedding_generator()
+        self._last_embedding_model = str(gen.model_name)
         return gen.generate_batched(texts)
 
     # ------------------------------------------------------------------
@@ -583,6 +585,7 @@ class DocsService:
                     sitemap_url=sitemap,
                     indexed_by=self.user_id,
                     is_public=True,
+                    embedding_model=self._last_embedding_model,
                     pages_count=pages_seen,
                     chunks_count=len(all_chunks),
                 )
