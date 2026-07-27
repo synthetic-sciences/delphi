@@ -16,10 +16,12 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import structlog
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from synsc.config import get_config
 from synsc.database.connection import get_session
@@ -29,8 +31,8 @@ from synsc.database.models import (
     RepositoryFile,
     UserRepository,
 )
-from synsc.embeddings.generator import get_embedding_generator
-from synsc.indexing.vector_store import get_vector_store
+from synsc.embeddings.generator import EmbeddingProvider, get_embedding_generator
+from synsc.indexing.vector_store import VectorStore, get_vector_store
 
 logger = structlog.get_logger(__name__)
 
@@ -66,10 +68,10 @@ def _extract_query_symbols(query: str) -> set[str]:
 
 
 def _apply_symbol_boost(
-    results: list[dict],
+    results: list[dict[str, Any]],
     query_symbols: set[str],
     boost: float = 0.15,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Boost relevance score for chunks whose symbol_names match query symbols.
 
     Args:
@@ -138,10 +140,10 @@ _TEST_CONTENT_PATTERN = re.compile(
 
 
 def _apply_metadata_scoring(
-    results: list[dict],
+    results: list[dict[str, Any]],
     path_penalty: float = 0.08,
     content_penalty: float = 0.04,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Adjust scores based on file path and content signals.
 
     Uses two layers:
@@ -186,10 +188,10 @@ def _apply_metadata_scoring(
 
 
 def _apply_dynamic_threshold(
-    results: list[dict],
+    results: list[dict[str, Any]],
     min_absolute: float = 0.3,
     relative_factor: float = 0.6,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Filter results using a dynamic threshold relative to the top score.
 
     If the best result has similarity 0.92, the cutoff becomes
@@ -214,12 +216,12 @@ def _apply_dynamic_threshold(
 
 
 def _apply_mmr(
-    results: list[dict],
+    results: list[dict[str, Any]],
     query_embedding: np.ndarray,
     embeddings: dict[str, np.ndarray] | None = None,
     top_k: int = 10,
     lambda_param: float = 0.7,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Apply Maximal Marginal Relevance to diversify results.
 
     MMR balances relevance to the query with diversity among selected results.
@@ -279,13 +281,15 @@ def _apply_mmr(
                 best_score = mmr_score
                 best_idx = idx
 
+        if best_idx is None:
+            break
         selected_indices.append(best_idx)
         remaining.remove(best_idx)
 
     return [results[i] for i in selected_indices]
 
 
-def _enrich_results_with_context(results: list[dict]) -> list[dict]:
+def _enrich_results_with_context(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Enrich search results with enclosing symbol docstrings/signatures and adjacent context.
 
     Post-retrieval enrichment: for each result, finds the tightest enclosing
@@ -316,7 +320,7 @@ def _enrich_results_with_context(results: list[dict]) -> list[dict]:
             ).fetchall()
 
             # Group symbols by file_id
-            symbols_by_file: dict[str, list] = {}
+            symbols_by_file: dict[str, list[Any]] = {}
             for s in symbol_rows:
                 symbols_by_file.setdefault(str(s.file_id), []).append(s)
 
@@ -405,7 +409,7 @@ class SearchService:
     - Public repos can be added to collection; private repos only by indexer
     """
 
-    def __init__(self, user_id: str | None = None):
+    def __init__(self, user_id: str | None = None) -> None:
         """Initialize the search service.
         
         Args:
@@ -413,15 +417,15 @@ class SearchService:
         """
         self.config = get_config()
         self.user_id = user_id
-        self._vector_store = None
+        self._vector_store: VectorStore | None = None
 
     @property
-    def embedding_generator(self):
+    def embedding_generator(self) -> EmbeddingProvider:
         """Return the global singleton embedding generator."""
         return get_embedding_generator()
     
     @property
-    def vector_store(self):
+    def vector_store(self) -> VectorStore:
         """Lazy-load vector store."""
         if self._vector_store is None:
             self._vector_store = get_vector_store()
@@ -436,7 +440,7 @@ class SearchService:
         top_k: int = 10,
         user_id: str | None = None,
         quality_mode: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Search code using semantic + hybrid retrieval.
 
         ACCESS CONTROL: Only searches repos in user's collection.
@@ -496,7 +500,7 @@ class SearchService:
                 fetch_k = max(fetch_k, self.config.search.hybrid_candidates)
 
             db_ms = 0.0
-            hybrid_meta: dict | None = None
+            hybrid_meta: dict[str, Any] | None = None
 
             if use_hybrid:
                 # Hybrid: vector + BM25 + symbol + path + trigram, fused.
@@ -674,7 +678,7 @@ class SearchService:
         start_line: int | None = None,
         end_line: int | None = None,
         user_id: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Get file content from a repository.
         
         ACCESS CONTROL:
@@ -804,7 +808,11 @@ class SearchService:
                 "is_public": repo.is_public,
             }
     
-    def _reconstruct_file_from_chunks(self, session, file_id: str) -> str | None:
+    def _reconstruct_file_from_chunks(
+        self,
+        session: Session,
+        file_id: str,
+    ) -> str | None:
         """Reconstruct file content from indexed chunks.
         
         Chunks are ordered by chunk_index and concatenated.

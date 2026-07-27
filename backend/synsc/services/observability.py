@@ -70,8 +70,8 @@ def log_search_telemetry(
     user_id: str | None,
     query: str,
     quality_mode: str,
-    hybrid_meta: dict | None,
-    top_results: list[dict],
+    hybrid_meta: dict[str, Any] | None,
+    top_results: list[dict[str, Any]],
     elapsed_ms: float,
 ) -> None:
     """Log per-search telemetry: which branches contributed, what scored top,
@@ -221,7 +221,7 @@ def _write(
     query: str | None = None,
     results_count: int | None = None,
     duration_ms: int | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Best-effort insert into activity_log. Fails silently."""
     if not user_id:

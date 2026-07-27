@@ -17,6 +17,6 @@ class ResearchProvider(Protocol):
     def generate(
         self,
         prompt: str,
-        context_blocks: list[dict],
+        context_blocks: list[dict[str, Any]],
         model: str,
     ) -> GeneratedAnswer: ...

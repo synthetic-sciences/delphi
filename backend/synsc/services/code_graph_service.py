@@ -17,7 +17,7 @@ with ``is_resolved=False`` so impact analysis can show external dependencies.
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from typing import Any
+from typing import Any, cast
 
 import structlog
 
@@ -95,6 +95,7 @@ class CodeGraphService:
                 continue
 
             for call in calls:
+                key: tuple[str | None, str | None, str]
                 src_id = file_qual_to_id.get((chunk.file_id, call.caller))
                 if src_id is None:
                     src_id = file_name_to_id.get(
@@ -369,12 +370,13 @@ class CodeGraphService:
             .all()
         )
         if qualified:
-            return qualified
-        return (
+            return cast(list[Symbol], qualified)
+        return cast(
+            list[Symbol],
             session.query(Symbol)
             .filter(Symbol.repo_id == repo_id, Symbol.name == identifier)
             .limit(25)
-            .all()
+            .all(),
         )
 
     def _symbol_payloads(self, session: Any, symbol_ids: list[str]) -> list[dict[str, Any]]:

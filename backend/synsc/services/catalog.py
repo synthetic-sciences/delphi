@@ -39,7 +39,15 @@ class CatalogEntry:
         }
 
 
-def _e(name, url, description, category, aliases=(), ecosystem="", kind="repository"):
+def _e(
+    name: str,
+    url: str,
+    description: str,
+    category: str,
+    aliases: tuple[str, ...] = (),
+    ecosystem: str = "",
+    kind: str = "repository",
+) -> CatalogEntry:
     return CatalogEntry(
         name=name, kind=kind, url=url, description=description,
         category=category, aliases=tuple(aliases), ecosystem=ecosystem,
@@ -135,7 +143,12 @@ class CatalogService:
     def __init__(self, catalog: tuple[CatalogEntry, ...] = CATALOG) -> None:
         self.catalog = catalog
 
-    def search(self, query: str, limit: int = 10, category: str | None = None) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        limit: int = 10,
+        category: str | None = None,
+    ) -> list[dict[str, object]]:
         """Rank catalog entries against a free-text query."""
         q = (query or "").strip().lower()
         scored: list[tuple[float, CatalogEntry]] = []
@@ -148,12 +161,12 @@ class CatalogService:
         scored.sort(key=lambda x: (-x[0], x[1].name))
         return [e.to_dict() for _, e in scored[:limit]]
 
-    def resolve(self, name: str) -> dict | None:
+    def resolve(self, name: str) -> dict[str, object] | None:
         """Resolve a library name to its single best catalog entry."""
         results = self.search(name, limit=1)
         return results[0] if results else None
 
-    def list_entries(self, category: str | None = None) -> list[dict]:
+    def list_entries(self, category: str | None = None) -> list[dict[str, object]]:
         entries = [
             e for e in self.catalog if not category or e.category == category
         ]

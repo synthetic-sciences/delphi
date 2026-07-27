@@ -6,6 +6,7 @@ Uses smart deduplication with access control:
 - Private repos: only the indexer can access
 """
 
+from typing import Any
 
 import structlog
 from sqlalchemy import func, text
@@ -43,7 +44,7 @@ class SymbolService:
         top_k: int = 25,
         offset: int = 0,
         user_id: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Search for symbols by name.
         
         Uses case-insensitive partial matching on symbol name and qualified name.
@@ -217,7 +218,7 @@ class SymbolService:
         top_k: int = 25,
         offset: int = 0,
         user_id: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Browse all symbols without search term.
         
         Returns symbols with optional filters and pagination.
@@ -360,7 +361,7 @@ class SymbolService:
         symbol_id: str,
         user_id: str | None = None,
         include_source: bool = True,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Get full symbol details by ID, including the symbol's source body.
 
         Previously this returned metadata only; agents had to make a separate
@@ -418,7 +419,7 @@ class SymbolService:
                     }
 
                 source: str | None = None
-                source_chunks: list[dict] = []
+                source_chunks: list[dict[str, Any]] = []
                 if include_source:
                     rows = session.execute(
                         text(
@@ -485,7 +486,7 @@ class SymbolService:
         self,
         repo_id: str,
         qualified_name: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Get symbol by fully qualified name.
         
         Args:
@@ -523,7 +524,7 @@ class SymbolService:
         self,
         repo_id: str,
         file_path: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Get all symbols in a file.
         
         Args:
@@ -579,7 +580,7 @@ class SymbolService:
                 "message": f"Failed to get file symbols: {e}",
             }
     
-    def get_repo_symbol_stats(self, repo_id: str) -> dict:
+    def get_repo_symbol_stats(self, repo_id: str) -> dict[str, Any]:
         """Get symbol statistics for a repository.
         
         Args:
@@ -598,7 +599,10 @@ class SymbolService:
                     Symbol.repo_id == repo_id,
                 ).group_by(Symbol.symbol_type).all()
                 
-                type_counts = dict(counts)
+                type_counts: dict[str, int] = {
+                    str(symbol_type): int(count)
+                    for symbol_type, count in counts
+                }
                 total = sum(type_counts.values())
                 
                 return {

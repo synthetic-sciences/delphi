@@ -31,14 +31,18 @@ import socket
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpcore
 import httpx
+import numpy as np
 import structlog
 from markdownify import markdownify
 from sqlalchemy import text
+from sqlalchemy.engine import RowMapping
+from sqlalchemy.orm import Session
 
 from synsc.database.connection import get_session
 from synsc.database.models import (
@@ -71,7 +75,7 @@ def _resolve_public_addresses(hostname: str, port: int) -> tuple[str, ...]:
     except socket.gaierror as exc:
         raise ValueError("Documentation URL hostname could not be resolved") from exc
 
-    addresses = tuple(dict.fromkeys(item[4][0] for item in resolved))
+    addresses = tuple(dict.fromkeys(str(item[4][0]) for item in resolved))
     parsed_addresses = tuple(ipaddress.ip_address(address) for address in addresses)
     if not parsed_addresses or any(
         not address.is_global for address in parsed_addresses
@@ -105,7 +109,7 @@ class _PublicNetworkBackend(httpcore.SyncBackend):
         port: int,
         timeout: float | None = None,
         local_address: str | None = None,
-        socket_options=None,
+        socket_options: Any = None,
     ) -> httpcore.NetworkStream:
         last_error: Exception | None = None
         for address in _resolve_public_addresses(host, port):
@@ -149,7 +153,7 @@ class DocsService:
     # Embedding helper (lazy — same singleton as papers)
     # ------------------------------------------------------------------
 
-    def _embed(self, texts: list[str]):
+    def _embed(self, texts: list[str]) -> np.ndarray:
         from synsc.embeddings.generator import get_paper_embedding_generator
 
         gen = get_paper_embedding_generator()
@@ -277,7 +281,7 @@ class DocsService:
                 continue
             try:
                 cls_attr = " ".join(el.get("class") or []).lower()
-                role_attr = (el.get("role") or "").lower()
+                role_attr = str(el.get("role") or "").lower()
             except Exception:
                 continue
             if any(hint in cls_attr for hint in cls._NOISE_CLASS_HINTS):
@@ -369,7 +373,7 @@ class DocsService:
         current_path = h1 or ""
         current_body: list[str] = []
 
-        def flush():
+        def flush() -> None:
             if current_body or current_path:
                 sections.append((current_path, current_body[:]))
 
@@ -420,8 +424,8 @@ class DocsService:
         # Now produce final chunks, prefixed with the heading path so the
         # embedding sees the section title.
         chunks: list[tuple[str, str]] = []
-        for path, body in merged:
-            text = body
+        for path, body_text in merged:
+            text = body_text
             prefix = path + "\n\n" if path else ""
             if len(text) <= approx_chars:
                 chunks.append((path, prefix + text))
@@ -464,7 +468,7 @@ class DocsService:
         max_pages: int = _DEFAULT_MAX_PAGES,
         req_delay_s: float = _DEFAULT_REQ_DELAY_S,
         version: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Crawl + index a docs site. Returns the canonical index-response shape.
 
         ``version`` lets the caller pin a specific release (Context7 parity).
@@ -503,7 +507,7 @@ class DocsService:
         sitemap = sitemap_url or self._discover_sitemap(url)
         docs_id = str(uuid.uuid4())
 
-        all_chunks: list[dict] = []
+        all_chunks: list[dict[str, Any]] = []
         pages_seen = 0
 
         with httpx.Client(
@@ -628,7 +632,7 @@ class DocsService:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _grant_user_access(self, session, docs_id: str) -> bool:
+    def _grant_user_access(self, session: Session, docs_id: str) -> bool:
         if not self.user_id:
             return False
         uid = str(self.user_id)
@@ -647,7 +651,7 @@ class DocsService:
         )
         return True
 
-    def search_docs(self, query: str, top_k: int = 10) -> dict:
+    def search_docs(self, query: str, top_k: int = 10) -> dict[str, Any]:
         """Hybrid docs search: vector + BM25 full-text fused, then sorted.
 
         Scoped to docs the current user has in their collection. The full-
@@ -677,7 +681,7 @@ class DocsService:
             fetch_k = max(top_k * 3, 30)
 
             with get_session() as session:
-                vec_rows = list(
+                vec_rows: Sequence[RowMapping] = (
                     session.execute(
                         text(
                             """
@@ -706,9 +710,9 @@ class DocsService:
 
                 # BM25 branch — falls back gracefully when content_tsv
                 # column isn't present (older bench DBs).
-                bm25_rows: list[dict] = []
+                bm25_rows: Sequence[RowMapping] = []
                 try:
-                    bm25_rows = list(
+                    bm25_rows = (
                         session.execute(
                             text(
                                 """
@@ -743,23 +747,26 @@ class DocsService:
 
                 # Fuse: normalize each branch's score in [0,1], then sum
                 # (weighted: vector 0.7, BM25 0.3) and dedupe by chunk_id.
-                def _normed(rows, weight):
+                def _normed(
+                    rows: Sequence[RowMapping],
+                    weight: float,
+                ) -> dict[str, dict[str, Any]]:
                     if not rows:
                         return {}
                     scores = [float(r["similarity"] or 0.0) for r in rows]
                     lo, hi = min(scores), max(scores)
                     span = (hi - lo) or 1.0
-                    out: dict[str, dict] = {}
+                    out: dict[str, dict[str, Any]] = {}
                     for r in rows:
                         norm = ((float(r["similarity"] or 0.0) - lo) / span) * weight
                         rd = dict(r)
                         rd["_branch_score"] = norm
-                        out[r["chunk_id"]] = rd
+                        out[str(r["chunk_id"])] = rd
                     return out
 
                 vec_idx = _normed(vec_rows, 0.7)
                 bm25_idx = _normed(bm25_rows, 0.3)
-                fused: dict[str, dict] = {}
+                fused: dict[str, dict[str, Any]] = {}
                 for cid, r in vec_idx.items():
                     fused[cid] = r
                     fused[cid]["similarity"] = r["_branch_score"]
@@ -788,7 +795,7 @@ class DocsService:
             logger.exception("docs: search failed")
             return {"success": False, "error": str(exc), "results": []}
 
-    def list_docs(self) -> list[dict]:
+    def list_docs(self) -> list[dict[str, Any]]:
         if not self.user_id:
             return []
         try:

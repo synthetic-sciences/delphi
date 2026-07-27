@@ -30,6 +30,7 @@ from synsc.database.models import (
     PaperCodeSnippet,
     UserPaper,
 )
+from synsc.embeddings.generator import EmbeddingProvider
 
 logger = structlog.get_logger(__name__)
 
@@ -63,10 +64,10 @@ def _compile_section_matcher(section: str) -> "_re.Pattern[str]":
 class PaperService:
     """Service for paper indexing and management using SQLAlchemy + pgvector."""
 
-    def __init__(self, user_id: str):
+    def __init__(self, user_id: str) -> None:
         self.user_id = user_id
 
-    def _get_embedding_generator(self):
+    def _get_embedding_generator(self) -> EmbeddingProvider:
         """Return the shared paper embedding generator (thread-safe singleton)."""
         from synsc.embeddings.generator import get_paper_embedding_generator
         return get_paper_embedding_generator()
@@ -75,7 +76,7 @@ class PaperService:
         """Generate a unique paper ID."""
         return str(uuid.uuid4())
 
-    def _check_duplicate_by_arxiv(self, arxiv_id: str) -> dict | None:
+    def _check_duplicate_by_arxiv(self, arxiv_id: str) -> dict[str, Any] | None:
         """Check if paper with this arXiv ID already exists."""
         try:
             with get_session() as session:
@@ -90,7 +91,7 @@ class PaperService:
             logger.warning(f"Failed to check arXiv duplicate: {e}")
         return None
 
-    def _check_duplicate_by_hash(self, pdf_hash: str) -> dict | None:
+    def _check_duplicate_by_hash(self, pdf_hash: str) -> dict[str, Any] | None:
         """Check if paper with this PDF hash already exists."""
         try:
             with get_session() as session:
@@ -197,7 +198,7 @@ class PaperService:
         pdf_path: str,
         source: str = "upload",
         arxiv_id: str | None = None,
-        arxiv_metadata: dict | None = None,
+        arxiv_metadata: dict[str, Any] | None = None,
         title: str | None = None,
     ) -> dict[str, Any]:
         """
@@ -471,14 +472,14 @@ class PaperService:
                         # Skip equations that look like dollar amounts or examples
                         _false_positive_markers = {'$', '<<', '####', 'dollars', 'cents', 'price'}
 
-                        def _is_math(t):
+                        def _is_math(t: str) -> bool:
                             tl = t.lower()
                             if any(fp in tl for fp in _false_positive_markers):
                                 return False
                             return (
                                 any(c in t for c in _math_chars)
                                 or any(w in tl for w in _math_words)
-                                or _re.search(r'[_^]|W\d|b\d|d[_a-z]', t)  # weight/bias/dim notation
+                                or bool(_re.search(r'[_^]|W\d|b\d|d[_a-z]', t))
                             )
 
                         _eq_patterns = [
@@ -495,7 +496,7 @@ class PaperService:
                             # Equation with number on next line: "expression\n(1)"
                             _re.compile(r'([^\n]{10,200})\n\s*\((\d{1,2})\)\s*$', _re.MULTILINE),
                         ]
-                        _seen_eq = set()
+                        _seen_eq: set[str] = set()
                         for pat in _eq_patterns:
                             for m in pat.finditer(full_text):
                                 eq_text = ' '.join(m.group(0).split())  # normalize whitespace
@@ -598,7 +599,7 @@ class PaperService:
 
     def get_paper(
         self, paper_id: str, section: str | None = None
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Get a specific paper by ID, optionally filtered to a single section.
 
         When ``section`` is provided, match against ``chunk.section_title``
@@ -661,10 +662,11 @@ class PaperService:
                 if matcher is None:
                     return {**base, "chunks": chunk_dicts}
 
-                matched = [
-                    c for c in chunk_dicts
-                    if c.get("section_title") and matcher.search(c["section_title"])
-                ]
+                matched = []
+                for chunk in chunk_dicts:
+                    section_title = chunk.get("section_title")
+                    if isinstance(section_title, str) and matcher.search(section_title):
+                        matched.append(chunk)
                 if not matched:
                     return {
                         **base,
@@ -676,7 +678,9 @@ class PaperService:
                 return {
                     **base,
                     "section_title": matched[0].get("section_title"),
-                    "content": "\n\n".join(c.get("content", "") for c in matched),
+                    "content": "\n\n".join(
+                        str(chunk.get("content") or "") for chunk in matched
+                    ),
                     "chunks": matched,
                     "section_query": section,
                 }
@@ -686,7 +690,7 @@ class PaperService:
             logger.error("Failed to get paper", paper_id=paper_id, error=str(e))
             raise
 
-    def list_papers(self, limit: int = 50) -> list[dict]:
+    def list_papers(self, limit: int = 50) -> list[dict[str, Any]]:
         """List papers for the current user."""
         try:
             with get_session() as session:
@@ -868,7 +872,7 @@ class PaperService:
             logger.exception("Paper search failed")
             return {"success": False, "error": str(e), "results": []}
 
-    def get_citations(self, paper_id: str) -> list[dict]:
+    def get_citations(self, paper_id: str) -> list[dict[str, Any]]:
         """Get citations only when the current user has the paper."""
         try:
             with get_session() as session:
@@ -902,7 +906,7 @@ class PaperService:
             logger.error(f"Failed to get citations: {e}")
             return []
 
-    def get_equations(self, paper_id: str) -> list[dict]:
+    def get_equations(self, paper_id: str) -> list[dict[str, Any]]:
         """Get equations only when the current user has the paper."""
         try:
             with get_session() as session:

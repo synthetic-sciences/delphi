@@ -26,6 +26,7 @@ import re
 import time
 from typing import Any
 
+import numpy as np
 import structlog
 from sqlalchemy import text
 
@@ -69,7 +70,7 @@ def _section_weight(section_title: str | None) -> float:
 def hybrid_search_papers(
     user_id: str,
     query: str,
-    query_embedding,
+    query_embedding: np.ndarray,
     top_k: int = 10,
     paper_ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
@@ -180,7 +181,7 @@ def hybrid_search_papers(
     return results[:top_k]
 
 
-def rerank_papers(query: str, results: list[dict]) -> list[dict]:
+def rerank_papers(query: str, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Cross-encoder rerank for papers — same path as code search but
     blended at α=0.45 because section/citation weighting already does some
     of the discrimination work.
@@ -333,7 +334,7 @@ def joint_retrieval(
     )
 
     # Graph hits — best-effort, may not be installed.
-    graph_hits: list[dict] = []
+    graph_hits: list[dict[str, Any]] = []
     try:
         from synsc.services.atlas_connector import (
             search_atlas_nodes,

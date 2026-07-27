@@ -9,32 +9,38 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
 
+if TYPE_CHECKING:
+    from synsc.services.dataset_service import DatasetService
+    from synsc.services.indexing_service import IndexingService
+    from synsc.services.paper_service import PaperService
+    from synsc.services.search_service import SearchService
 
-def _get_search_service(user_id: str | None):
+
+def _get_search_service(user_id: str | None) -> SearchService:
     from synsc.services.search_service import SearchService
 
     return SearchService(user_id=user_id)
 
 
-def _get_paper_service(user_id: str):
+def _get_paper_service(user_id: str) -> PaperService:
     from synsc.services.paper_service import PaperService
 
     return PaperService(user_id=user_id)
 
 
-def _get_dataset_service(user_id: str):
+def _get_dataset_service(user_id: str) -> DatasetService:
     from synsc.services.dataset_service import DatasetService
 
     return DatasetService(user_id=user_id)
 
 
-def _norm_code_hit(r: dict) -> dict:
+def _norm_code_hit(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_type": "repo",
         "source_id": r.get("repo_id", ""),
@@ -53,7 +59,7 @@ def _norm_code_hit(r: dict) -> dict:
     }
 
 
-def _norm_paper_hit(r: dict) -> dict:
+def _norm_paper_hit(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_type": "paper",
         "source_id": r.get("paper_id", ""),
@@ -69,7 +75,7 @@ def _norm_paper_hit(r: dict) -> dict:
     }
 
 
-def _norm_dataset_hit(r: dict) -> dict:
+def _norm_dataset_hit(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_type": "dataset",
         "source_id": r.get("dataset_id", ""),
@@ -82,7 +88,7 @@ def _norm_dataset_hit(r: dict) -> dict:
     }
 
 
-def _norm_docs_hit(r: dict) -> dict:
+def _norm_docs_hit(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "source_type": "docs",
         "source_id": r.get("docs_id", ""),
@@ -264,7 +270,7 @@ def unified_retrieve(
         _maybe_auto_index_on_miss(query, user_id)
 
     types = set(source_types or ["repo", "paper", "dataset", "docs"])
-    hits: list[dict] = []
+    hits: list[dict[str, Any]] = []
 
     if "repo" in types:
         try:
@@ -445,7 +451,7 @@ def classify_query_intent(query: str) -> str:
     return "neutral"
 
 
-def _apply_query_type_boost(query: str, hits: list[dict]) -> None:
+def _apply_query_type_boost(query: str, hits: list[dict[str, Any]]) -> None:
     """In-place: boost docs (and paper) results when the query is conceptual.
 
     code_gen:    +0.25 docs/paper, +0.05 code  (the strongest doc bias —
@@ -479,7 +485,7 @@ def _apply_query_type_boost(query: str, hits: list[dict]) -> None:
                 h["score"] = float(h.get("score") or 0.0) + 0.10
 
 
-def _normalize_per_branch(hits: list[dict]) -> None:
+def _normalize_per_branch(hits: list[dict[str, Any]]) -> None:
     """In-place min-max normalize ``score`` within each source_type branch.
 
     Cosine-similarity scales differ across embedding models (the docs branch
@@ -489,7 +495,7 @@ def _normalize_per_branch(hits: list[dict]) -> None:
     """
     from collections import defaultdict
 
-    by_type: dict[str, list[dict]] = defaultdict(list)
+    by_type: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for h in hits:
         by_type[h.get("source_type", "_")].append(h)
     for group in by_type.values():
@@ -506,7 +512,7 @@ def _normalize_per_branch(hits: list[dict]) -> None:
             h["score"] = (float(h["score"]) - lo) / span
 
 
-def _maybe_cross_source_rerank(query: str, hits: list[dict]) -> list[dict]:
+def _maybe_cross_source_rerank(query: str, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Apply cross-encoder rerank to the merged result set when enabled.
 
     Returns the original list on any failure so retrieval stays resilient.
@@ -542,7 +548,7 @@ def _maybe_cross_source_rerank(query: str, hits: list[dict]) -> list[dict]:
         return hits
 
 
-def _attach_trust_scores(hits: list[dict]) -> list[dict]:
+def _attach_trust_scores(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Backfill trust_score on hits by fetching the source row.
 
     One DB call per distinct source_id+source_type. Cheap enough at k<=100.
@@ -609,7 +615,11 @@ def _attach_trust_scores(hits: list[dict]) -> list[dict]:
         if h.get("trust_score"):
             continue
         h["trust_score"] = scores.get(
-            (h.get("source_type"), h.get("source_id")), 0.0
+            (
+                str(h.get("source_type") or ""),
+                str(h.get("source_id") or ""),
+            ),
+            0.0,
         )
     return hits
 
@@ -642,7 +652,7 @@ def unified_search(
     k: int = 10,
     mode: str = "precise",
     user_id: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Unified search across code + papers + datasets.
 
     Aliases: targeted -> precise, universal -> thorough.
@@ -684,7 +694,7 @@ def unified_search(
     )
 
     seen: set[str] = set()
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for h in hits:
         digest = hashlib.sha256(
             (h.get("text") or "").strip().encode("utf-8")
@@ -699,7 +709,7 @@ def unified_search(
     return {"results": out, "total": len(out), "mode_applied": normalized}
 
 
-def _web_search_stub(query: str, k: int) -> dict:
+def _web_search_stub(query: str, k: int) -> dict[str, Any]:
     """Stub for web-mode search. Real provider wiring is a P2 follow-up."""
     logger.info("unified_search: web mode stub returned empty", query=query)
     return {
@@ -715,7 +725,7 @@ def _web_search_stub(query: str, k: int) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _get_indexing_service(user_id: str | None):
+def _get_indexing_service(user_id: str | None) -> IndexingService:
     from synsc.services.indexing_service import IndexingService
 
     return IndexingService(user_id=user_id)
@@ -724,11 +734,11 @@ def _get_indexing_service(user_id: str | None):
 def _normalize_index_response(
     *,
     source_type: str,
-    res: dict,
+    res: dict[str, Any],
     id_key: str,
     external_ref: str,
     default_status: str = "indexed",
-) -> dict:
+) -> dict[str, Any]:
     """Translate a per-type indexer response into the unified envelope.
 
     Reflects the underlying ``success`` flag in the outer ``status`` so the
@@ -757,9 +767,9 @@ def index_source(
     source_type: str,
     url: str,
     display_name: str | None = None,
-    options: dict | None = None,
+    options: dict[str, Any] | None = None,
     user_id: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Dispatch to the per-type indexer and normalize the response.
 
     Returns ``{source_id, source_type, status, external_ref, raw}``. On
@@ -962,8 +972,8 @@ def index_source(
             raise ValueError("docs indexing requires an authenticated user")
         from synsc.services.docs_service import get_docs_service
 
-        svc = get_docs_service(user_id=user_id)
-        res = svc.index_docs(
+        docs_service = get_docs_service(user_id=user_id)
+        res = docs_service.index_docs(
             url=url,
             display_name=display_name,
             sitemap_url=opts.get("sitemap_url"),
@@ -1011,10 +1021,10 @@ def index_source(
 def list_sources(
     source_type: str | None = None,
     user_id: str | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """List indexed sources, optionally filtered by type."""
     wanted = {source_type} if source_type else {"repo", "paper", "dataset", "docs"}
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
 
     if "repo" in wanted:
         try:
@@ -1261,7 +1271,7 @@ def _lookup_docs_by_url(url: str, version: str | None = None) -> str | None:
                 .first()
             )
             if row:
-                return row[0]
+                return str(row[0])
             # Fall back to most-recently-indexed version
             row = (
                 session.query(DocumentationSource.docs_id)
@@ -1395,7 +1405,7 @@ def _resolve_repos_by_name(
         with get_session() as session:
             q = session.query(Repository).filter(Repository.is_public == True)  # noqa: E712
             rows = q.limit(500).all()
-            scored = []
+            scored: list[dict[str, Any]] = []
             for r in rows:
                 full = f"{r.owner}/{r.name}".lower()
                 quality = max(
@@ -1436,7 +1446,7 @@ def _resolve_papers_by_name(
     try:
         with get_session() as session:
             rows = session.query(Paper).limit(500).all()
-            scored = []
+            scored: list[dict[str, Any]] = []
             for p in rows:
                 quality = max(
                     _match_quality(needle, p.title),
@@ -1480,7 +1490,7 @@ def _resolve_datasets_by_name(
                     "SELECT dataset_id, hf_id, name FROM datasets LIMIT 500"
                 )
             ).all()
-            scored = []
+            scored: list[dict[str, Any]] = []
             for r in rows:
                 quality = max(
                     _match_quality(needle, r.name),
@@ -1517,7 +1527,7 @@ def _resolve_docs_by_name(
     try:
         with get_session() as session:
             rows = session.query(DocumentationSource).limit(500).all()
-            scored = []
+            scored: list[dict[str, Any]] = []
             for d in rows:
                 quality = max(
                     _match_quality(needle, d.display_name),

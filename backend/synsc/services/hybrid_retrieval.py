@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,7 +62,7 @@ class Candidate:
     sources: dict[str, float] = field(default_factory=dict)
     fused_score: float = 0.0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "chunk_id": self.chunk_id,
             "repo_id": self.repo_id,
@@ -491,7 +492,7 @@ def exact_path_search(
     return out
 
 
-def vector_to_candidates(raw_results: list[dict]) -> list[Candidate]:
+def vector_to_candidates(raw_results: list[dict[str, Any]]) -> list[Candidate]:
     """Convert pgvector search results into the unified Candidate shape."""
     out: list[Candidate] = []
     if not raw_results:
@@ -576,7 +577,7 @@ def hybrid_retrieve(
     session: Session,
     query: str,
     query_embedding: np.ndarray,
-    vector_search_fn,
+    vector_search_fn: Callable[..., list[dict[str, Any]]],
     user_id: str,
     repo_ids: list[str] | None = None,
     language: str | None = None,
@@ -595,7 +596,7 @@ def hybrid_retrieve(
     """
     t_start = time.time()
     branches: list[list[Candidate]] = []
-    timing: dict[str, float] = {}
+    timing: dict[str, Any] = {}
 
     # 1. Vector (always — it's the baseline)
     t = time.time()

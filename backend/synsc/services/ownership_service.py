@@ -30,7 +30,7 @@ logger = structlog.get_logger(__name__)
 VISIBILITY_TIERS = {"public", "private", "unlisted"}
 
 
-def _model_for(source_type: str):
+def _model_for(source_type: str) -> tuple[Any, str, str, str | None] | None:
     return {
         "repo": (Repository, "repo_id", "owner", "name"),
         "paper": (Paper, "paper_id", "title", None),
@@ -38,7 +38,7 @@ def _model_for(source_type: str):
     }.get(source_type)
 
 
-def _ensure_owner(session, model, source_id: str, user_id: str) -> Any:
+def _ensure_owner(session: Any, model: Any, source_id: str, user_id: str) -> Any:
     row = (
         session.query(model)
         .filter(getattr(model, _pk_col(model)) == source_id)
@@ -51,7 +51,7 @@ def _ensure_owner(session, model, source_id: str, user_id: str) -> Any:
     return row
 
 
-def _pk_col(model) -> str:
+def _pk_col(model: Any) -> str:
     name = model.__tablename__
     return {
         "repositories": "repo_id",

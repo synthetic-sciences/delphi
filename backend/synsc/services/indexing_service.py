@@ -15,11 +15,12 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import requests
 import structlog
-from sqlalchemy import text
+from sqlalchemy import Table, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -37,8 +38,8 @@ from synsc.database.models import (
     Symbol,
     UserRepository,
 )
-from synsc.embeddings.generator import get_embedding_generator
-from synsc.indexing.vector_store import get_vector_store
+from synsc.embeddings.generator import EmbeddingProvider, get_embedding_generator
+from synsc.indexing.vector_store import VectorStore, get_vector_store
 from synsc.parsing.registry import get_parser_registry
 
 logger = structlog.get_logger(__name__)
@@ -99,7 +100,7 @@ def _build_chunk_relationships(session: Session, repo_id: str) -> int:
             )
 
     # Group chunks by file
-    chunks_by_file: dict[str, list[CodeChunk]] = {}
+    chunks_by_file: dict[str, list[Any]] = {}
     for c in chunks:
         chunks_by_file.setdefault(c.file_id, []).append(c)
 
@@ -144,7 +145,7 @@ def _build_chunk_relationships(session: Session, repo_id: str) -> int:
             }
             for r in relationships
         ]
-        stmt = pg_insert(ChunkRelationship.__table__).values(rows)
+        stmt = pg_insert(cast(Table, ChunkRelationship.__table__)).values(rows)
         stmt = stmt.on_conflict_do_nothing(constraint="unique_chunk_relationship")
         session.execute(stmt)
         session.flush()
@@ -170,7 +171,7 @@ class IndexingService:
     This saves 90%+ storage for popular repos like react, next.js, etc.
     """
 
-    def __init__(self, user_id: str | None = None):
+    def __init__(self, user_id: str | None = None) -> None:
         """Initialize the indexing service.
         
         Args:
@@ -180,18 +181,18 @@ class IndexingService:
         self.user_id = user_id
         self.git_client = GitClient()
         self.chunker = CodeChunker()
-        self._embedding_generator = None
-        self._vector_store = None
+        self._embedding_generator: EmbeddingProvider | None = None
+        self._vector_store: VectorStore | None = None
     
     @property
-    def embedding_generator(self):
+    def embedding_generator(self) -> EmbeddingProvider:
         """Lazy-load embedding generator (dispatches by EMBEDDING_PROVIDER)."""
         if self._embedding_generator is None:
             self._embedding_generator = get_embedding_generator()
         return self._embedding_generator
     
     @property
-    def vector_store(self):
+    def vector_store(self) -> VectorStore:
         """Lazy-load vector store."""
         if self._vector_store is None:
             self._vector_store = get_vector_store()
@@ -307,14 +308,14 @@ class IndexingService:
         branch: str | None = None,
         user_id: str | None = None,
         is_public: bool | None = None,
-        progress_callback: Callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
         deep_index: bool = False,
         force_reindex: bool = False,
         quality_mode: str | None = None,
         include_tests: bool | None = None,
         include_docs: bool | None = None,
         include_examples: bool | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Index a GitHub repository with smart deduplication.
 
         DEDUPLICATION FLOW:
@@ -387,7 +388,12 @@ class IndexingService:
                     "message": "Authentication required to index repositories",
                 }
         
-        def report_progress(stage: str, message: str, progress: float = 0, **kwargs):
+        def report_progress(
+            stage: str,
+            message: str,
+            progress: float = 0,
+            **kwargs: Any,
+        ) -> None:
             """Report progress if callback is provided."""
             if progress_callback:
                 with contextlib.suppress(Exception):
@@ -819,8 +825,8 @@ class IndexingService:
         include_tests: bool | None = None,
         include_docs: bool | None = None,
         include_examples: bool | None = None,
-        progress_callback: Callable | None = None,
-    ) -> dict:
+        progress_callback: Callable[..., Any] | None = None,
+    ) -> dict[str, Any]:
         """Index a local directory — no git clone, reads files straight from disk.
 
         Reuses the full indexing pipeline (file walk, symbol extraction, AST
@@ -875,7 +881,12 @@ class IndexingService:
                     "message": "Authentication required to index a local folder.",
                 }
 
-        def report_progress(stage: str, message: str, progress: float = 0, **kwargs):
+        def report_progress(
+            stage: str,
+            message: str,
+            progress: float = 0,
+            **kwargs: Any,
+        ) -> None:
             if progress_callback:
                 with contextlib.suppress(Exception):
                     progress_callback(stage, message, progress, **kwargs)
@@ -905,9 +916,9 @@ class IndexingService:
             # Content signature → cheap unchanged-detection across re-runs.
             digest = _hashlib.sha256()
             for f in sorted(files, key=lambda x: x["path"]):
-                digest.update(f["path"].encode("utf-8", "ignore"))
+                digest.update(str(f["path"]).encode("utf-8", "ignore"))
                 digest.update(b"\0")
-                digest.update((f.get("content") or "").encode("utf-8", "ignore"))
+                digest.update(str(f.get("content") or "").encode("utf-8", "ignore"))
                 digest.update(b"\0")
             commit_sha = digest.hexdigest()
 
@@ -1003,7 +1014,11 @@ class IndexingService:
                 "message": f"Failed to index local folder: {e}",
             }
 
-    def _build_code_graph_safe(self, repo_id: str, report_progress=None) -> None:
+    def _build_code_graph_safe(
+        self,
+        repo_id: str,
+        report_progress: Callable[..., Any] | None = None,
+    ) -> None:
         """Build the code-dependency graph post-index (best-effort, non-critical).
 
         Runs in its own session after relationships are built. Failures are
@@ -1031,8 +1046,8 @@ class IndexingService:
         self,
         session: Session,
         repo_id: str,
-        new_files: list[dict],
-    ) -> tuple[list[dict], list[dict], list[RepositoryFile]]:
+        new_files: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[RepositoryFile]]:
         """Compare cloned files against DB to determine added/modified/deleted.
 
         Returns:
@@ -1046,8 +1061,8 @@ class IndexingService:
         )
         db_lookup: dict[str, RepositoryFile] = {f.file_path: f for f in existing_files}
 
-        added: list[dict] = []
-        modified: list[dict] = []
+        added: list[dict[str, Any]] = []
+        modified: list[dict[str, Any]] = []
         seen_paths: set[str] = set()
 
         for file_info in new_files:
@@ -1145,18 +1160,23 @@ class IndexingService:
         session: Session,
         existing: Repository,
         repo_path: Path,
-        new_files: list[dict],
+        new_files: list[dict[str, Any]],
         new_commit_sha: str,
-        progress_callback: Callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
         deep_index: bool = False,
         quality_mode: str | None = None,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Perform diff-aware re-indexing on an existing repository.
 
         Returns result dict on success, or None if >80% files changed
         (caller should fall back to full re-index).
         """
-        def report_progress(stage: str, message: str, progress: float = 0, **kwargs):
+        def report_progress(
+            stage: str,
+            message: str,
+            progress: float = 0,
+            **kwargs: Any,
+        ) -> None:
             if progress_callback:
                 with contextlib.suppress(Exception):
                     progress_callback(stage, message, progress, **kwargs)
@@ -1377,7 +1397,7 @@ class IndexingService:
             parser = parser_registry.get_parser(language) if language else None
             use_ast_chunking = False
             symbol_boundaries: list[tuple[int, int]] = []
-            extracted_symbols: list = []
+            extracted_symbols: list[Any] = []
 
             if parser:
                 try:
@@ -1593,14 +1613,14 @@ class IndexingService:
         branch: str,
         commit_sha: str,
         repo_path: Path,
-        files: list[dict],
+        files: list[dict[str, Any]],
         user_id: str | None = None,
         is_public: bool = True,
-        progress_callback: Callable | None = None,
+        progress_callback: Callable[..., Any] | None = None,
         deep_index: bool = False,
         quality_mode: str | None = None,
         existing_repo_id: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Index files from a repository.
 
         Extracts symbols using tree-sitter when available, and uses
@@ -1680,10 +1700,15 @@ class IndexingService:
         total_lines = 0
         total_tokens = 0
         total_symbols = 0
-        language_lines: Counter = Counter()
+        language_lines: Counter[str] = Counter[str]()
         chunks_to_embed: list[tuple[CodeChunk, str]] = []  # (db_chunk, content)
         
-        def report_progress(stage: str, message: str, progress: float = 0, **kwargs):
+        def report_progress(
+            stage: str,
+            message: str,
+            progress: float = 0,
+            **kwargs: Any,
+        ) -> None:
             """Report progress if callback is provided."""
             if progress_callback:
                 with contextlib.suppress(Exception):
@@ -1697,21 +1722,21 @@ class IndexingService:
         FLUSH_BATCH_SIZE = 500
 
         # Track files in current batch for chunk processing after batch flush
-        current_batch_files: list[tuple[RepositoryFile, dict, str]] = []  # (db_file, file_info, content)
+        current_batch_files: list[tuple[RepositoryFile, dict[str, Any], str]] = []  # (db_file, file_info, content)
 
         # ── Embedding pipeline: overlap file processing with embedding generation ──
         # Producer (main thread): chunks files, flushes to DB, enqueues texts
         # Consumer (embed thread): model.encode() releases GIL → true parallelism
         # The main thread also drains completed embeddings → pgvector between batches,
         # keeping the DB session active (prevents idle_in_transaction_session_timeout).
-        embed_q: _queue.Queue = _queue.Queue()  # unbounded — items are just text strings (~128KB each)
-        embed_results: _queue.Queue = _queue.Queue()
+        embed_q: _queue.Queue[Any] = _queue.Queue[Any]()  # unbounded — items are just text strings (~128KB each)
+        embed_results: _queue.Queue[Any] = _queue.Queue[Any]()
         embed_error: list[Exception] = []
         embed_batch_counter = 0
         embed_batches_written = 0
         last_enqueued_idx = 0  # tracks which chunks_to_embed entries have been enqueued
 
-        def _embedding_worker():
+        def _embedding_worker() -> None:
             """Background thread: pull text batches from queue, generate embeddings."""
             try:
                 while True:
@@ -1730,7 +1755,7 @@ class IndexingService:
             except Exception as e:
                 embed_error.append(e)
 
-        def _drain_embed_results():
+        def _drain_embed_results() -> None:
             """Drain completed embeddings from result queue → pgvector.
 
             Called from the main thread between file batches to keep the
@@ -1905,7 +1930,7 @@ class IndexingService:
 
                     use_ast_chunking = False
                     symbol_boundaries: list[tuple[int, int]] = []
-                    extracted_symbols: list = []
+                    extracted_symbols: list[Any] = []
 
                     # Extract symbols if parser is available (always extract symbols, even in turbo mode)
                     if parser:
@@ -2180,7 +2205,7 @@ class IndexingService:
             "languages": languages,
         }
 
-    def delete_repository(self, repo_id: str, user_id: str | None = None) -> dict:
+    def delete_repository(self, repo_id: str, user_id: str | None = None) -> dict[str, Any]:
         """Delete a repository from the index.
 
         NEW BEHAVIOR:
@@ -2276,7 +2301,7 @@ class IndexingService:
                 "message": "Private repository deleted successfully",
             }
     
-    def remove_from_collection(self, repo_id: str, user_id: str | None = None) -> dict:
+    def remove_from_collection(self, repo_id: str, user_id: str | None = None) -> dict[str, Any]:
         """Remove a repository from user's collection without deleting it.
 
         For public repos, this just removes the link to the user's collection.
@@ -2348,7 +2373,7 @@ class IndexingService:
         limit: int = 50,
         offset: int = 0,
         user_id: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """List repositories in user's collection.
         
         Returns repos that the user has added to their collection,
@@ -2417,7 +2442,7 @@ class IndexingService:
                 "offset": offset,
             }
 
-    def get_repository(self, repo_id: str, user_id: str | None = None) -> dict:
+    def get_repository(self, repo_id: str, user_id: str | None = None) -> dict[str, Any]:
         """Get repository details.
         
         ACCESS RULES:

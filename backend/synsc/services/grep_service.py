@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import structlog
 from sqlalchemy.orm import Session
@@ -34,13 +35,13 @@ class GrepService:
         max_matches: int = _DEFAULT_MAX_MATCHES,
         context_lines: int = _DEFAULT_CONTEXT_LINES,
         user_id: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         try:
             regex = re.compile(pattern)
         except re.error as e:
             raise ValueError(f"invalid regex: {e}") from e
 
-        matches: list[dict] = []
+        matches: list[dict[str, Any]] = []
         for path, content in self._iter_source_files(
             source_id=source_id,
             source_type=source_type,

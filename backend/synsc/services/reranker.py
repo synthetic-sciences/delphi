@@ -9,6 +9,7 @@ Expected improvement: +0.15-0.25 on adversarial discrimination score.
 """
 
 import logging
+from typing import Any
 
 import numpy as np
 
@@ -89,12 +90,12 @@ class Reranker:
     def rerank(
         self,
         query: str,
-        results: list[dict],
+        results: list[dict[str, Any]],
         top_k: int | None = None,
         content_key: str = "content",
         score_key: str = "similarity",
         blend_alpha: float = 0.4,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Rerank search results using blended cross-encoder + vector scores.
 
         Instead of replacing vector similarity scores entirely, blends them

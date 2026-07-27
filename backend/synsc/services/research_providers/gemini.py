@@ -5,6 +5,8 @@ Uses the unified ``google.genai`` SDK. Do not pull in the legacy
 """
 from __future__ import annotations
 
+from typing import Any
+
 from google import genai
 
 from synsc.services.research_providers.base import GeneratedAnswer
@@ -21,7 +23,7 @@ class GeminiResearchProvider:
     def generate(
         self,
         prompt: str,
-        context_blocks: list[dict],
+        context_blocks: list[dict[str, Any]],
         model: str,
     ) -> GeneratedAnswer:
         """Synchronous one-shot generation. Caller assembles the prompt."""
@@ -39,7 +41,7 @@ class GeminiResearchProvider:
         )
 
     @staticmethod
-    def _render_prompt(question: str, blocks: list[dict]) -> str:
+    def _render_prompt(question: str, blocks: list[dict[str, Any]]) -> str:
         parts = [
             "You are a research assistant answering questions grounded in the provided context.",
             "Cite sources inline as [chunk:<chunk_id>]. Answer in Markdown.",

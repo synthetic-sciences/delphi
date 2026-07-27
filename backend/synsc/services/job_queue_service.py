@@ -11,9 +11,12 @@ Supports:
 import hashlib
 import json
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import structlog
 from sqlalchemy import and_, or_, text
+from sqlalchemy.engine import CursorResult
+from sqlalchemy.orm import Session
 
 from synsc.database.connection import get_session
 from synsc.database.models import IndexingJob
@@ -26,20 +29,20 @@ class JobQueueService:
 
     SOURCE_JOB_TYPES = {"repo", "paper", "dataset", "docs"}
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the job queue service."""
         pass
 
     @staticmethod
     def _lock_job_identity(
-        session,
+        session: Session,
         *,
         user_id: str,
         job_type: str,
         target: str,
         branch: str | None,
         display_name: str | None,
-        options: dict,
+        options: dict[str, Any],
     ) -> None:
         """Serialize enqueue decisions for one logical job identity."""
         payload = json.dumps(
@@ -59,7 +62,7 @@ class JobQueueService:
         )
 
     @staticmethod
-    def _behavior_options(source_type: str, options: dict | None) -> dict:
+    def _behavior_options(source_type: str, options: dict[str, Any] | None) -> dict[str, Any]:
         """Return only payload options not represented by queue columns."""
         normalized = dict(options or {})
         if source_type == "repo":
@@ -73,7 +76,7 @@ class JobQueueService:
         *,
         source_type: str,
         display_name: str | None,
-        options: dict | None,
+        options: dict[str, Any] | None,
     ) -> bool:
         """Compare behavior-changing payload fields for safe deduplication."""
         return (
@@ -88,7 +91,7 @@ class JobQueueService:
         repo_url: str,
         branch: str | None = None,
         priority: int = 0,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Create a new indexing job.
         
         Args:
@@ -179,9 +182,9 @@ class JobQueueService:
         source_type: str,
         url: str,
         display_name: str | None = None,
-        options: dict | None = None,
+        options: dict[str, Any] | None = None,
         priority: int = 0,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Persist a generic source-indexing request for the worker.
 
         Unlike an in-process ``asyncio`` task, this payload survives API and
@@ -274,7 +277,7 @@ class JobQueueService:
                 "job": job.to_dict(),
             }
     
-    def get_job(self, job_id: str, user_id: str | None = None) -> dict:
+    def get_job(self, job_id: str, user_id: str | None = None) -> dict[str, Any]:
         """Get job status by ID.
         
         Args:
@@ -312,7 +315,7 @@ class JobQueueService:
         user_id: str,
         status: str | None = None,
         limit: int = 20,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """List jobs for a user.
         
         Args:
@@ -339,7 +342,7 @@ class JobQueueService:
                 "count": len(jobs),
             }
     
-    def cancel_job(self, job_id: str, user_id: str) -> dict:
+    def cancel_job(self, job_id: str, user_id: str) -> dict[str, Any]:
         """Cancel a pending or processing job.
         
         Args:
@@ -487,7 +490,7 @@ class JobQueueService:
             
             return None
 
-    def recover_stale_jobs(self, stale_after_seconds: int = 21600) -> dict:
+    def recover_stale_jobs(self, stale_after_seconds: int = 21600) -> dict[str, Any]:
         """Recover jobs abandoned by a crashed worker.
 
         Retryable jobs are returned to ``pending``. Jobs that have exhausted
@@ -499,61 +502,70 @@ class JobQueueService:
 
         params = {"stale_after_seconds": stale_after_seconds}
         with get_session() as session:
-            cancelled = session.execute(
-                text(
-                    """
-                    UPDATE indexing_jobs
-                    SET status = 'cancelled',
-                        completed_at = NOW(),
-                        current_stage = 'cancelled',
-                        current_message = 'Job cancelled after worker interruption',
-                        updated_at = NOW()
-                    WHERE status = 'cancelling'
-                      AND updated_at < NOW() - (
-                          :stale_after_seconds * INTERVAL '1 second'
-                      )
-                    """
+            cancelled = cast(
+                CursorResult[Any],
+                session.execute(
+                    text(
+                        """
+                        UPDATE indexing_jobs
+                        SET status = 'cancelled',
+                            completed_at = NOW(),
+                            current_stage = 'cancelled',
+                            current_message = 'Job cancelled after worker interruption',
+                            updated_at = NOW()
+                        WHERE status = 'cancelling'
+                          AND updated_at < NOW() - (
+                              :stale_after_seconds * INTERVAL '1 second'
+                          )
+                        """
+                    ),
+                    params,
                 ),
-                params,
             ).rowcount
-            requeued = session.execute(
-                text(
-                    """
-                    UPDATE indexing_jobs
-                    SET status = 'pending',
-                        worker_id = NULL,
-                        started_at = NULL,
-                        current_stage = 'requeued',
-                        current_message = 'Recovered after worker interruption',
-                        updated_at = NOW()
-                    WHERE status = 'processing'
-                      AND updated_at < NOW() - (
-                          :stale_after_seconds * INTERVAL '1 second'
-                      )
-                      AND COALESCE(attempt_count, 0) < COALESCE(max_attempts, 3)
-                    """
+            requeued = cast(
+                CursorResult[Any],
+                session.execute(
+                    text(
+                        """
+                        UPDATE indexing_jobs
+                        SET status = 'pending',
+                            worker_id = NULL,
+                            started_at = NULL,
+                            current_stage = 'requeued',
+                            current_message = 'Recovered after worker interruption',
+                            updated_at = NOW()
+                        WHERE status = 'processing'
+                          AND updated_at < NOW() - (
+                              :stale_after_seconds * INTERVAL '1 second'
+                          )
+                          AND COALESCE(attempt_count, 0) < COALESCE(max_attempts, 3)
+                        """
+                    ),
+                    params,
                 ),
-                params,
             ).rowcount
-            failed = session.execute(
-                text(
-                    """
-                    UPDATE indexing_jobs
-                    SET status = 'failed',
-                        worker_id = NULL,
-                        completed_at = NOW(),
-                        error_message = 'Worker interrupted and retry budget exhausted',
-                        current_stage = 'error',
-                        current_message = 'Worker interrupted and retry budget exhausted',
-                        updated_at = NOW()
-                    WHERE status = 'processing'
-                      AND updated_at < NOW() - (
-                          :stale_after_seconds * INTERVAL '1 second'
-                      )
-                      AND COALESCE(attempt_count, 0) >= COALESCE(max_attempts, 3)
-                    """
+            failed = cast(
+                CursorResult[Any],
+                session.execute(
+                    text(
+                        """
+                        UPDATE indexing_jobs
+                        SET status = 'failed',
+                            worker_id = NULL,
+                            completed_at = NOW(),
+                            error_message = 'Worker interrupted and retry budget exhausted',
+                            current_stage = 'error',
+                            current_message = 'Worker interrupted and retry budget exhausted',
+                            updated_at = NOW()
+                        WHERE status = 'processing'
+                          AND updated_at < NOW() - (
+                              :stale_after_seconds * INTERVAL '1 second'
+                          )
+                          AND COALESCE(attempt_count, 0) >= COALESCE(max_attempts, 3)
+                        """
+                    ),
+                    params,
                 ),
-                params,
             ).rowcount
             session.commit()
 
@@ -597,7 +609,7 @@ class JobQueueService:
             symbols_extracted: Symbols extracted so far
             estimated_seconds: Estimated time remaining
         """
-        values = {
+        values: dict[Any, Any] = {
             IndexingJob.progress: progress,
             IndexingJob.updated_at: datetime.now(timezone.utc),
         }
@@ -710,7 +722,7 @@ class JobQueueService:
         attempt_count: int,
     ) -> bool:
         """Complete a generic source job and preserve its canonical result ID."""
-        values = {
+        values: dict[Any, Any] = {
             IndexingJob.status: "completed",
             IndexingJob.progress: 1.0,
             IndexingJob.completed_at: datetime.now(timezone.utc),
@@ -783,7 +795,7 @@ class JobQueueService:
                 )
             return bool(updated)
     
-    def get_queue_stats(self) -> dict:
+    def get_queue_stats(self) -> dict[str, Any]:
         """Get queue statistics.
         
         Returns:

@@ -70,7 +70,7 @@ def visualize_codebase(
         # ---------- directory rollup ----------
         dir_files: dict[str, int] = Counter()
         dir_loc: dict[str, int] = Counter()
-        dir_languages: dict[str, Counter] = defaultdict(Counter)
+        dir_languages: dict[str, Counter[str]] = defaultdict(Counter[str])
         for f in files:
             d = _dir_of(f.file_path)
             dir_files[d] += 1
@@ -160,7 +160,7 @@ def _dir_of(path: str | None) -> str:
 
 
 def _module_graph_edges(
-    session,
+    session: Any,
     repo_id: str,
     files: list[RepositoryFile],
     max_edges: int,
