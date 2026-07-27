@@ -5,11 +5,12 @@ Embeddings are SHARED for public repos (no per-user duplication).
 """
 
 import time
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import structlog
 from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from synsc.config import get_config
@@ -25,7 +26,7 @@ class PgVectorManager:
     Access control is handled via Repository.is_public and UserRepository.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the pgvector manager."""
         config = get_config()
         self.dimension = config.embeddings.dimension
@@ -62,7 +63,7 @@ class PgVectorManager:
                 f"Mismatch: {len(chunk_ids)} chunk_ids but {embeddings.shape[0]} embeddings"
             )
         
-        embedding_ids = []
+        embedding_ids: list[str] = []
 
         # Batch insert embeddings — larger batches reduce DB round-trips.
         # Each embedding is 768 floats (~6KB as text), so 250 per batch ≈ 1.5MB payload.
@@ -239,11 +240,14 @@ class PgVectorManager:
         Returns:
             Number of embeddings deleted
         """
-        result = session.execute(
-            text("DELETE FROM chunk_embeddings WHERE repo_id = :repo_id"),
-            {"repo_id": repo_id}
+        result = cast(
+            CursorResult[Any],
+            session.execute(
+                text("DELETE FROM chunk_embeddings WHERE repo_id = :repo_id"),
+                {"repo_id": repo_id},
+            ),
         )
-        count = result.rowcount
+        count = max(result.rowcount, 0)
         
         logger.info(
             "Deleted embeddings for repository",
@@ -267,17 +271,20 @@ class PgVectorManager:
             Number of embeddings deleted
         """
         # Delete embeddings only for repos this user actually indexed
-        result = session.execute(
-            text("""
-                DELETE FROM chunk_embeddings ce
-                WHERE ce.repo_id IN (
-                    SELECT r.repo_id FROM repositories r 
-                    WHERE r.indexed_by = :user_id
-                )
-            """),
-            {"user_id": user_id}
+        result = cast(
+            CursorResult[Any],
+            session.execute(
+                text("""
+                    DELETE FROM chunk_embeddings ce
+                    WHERE ce.repo_id IN (
+                        SELECT r.repo_id FROM repositories r
+                        WHERE r.indexed_by = :user_id
+                    )
+                """),
+                {"user_id": user_id},
+            ),
         )
-        count = result.rowcount
+        count = max(result.rowcount, 0)
         
         logger.info(
             "Deleted embeddings for user's indexed repos",
@@ -316,7 +323,7 @@ class PgVectorManager:
                 )
             
             row = result.fetchone()
-            return row[0] if row else 0
+            return int(row[0]) if row else 0
 
 
 # Singleton instance

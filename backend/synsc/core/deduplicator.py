@@ -43,7 +43,10 @@ class DeduplicationResult:
         }
 
 
-def check_duplicate_by_hash(pdf_hash: str, paper_repository) -> DeduplicationResult:
+def check_duplicate_by_hash(
+    pdf_hash: str,
+    paper_repository: Any,
+) -> DeduplicationResult:
     """Check if paper with given hash already exists.
 
     This is the core of Trynia-style deduplication: one paper = one entry
@@ -73,7 +76,10 @@ def check_duplicate_by_hash(pdf_hash: str, paper_repository) -> DeduplicationRes
     )
 
 
-def check_duplicate_by_arxiv_id(arxiv_id: str, paper_repository) -> DeduplicationResult:
+def check_duplicate_by_arxiv_id(
+    arxiv_id: str,
+    paper_repository: Any,
+) -> DeduplicationResult:
     """Check if paper with given arXiv ID already exists.
 
     Args:
@@ -102,10 +108,10 @@ def check_duplicate_by_arxiv_id(arxiv_id: str, paper_repository) -> Deduplicatio
 def get_or_create_paper_id(
     pdf_path: str,
     arxiv_id: str | None,
-    paper_repository,
-    user_paper_repository,
+    paper_repository: Any,
+    user_paper_repository: Any,
     user_id: str,
-) -> tuple[str, bool]:
+) -> tuple[str | None, bool]:
     """Get existing paper ID or indicate need to create new one.
 
     This implements the Trynia workflow:

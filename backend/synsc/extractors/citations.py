@@ -20,7 +20,7 @@ class CitationExtractor(BaseExtractor):
         """Get extractor name."""
         return "citation"
 
-    def extract(self, text: str, **kwargs) -> list[dict[str, Any]]:
+    def extract(self, text: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Extract citations from text.
 
         Args:
@@ -34,7 +34,7 @@ class CitationExtractor(BaseExtractor):
             - citation_number: Numeric identifier if available
             - citation_type: 'numbered', 'author_year', 'superscript'
         """
-        citations = []
+        citations: list[dict[str, Any]] = []
 
         # 1. Extract numbered citations [1], [2], [3-5]
         citations.extend(self._extract_numbered_citations(text))
@@ -183,7 +183,7 @@ class CitationExtractor(BaseExtractor):
         Returns:
             List of reference dictionaries
         """
-        references = []
+        references: list[dict[str, Any]] = []
 
         # Find References section
         ref_pattern = (

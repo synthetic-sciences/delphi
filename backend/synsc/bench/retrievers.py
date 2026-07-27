@@ -131,8 +131,8 @@ class BM25Retriever(Retriever):
         avgdl = (sum(lengths.values()) / len(lengths)) if lengths else 0.0
         n_docs = len(docs)
 
-        df: Counter = Counter()
-        tf: dict[str, Counter] = {}
+        df: Counter[str] = Counter()
+        tf: dict[str, Counter[str]] = {}
         for doc_id, toks in doc_tokens.items():
             counts = Counter(toks)
             tf[doc_id] = counts

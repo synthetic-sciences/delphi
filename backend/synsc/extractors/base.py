@@ -13,7 +13,7 @@ class BaseExtractor(ABC):
     """Abstract base class for content extractors."""
 
     @abstractmethod
-    def extract(self, text: str, **kwargs) -> list[dict[str, Any]]:
+    def extract(self, text: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Extract structured content from text.
 
         Args:

@@ -173,7 +173,7 @@ class CodeChunker:
             return []
         
         overlap_tokens = 0
-        overlap_lines = []
+        overlap_lines: list[str] = []
         
         for line in reversed(lines):
             line_tokens = self.count_tokens(line + "\n")
@@ -246,7 +246,7 @@ def chunk_paper(
     text: str,
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
-) -> list[dict]:
+) -> list[dict[str, str | int]]:
     """Chunk paper text into overlapping segments.
     
     Args:
@@ -260,7 +260,7 @@ def chunk_paper(
     if not text or not text.strip():
         return []
     
-    chunks = []
+    chunks: list[dict[str, str | int]] = []
     text = text.strip()
     
     # Split by paragraphs first for better semantic boundaries

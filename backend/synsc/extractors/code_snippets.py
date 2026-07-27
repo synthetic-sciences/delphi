@@ -12,7 +12,7 @@ class CodeSnippetExtractor(BaseExtractor):
     def get_extractor_name(self) -> str:
         return "code_snippet"
 
-    def extract(self, text: str, **kwargs) -> list[dict[str, Any]]:
+    def extract(self, text: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Extract code snippets from text."""
         snippets = []
 

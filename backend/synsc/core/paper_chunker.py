@@ -77,7 +77,7 @@ def split_by_paragraphs(
     paragraphs = re.split(r"\n\s*\n", text)
 
     chunks = []
-    current_chunk = []
+    current_chunk: list[str] = []
     current_tokens = 0
 
     for para in paragraphs:

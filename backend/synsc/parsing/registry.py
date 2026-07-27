@@ -17,6 +17,9 @@ class ParserRegistry:
     """
     
     _instance: "ParserRegistry | None" = None
+    _parsers: dict[str, BaseParser]
+    _extension_map: dict[str, str]
+    _initialized: bool
     
     def __new__(cls) -> "ParserRegistry":
         """Create or return singleton instance."""

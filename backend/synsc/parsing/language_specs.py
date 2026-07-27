@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import structlog
+from tree_sitter import Language
 
 logger = structlog.get_logger(__name__)
 
@@ -237,10 +238,10 @@ SPECS: dict[str, LanguageSpec] = {
 }
 
 
-_LANGUAGE_CACHE: dict[str, object] = {}
+_LANGUAGE_CACHE: dict[str, Language | None] = {}
 
 
-def load_language(spec: LanguageSpec):
+def load_language(spec: LanguageSpec) -> Language | None:
     """Load and cache the tree-sitter ``Language`` for a spec.
 
     Returns ``None`` if the grammar package isn't installed or fails to load,
@@ -251,10 +252,8 @@ def load_language(spec: LanguageSpec):
     try:
         import importlib
 
-        from tree_sitter import Language
-
         module = importlib.import_module(spec.module)
-        entry: Callable = getattr(module, spec.entrypoint)
+        entry: Callable[[], object] = getattr(module, spec.entrypoint)
         language = Language(entry())
         _LANGUAGE_CACHE[spec.language] = language
         return language

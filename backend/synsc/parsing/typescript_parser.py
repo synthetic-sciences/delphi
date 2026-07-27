@@ -8,6 +8,7 @@ import tree_sitter_typescript as ts_typescript
 from tree_sitter import Language, Node, Parser, Tree
 
 from synsc.parsing.base import BaseParser
+from synsc.parsing.call_graph_util import CallSite
 from synsc.parsing.models import CodeRegion, ExtractedSymbol
 
 logger = structlog.get_logger(__name__)
@@ -78,7 +79,7 @@ class TypeScriptParser(BaseParser):
         
         return symbols
 
-    def extract_calls(self, content: str) -> list:
+    def extract_calls(self, content: str) -> list[CallSite]:
         """Extract call sites for the code-dependency graph."""
         from synsc.parsing.call_graph_util import extract_scoped_calls
 

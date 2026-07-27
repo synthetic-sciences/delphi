@@ -7,7 +7,15 @@ ligatures, special characters, and more.
 """
 
 import re
-from typing import Any
+from typing import Any, TypedDict
+
+
+class _SectionMatch(TypedDict):
+    """A detected section heading and its source match."""
+
+    match: re.Match[str]
+    title: str
+    pos: int
 
 
 def normalize_pdf_text(text: str) -> str:
@@ -123,7 +131,7 @@ def normalize_pdf_text(text: str) -> str:
 
     # Also fix inline hyphenation like "incom- pressible" but preserve real hyphens
     # Only join if both parts are long enough to be word fragments
-    def fix_hyphenation(m):
+    def fix_hyphenation(m: re.Match[str]) -> str:
         p1, p2 = m.group(1), m.group(2)
         # Common suffix patterns that indicate hyphenation
         if p2.lower() in [
@@ -214,7 +222,7 @@ def extract_title_from_text(text: str) -> str | None:
         r"\d{5}",  # Zip codes
     ]
 
-    title_lines = []
+    title_lines: list[str] = []
     started = False
 
     for line in lines[:25]:
@@ -349,7 +357,7 @@ def detect_sections(text: str) -> list[dict[str, Any]]:
         r"\n\s*([A-Z]{4,30}(?:\s+[A-Z]{3,20})?)(?=\n)",
     ]
 
-    all_matches = []
+    all_matches: list[_SectionMatch] = []
     
     for pattern in patterns:
         matches = list(re.finditer(pattern, text))
@@ -364,8 +372,8 @@ def detect_sections(text: str) -> list[dict[str, Any]]:
     all_matches.sort(key=lambda x: x["pos"])
     
     # Remove duplicates (matches at same position)
-    seen_positions = set()
-    unique_matches = []
+    seen_positions: set[int] = set()
+    unique_matches: list[_SectionMatch] = []
     for m in all_matches:
         # Skip if within 50 chars of a previous match
         is_duplicate = any(abs(m["pos"] - p) < 50 for p in seen_positions)
@@ -373,7 +381,7 @@ def detect_sections(text: str) -> list[dict[str, Any]]:
             unique_matches.append(m)
             seen_positions.add(m["pos"])
 
-    sections = []
+    sections: list[dict[str, Any]] = []
     for i, m in enumerate(unique_matches):
         title = m["title"]
         start = m["match"].end()
