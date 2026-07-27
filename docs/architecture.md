@@ -71,6 +71,10 @@ backend/
     │   ├── postgres.py     Encrypted state, leases, atomic snapshot activation
     │   └── service.py      Lifecycle and worker orchestration
     │
+    ├── contexts/           Immutable context revisions, rehydration + handoffs
+    │   ├── postgres.py     Atomic append/head fencing and owner scoping
+    │   └── service.py      Budget manifests, ACL rehydration, export
+    │
     ├── core/               Domain-agnostic helpers
     │   ├── arxiv_client.py
     │   ├── chunker.py          Code chunker

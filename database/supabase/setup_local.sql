@@ -1448,6 +1448,102 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_connector_sync_jobs_active_source
 
 
 -- ============================================================================
+-- PART 23: IMMUTABLE CONTEXT SESSIONS AND HANDOFFS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS context_sessions (
+    session_id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    user_id VARCHAR(36) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    objective TEXT NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'completed', 'archived')),
+    sharing_policy VARCHAR(16) NOT NULL DEFAULT 'private'
+        CHECK (sharing_policy IN ('private', 'shared')),
+    expires_at TIMESTAMPTZ,
+    parent_session_id VARCHAR(36)
+        REFERENCES context_sessions(session_id) ON DELETE SET NULL,
+    parent_revision_id VARCHAR(36),
+    handoff_note TEXT,
+    current_revision_id VARCHAR(36),
+    current_revision INTEGER NOT NULL DEFAULT 0
+        CHECK (current_revision >= 0),
+    write_version INTEGER NOT NULL DEFAULT 0
+        CHECK (write_version >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_sessions_user
+    ON context_sessions(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_context_sessions_parent
+    ON context_sessions(parent_session_id);
+
+CREATE TABLE IF NOT EXISTS context_revisions (
+    revision_id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    session_id VARCHAR(36) NOT NULL
+        REFERENCES context_sessions(session_id) ON DELETE CASCADE,
+    revision_number INTEGER NOT NULL CHECK (revision_number >= 1),
+    parent_revision_id VARCHAR(36),
+    token_budget INTEGER NOT NULL
+        CHECK (token_budget BETWEEN 1 AND 200000),
+    tokens_used INTEGER NOT NULL
+        CHECK (tokens_used >= 0 AND tokens_used <= token_budget),
+    state JSONB NOT NULL,
+    pinned_snapshots JSONB NOT NULL,
+    context_manifest JSONB NOT NULL,
+    content_hash VARCHAR(64) NOT NULL CHECK (length(content_hash) = 64),
+    summary_model VARCHAR(200),
+    summary_version VARCHAR(200),
+    created_by VARCHAR(36) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (session_id, revision_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_revisions_session
+    ON context_revisions(session_id, revision_number DESC);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_context_sessions_parent_revision'
+    ) THEN
+        ALTER TABLE context_sessions
+            ADD CONSTRAINT fk_context_sessions_parent_revision
+            FOREIGN KEY (parent_revision_id)
+            REFERENCES context_revisions(revision_id)
+            ON DELETE SET NULL;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'fk_context_sessions_current_revision'
+    ) THEN
+        ALTER TABLE context_sessions
+            ADD CONSTRAINT fk_context_sessions_current_revision
+            FOREIGN KEY (current_revision_id)
+            REFERENCES context_revisions(revision_id)
+            ON DELETE SET NULL;
+    END IF;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION prevent_context_revision_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'context revisions are immutable';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_context_revisions_immutable
+    ON context_revisions;
+CREATE TRIGGER trg_context_revisions_immutable
+BEFORE UPDATE ON context_revisions
+FOR EACH ROW EXECUTE FUNCTION prevent_context_revision_update();
+
+
+-- ============================================================================
 -- LOCAL DEVELOPMENT DATA
 -- ============================================================================
 
@@ -1488,6 +1584,7 @@ AND table_name IN (
     'indexing_jobs', 'research_jobs', 'research_events', 'research_messages',
     'connector_sources', 'user_connector_sources',
     'connector_record_access', 'connector_sync_jobs',
+    'context_sessions', 'context_revisions',
     'activity_log'
 )
 ORDER BY table_name;
@@ -1527,6 +1624,8 @@ ORDER BY table_name;
 --   - connector_sources: Encrypted connector configuration and checkpoints
 --   - connector_record_access: Current authorization for immutable records
 --   - connector_sync_jobs: Durable incremental connector queue
+--   - context_sessions: Context identity, ownership, policy, and handoffs
+--   - context_revisions: Append-only task, evidence, and selection manifests
 --   - activity_log: User activity tracking
 --
 -- Next steps:

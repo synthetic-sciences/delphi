@@ -486,6 +486,109 @@ class ConnectorSyncEnqueueRequest(BaseModel):
     priority: int = Field(default=0, ge=-100, le=100)
 
 
+class ContextEvidenceRequest(BaseModel):
+    """Reference one immutable snapshot item without copying its content."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str = Field(..., min_length=1, max_length=100)
+    locator: str = Field(..., min_length=1, max_length=4000)
+    content_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+    )
+    note: str | None = Field(default=None, max_length=10_000)
+    reason: str | None = Field(default=None, max_length=10_000)
+
+
+class ContextSessionCreateRequest(BaseModel):
+    """Create an owner-scoped context and its first immutable revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=255)
+    objective: str = Field(..., min_length=1, max_length=100_000)
+    snapshot_ids: list[str] = Field(default_factory=list, max_length=100)
+    token_budget: int = Field(default=8_000, ge=1, le=200_000)
+    task_state: dict[str, Any] = Field(default_factory=dict)
+    accepted_evidence: list[ContextEvidenceRequest] = Field(
+        default_factory=list,
+        max_length=500,
+    )
+    rejected_evidence: list[ContextEvidenceRequest] = Field(
+        default_factory=list,
+        max_length=500,
+    )
+    decisions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        max_length=500,
+    )
+    unresolved_questions: list[str] = Field(
+        default_factory=list,
+        max_length=500,
+    )
+    summary: str | None = Field(default=None, max_length=200_000)
+    summary_model: str | None = Field(default=None, max_length=200)
+    summary_version: str | None = Field(default=None, max_length=200)
+    sharing_policy: Literal["private", "shared"] = "private"
+    expires_at: datetime | None = None
+
+
+class ContextRevisionCreateRequest(BaseModel):
+    """Append one revision behind an optimistic revision fence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(..., ge=1)
+    snapshot_ids: list[str] | None = Field(default=None, max_length=100)
+    token_budget: int | None = Field(default=None, ge=1, le=200_000)
+    task_state: dict[str, Any] | None = None
+    accepted_evidence: list[ContextEvidenceRequest] | None = Field(
+        default=None,
+        max_length=500,
+    )
+    rejected_evidence: list[ContextEvidenceRequest] | None = Field(
+        default=None,
+        max_length=500,
+    )
+    decisions: list[dict[str, Any]] | None = Field(
+        default=None,
+        max_length=500,
+    )
+    unresolved_questions: list[str] | None = Field(
+        default=None,
+        max_length=500,
+    )
+    summary: str | None = Field(default=None, max_length=200_000)
+    summary_model: str | None = Field(default=None, max_length=200)
+    summary_version: str | None = Field(default=None, max_length=200)
+
+
+class ContextSessionPolicyRequest(BaseModel):
+    """Update sharing, expiry, or lifecycle state behind a revision fence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(..., ge=1)
+    sharing_policy: Literal["private", "shared"] | None = None
+    expires_at: datetime | None = None
+    status: Literal["active", "completed", "archived"] | None = None
+
+
+class ContextHandoffRequest(BaseModel):
+    """Create a child context from one immutable parent revision."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., min_length=1, max_length=255)
+    objective: str = Field(..., min_length=1, max_length=100_000)
+    handoff_note: str = Field(..., min_length=1, max_length=100_000)
+    token_budget: int | None = Field(default=None, ge=1, le=200_000)
+    sharing_policy: Literal["private", "shared"] = "private"
+    expires_at: datetime | None = None
+
+
 # =============================================================================
 # Dependencies
 # =============================================================================
@@ -3054,6 +3157,226 @@ def create_app() -> FastAPI:
                 detail="Connector sync job not found.",
             ) from exc
         return SafeJSONResponse(content={"job": job})
+
+    # ==========================================================================
+    # Context sessions v2 — immutable revisions and explicit handoffs
+    # ==========================================================================
+
+    def _context_http_exception(exc: Exception) -> HTTPException:
+        from synsc.contexts.service import (
+            ContextRevisionConflictError,
+            ContextSessionExpiredError,
+            ContextSessionNotFoundError,
+            ContextSnapshotUnavailableError,
+        )
+
+        if isinstance(exc, ContextSessionNotFoundError):
+            return HTTPException(
+                status_code=404,
+                detail="Context session not found.",
+            )
+        if isinstance(exc, ContextRevisionConflictError):
+            return HTTPException(
+                status_code=409,
+                detail="Context session changed.",
+            )
+        if isinstance(exc, ContextSessionExpiredError):
+            return HTTPException(
+                status_code=410,
+                detail="Context session has expired.",
+            )
+        if isinstance(exc, (ContextSnapshotUnavailableError, ValueError)):
+            return HTTPException(status_code=400, detail=str(exc))
+        return HTTPException(
+            status_code=500,
+            detail="Context session operation failed.",
+        )
+
+    @app.post(
+        "/v2/context-sessions",
+        tags=["Contexts"],
+        status_code=201,
+    )
+    @limiter.limit(INDEX_LIMIT)
+    async def context_session_create(
+        request: Request,
+        body: ContextSessionCreateRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Create one context with a deterministic first revision."""
+
+        from synsc.contexts.service import get_context_session_service
+
+        payload = body.model_dump()
+        payload["accepted_evidence"] = [
+            item.model_dump(exclude_none=True)
+            for item in body.accepted_evidence
+        ]
+        payload["rejected_evidence"] = [
+            item.model_dump(exclude_none=True)
+            for item in body.rejected_evidence
+        ]
+        try:
+            result = await asyncio.to_thread(
+                get_context_session_service().create_session,
+                user_id=auth.user_id,
+                **payload,
+            )
+        except Exception as exc:
+            raise _context_http_exception(exc) from exc
+        return SafeJSONResponse(status_code=201, content=result)
+
+    @app.get("/v2/context-sessions", tags=["Contexts"])
+    async def context_session_list(
+        limit: int = Query(default=100, ge=1, le=500),
+        include_expired: bool = False,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """List context-session metadata owned by the caller."""
+
+        from synsc.contexts.service import get_context_session_service
+
+        sessions = await asyncio.to_thread(
+            get_context_session_service().list_sessions,
+            user_id=auth.user_id,
+            limit=limit,
+            include_expired=include_expired,
+        )
+        return SafeJSONResponse(
+            content={"sessions": sessions, "total": len(sessions)}
+        )
+
+    @app.get(
+        "/v2/context-sessions/{session_id}",
+        tags=["Contexts"],
+    )
+    async def context_session_get(
+        session_id: str,
+        revision: int | None = Query(default=None, ge=1),
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Rehydrate one authorized current or historical context revision."""
+
+        from synsc.contexts.service import get_context_session_service
+
+        try:
+            result = await asyncio.to_thread(
+                get_context_session_service().get_session,
+                session_id,
+                user_id=auth.user_id,
+                revision_number=revision,
+            )
+        except Exception as exc:
+            raise _context_http_exception(exc) from exc
+        return SafeJSONResponse(content=result)
+
+    @app.post(
+        "/v2/context-sessions/{session_id}/revisions",
+        tags=["Contexts"],
+        status_code=201,
+    )
+    @limiter.limit(INDEX_LIMIT)
+    async def context_session_revise(
+        request: Request,
+        session_id: str,
+        body: ContextRevisionCreateRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Append an immutable revision if the caller's head is current."""
+
+        from synsc.contexts.service import get_context_session_service
+
+        payload = body.model_dump(exclude_none=True)
+        expected_version = int(payload.pop("expected_version"))
+        try:
+            result = await asyncio.to_thread(
+                get_context_session_service().revise_session,
+                session_id,
+                user_id=auth.user_id,
+                expected_version=expected_version,
+                **payload,
+            )
+        except Exception as exc:
+            raise _context_http_exception(exc) from exc
+        return SafeJSONResponse(status_code=201, content=result)
+
+    @app.patch(
+        "/v2/context-sessions/{session_id}",
+        tags=["Contexts"],
+    )
+    async def context_session_policy(
+        session_id: str,
+        body: ContextSessionPolicyRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Update sharing, expiry, or lifecycle policy behind the head fence."""
+
+        from synsc.contexts.service import get_context_session_service
+
+        payload = body.model_dump(exclude_unset=True)
+        expected_version = int(payload.pop("expected_version"))
+        try:
+            session = await asyncio.to_thread(
+                get_context_session_service().update_policy,
+                session_id,
+                user_id=auth.user_id,
+                expected_version=expected_version,
+                **payload,
+            )
+        except Exception as exc:
+            raise _context_http_exception(exc) from exc
+        return SafeJSONResponse(content={"session": session})
+
+    @app.post(
+        "/v2/context-sessions/{session_id}/handoffs",
+        tags=["Contexts"],
+        status_code=201,
+    )
+    @limiter.limit(INDEX_LIMIT)
+    async def context_session_handoff(
+        request: Request,
+        session_id: str,
+        body: ContextHandoffRequest,
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Create an explicitly linked child from the current parent revision."""
+
+        from synsc.contexts.service import get_context_session_service
+
+        try:
+            result = await asyncio.to_thread(
+                get_context_session_service().handoff,
+                session_id,
+                user_id=auth.user_id,
+                **body.model_dump(),
+            )
+        except Exception as exc:
+            raise _context_http_exception(exc) from exc
+        return SafeJSONResponse(status_code=201, content=result)
+
+    @app.get(
+        "/v2/context-sessions/{session_id}/export",
+        tags=["Contexts"],
+    )
+    async def context_session_export(
+        session_id: str,
+        revision: int | None = Query(default=None, ge=1),
+        auth: AuthContext = Depends(verify_api_key),
+    ) -> Response:
+        """Export selected authorized content plus immutable references."""
+
+        from synsc.contexts.service import get_context_session_service
+
+        try:
+            result = await asyncio.to_thread(
+                get_context_session_service().export_session,
+                session_id,
+                user_id=auth.user_id,
+                revision_number=revision,
+            )
+        except Exception as exc:
+            raise _context_http_exception(exc) from exc
+        return SafeJSONResponse(content=result)
 
     # ==========================================================================
     # Sources (unified grep + read + tree surface)
