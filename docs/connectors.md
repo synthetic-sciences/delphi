@@ -80,12 +80,14 @@ curl http://localhost:8742/v2/connector-sync-jobs/JOB_ID \
   -H "Authorization: Bearer $DELPHI_API_KEY"
 ```
 
-The path is resolved on the API/worker host and must remain inside an
-operator-configured allowed root. Symlink targets are skipped, excluded
-directories are pruned before traversal, binary files are ignored, and entry,
-depth, file-count, and byte limits fail closed instead of publishing an
-incomplete snapshot. Default includes cover common source, documentation,
-configuration, and data-text formats.
+The path is opened beneath an operator-configured allowed-root descriptor.
+Traversal and file reads remain anchored to directory descriptors, so swapping
+a validated path or parent directory for a symlink cannot escape the root.
+Other symlink targets are skipped, excluded directories are pruned before
+traversal, binary files are ignored, and entry, depth, file-count, and byte
+limits fail closed instead of publishing an incomplete snapshot. Default
+includes cover common source, documentation, configuration, and data-text
+formats.
 
 Scheduled sync requires the worker process. A manual sync and a scheduled sync
 use the same queue and idempotency rules.
@@ -123,3 +125,6 @@ The durable service owns encryption, leases, bounded retries, snapshot staging,
 head activation, cursor advancement, schedules, and owner/per-record scoping.
 It enforces a hard adapter deadline and signals cooperative cancellation; a
 non-cooperative adapter cannot block the connector poller past that deadline.
+Timed-out calls retain one of four process-wide provider slots until they
+actually exit, bounding stranded threads and pausing new claims if every slot
+is occupied.

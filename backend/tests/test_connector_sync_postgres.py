@@ -465,6 +465,47 @@ def test_public_connector_items_still_enforce_record_principals(
     ) == []
 
 
+def test_connector_path_filter_runs_before_pagination(
+    connector_runtime: str,
+) -> None:
+    from synsc.connectors.postgres import PostgresConnectorSyncStore
+    from synsc.services.source_service import read_connector_source
+
+    store = PostgresConnectorSyncStore()
+    source_id = str(_create(store, connector_runtime)["source_id"])
+    store.enqueue_sync(source_id, user_id=connector_runtime, priority=0)
+    claimed = store.claim_next_job(worker_id="worker-path")
+    assert claimed is not None
+    job, source = claimed
+    store.apply_sync_page(
+        job,
+        source,
+        ConnectorSyncResponse(
+            records=tuple(
+                ConnectorRecord(
+                    external_id=f"doc-{index:03d}",
+                    locator=f"docs/{index:03d}.md",
+                    content=f"document {index}",
+                    accessible_principals=(connector_runtime,),
+                )
+                for index in range(505)
+            ),
+            next_cursor={"generation": 1},
+        ),
+    )
+
+    result = read_connector_source(
+        source_id,
+        user_id=connector_runtime,
+        path="docs/504.md",
+        item_limit=500,
+    )
+
+    assert [item["locator"] for item in result["items"]] == [
+        "docs/504.md"
+    ]
+
+
 def test_manual_and_scheduled_enqueue_share_one_active_job(
     connector_runtime: str,
 ) -> None:

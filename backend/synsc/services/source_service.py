@@ -1525,18 +1525,9 @@ def read_connector_source(
         include_items=True,
         item_offset=item_offset,
         item_limit=item_limit,
+        locator_prefix=path.strip("/") if path else None,
     )
     items = list(result.get("items") or [])
-    if path:
-        normalized = path.strip("/")
-        items = [
-            item
-            for item in items
-            if str(item.get("locator") or "").strip("/") == normalized
-            or str(item.get("locator") or "").strip("/").startswith(
-                f"{normalized}/"
-            )
-        ]
     return {
         "source_id": source_id,
         "source_type": "connector",

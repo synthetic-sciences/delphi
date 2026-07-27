@@ -7,7 +7,7 @@ import hashlib
 import os
 import stat
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Generator, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -162,11 +162,7 @@ class LocalFolderConnector:
         candidate = Path(raw_path).expanduser()
         if not candidate.is_absolute():
             raise ValueError("local folder path must be absolute")
-        if not candidate.exists() or not candidate.is_dir():
-            raise ValueError(
-                "local folder path must be an existing directory"
-            )
-        root = candidate.resolve()
+        root = Path(os.path.abspath(candidate))
         if not any(
             root == allowed or root.is_relative_to(allowed)
             for allowed in self.allowed_roots
@@ -177,13 +173,59 @@ class LocalFolderConnector:
             )
         return root
 
+    @staticmethod
+    def _directory_open_flags() -> int:
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        return flags
+
+    def _open_root_fd(self, configuration: Mapping[str, Any]) -> int:
+        """Open the configured root beneath an allowed-root descriptor."""
+
+        root = self._resolve_root(configuration)
+        allowed = max(
+            (
+                candidate
+                for candidate in self.allowed_roots
+                if root == candidate or root.is_relative_to(candidate)
+            ),
+            key=lambda candidate: len(candidate.parts),
+        )
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                allowed,
+                self._directory_open_flags(),
+            )
+            for component in root.relative_to(allowed).parts:
+                next_descriptor = os.open(
+                    component,
+                    self._directory_open_flags(),
+                    dir_fd=descriptor,
+                )
+                os.close(descriptor)
+                descriptor = next_descriptor
+            details = os.fstat(descriptor)
+            if not stat.S_ISDIR(details.st_mode):
+                raise OSError("configured root is not a directory")
+            return descriptor
+        except OSError as exc:
+            if descriptor is not None:
+                os.close(descriptor)
+            raise ValueError(
+                "local folder directory could not be opened safely"
+            ) from exc
+
     def validate_configuration(
         self,
         configuration: Mapping[str, Any],
     ) -> None:
         """Fail closed before encrypted configuration is persisted."""
 
-        self._resolve_root(configuration)
+        descriptor = self._open_root_fd(configuration)
+        os.close(descriptor)
         _patterns(configuration, "include", _DEFAULT_INCLUDE)
         _patterns(configuration, "exclude", _DEFAULT_EXCLUDE)
         _integer_option(
@@ -235,73 +277,92 @@ class LocalFolderConnector:
     def _walk_files(
         self,
         *,
-        root: Path,
+        root_fd: int,
         exclude: tuple[str, ...],
         max_entries: int,
         max_depth: int,
         request: ConnectorSyncRequest,
         deadline: float,
-    ) -> Iterator[tuple[Path, str]]:
-        """Stream a bounded, symlink-free walk and prune excluded trees."""
+    ) -> Generator[tuple[int, str, str], None, None]:
+        """Walk below an anchored descriptor without reopening path ancestry."""
 
-        stack: list[tuple[Path, int]] = [(root, 0)]
         entries_seen = 0
-        while stack:
-            self._check_deadline(request, deadline)
-            directory, depth = stack.pop()
-            child_directories: list[tuple[Path, int]] = []
+
+        def walk(
+            directory_fd: int,
+            relative_directory: str,
+            depth: int,
+        ) -> Iterator[tuple[int, str, str]]:
+            nonlocal entries_seen
             try:
-                entries = os.scandir(directory)
-            except OSError as exc:
-                raise ValueError(
-                    "local folder directory could not be scanned"
-                ) from exc
-            with entries:
-                for entry in entries:
-                    self._check_deadline(request, deadline)
-                    entries_seen += 1
-                    if entries_seen > max_entries:
-                        raise ValueError(
-                            "local folder exceeds configured max_entries"
-                        )
-                    candidate = Path(entry.path)
-                    try:
-                        relative = candidate.relative_to(root).as_posix()
-                    except ValueError:
-                        continue
-                    try:
-                        if entry.is_symlink():
-                            continue
-                        is_directory = entry.is_dir(follow_symlinks=False)
-                    except OSError:
-                        continue
-                    if _is_excluded(
-                        relative,
-                        exclude,
-                        directory=is_directory,
-                    ):
-                        continue
-                    if is_directory:
-                        if depth >= max_depth:
+                self._check_deadline(request, deadline)
+                try:
+                    entries = os.scandir(directory_fd)
+                except OSError as exc:
+                    raise ValueError(
+                        "local folder directory could not be scanned"
+                    ) from exc
+                with entries:
+                    for entry in entries:
+                        self._check_deadline(request, deadline)
+                        entries_seen += 1
+                        if entries_seen > max_entries:
                             raise ValueError(
-                                "local folder exceeds configured max_depth"
+                                "local folder exceeds configured max_entries"
                             )
-                        child_directories.append((candidate, depth + 1))
-                        continue
-                    try:
-                        if entry.is_file(follow_symlinks=False):
-                            yield candidate, relative
-                    except OSError:
-                        continue
-            child_directories.sort(
-                key=lambda item: item[0].name,
-                reverse=True,
-            )
-            stack.extend(child_directories)
+                        name = entry.name
+                        relative = (
+                            f"{relative_directory}/{name}"
+                            if relative_directory
+                            else name
+                        )
+                        try:
+                            if entry.is_symlink():
+                                continue
+                            is_directory = entry.is_dir(
+                                follow_symlinks=False
+                            )
+                        except OSError:
+                            continue
+                        if _is_excluded(
+                            relative,
+                            exclude,
+                            directory=is_directory,
+                        ):
+                            continue
+                        if is_directory:
+                            if depth >= max_depth:
+                                raise ValueError(
+                                    "local folder exceeds configured max_depth"
+                                )
+                            try:
+                                child_fd = os.open(
+                                    name,
+                                    self._directory_open_flags(),
+                                    dir_fd=directory_fd,
+                                )
+                            except OSError:
+                                continue
+                            yield from walk(
+                                child_fd,
+                                relative,
+                                depth + 1,
+                            )
+                            continue
+                        try:
+                            if entry.is_file(follow_symlinks=False):
+                                yield directory_fd, name, relative
+                        except OSError:
+                            continue
+            finally:
+                os.close(directory_fd)
+
+        yield from walk(root_fd, "", 0)
 
     @staticmethod
     def _read_bounded_file(
-        candidate: Path,
+        directory_fd: int,
+        name: str,
         *,
         max_file_bytes: int,
     ) -> bytes | None:
@@ -309,7 +370,7 @@ class LocalFolderConnector:
         flags |= getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
-            descriptor = os.open(candidate, flags)
+            descriptor = os.open(name, flags, dir_fd=directory_fd)
         except OSError:
             return None
         try:
@@ -318,13 +379,13 @@ class LocalFolderConnector:
                 return None
             if details.st_size > max_file_bytes:
                 raise ValueError(
-                    f"{candidate.name} exceeds configured max_file_bytes"
+                    f"{name} exceeds configured max_file_bytes"
                 )
             with os.fdopen(descriptor, "rb", closefd=False) as stream:
                 payload = stream.read(max_file_bytes + 1)
             if len(payload) > max_file_bytes:
                 raise ValueError(
-                    f"{candidate.name} exceeds configured max_file_bytes"
+                    f"{name} exceeds configured max_file_bytes"
                 )
             return payload
         finally:
@@ -336,7 +397,7 @@ class LocalFolderConnector:
         deadline = time.monotonic() + request.timeout_ms / 1000
         self._check_deadline(request, deadline)
         self.validate_configuration(request.configuration)
-        root = self._resolve_root(request.configuration)
+        root_fd = self._open_root_fd(request.configuration)
 
         include = _patterns(
             request.configuration,
@@ -387,39 +448,49 @@ class LocalFolderConnector:
         current: dict[str, tuple[str, str]] = {}
         total_bytes = 0
         matched_files = 0
-        for candidate, relative in self._walk_files(
-            root=root,
+        walker = self._walk_files(
+            root_fd=root_fd,
             exclude=exclude,
             max_entries=max_entries,
             max_depth=max_depth,
             request=request,
             deadline=deadline,
-        ):
-            self._check_deadline(request, deadline)
-            if not any(fnmatch.fnmatch(relative, pattern) for pattern in include):
-                continue
-            matched_files += 1
-            if matched_files > max_files:
-                raise ValueError("local folder exceeds configured max_files")
-            payload = self._read_bounded_file(
-                candidate,
-                max_file_bytes=max_file_bytes,
-            )
-            if payload is None:
-                continue
-            total_bytes += len(payload)
-            if total_bytes > max_total_bytes:
-                raise ValueError(
-                    "local folder exceeds configured max_total_bytes"
+        )
+        try:
+            for directory_fd, name, relative in walker:
+                self._check_deadline(request, deadline)
+                if not any(
+                    fnmatch.fnmatch(relative, pattern)
+                    for pattern in include
+                ):
+                    continue
+                matched_files += 1
+                if matched_files > max_files:
+                    raise ValueError(
+                        "local folder exceeds configured max_files"
+                    )
+                payload = self._read_bounded_file(
+                    directory_fd,
+                    name,
+                    max_file_bytes=max_file_bytes,
                 )
-            if b"\x00" in payload:
-                continue
-            try:
-                content = payload.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-            digest = hashlib.sha256(payload).hexdigest()
-            current[relative] = (digest, content)
+                if payload is None:
+                    continue
+                total_bytes += len(payload)
+                if total_bytes > max_total_bytes:
+                    raise ValueError(
+                        "local folder exceeds configured max_total_bytes"
+                    )
+                if b"\x00" in payload:
+                    continue
+                try:
+                    content = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                digest = hashlib.sha256(payload).hexdigest()
+                current[relative] = (digest, content)
+        finally:
+            walker.close()
 
         old_files: dict[str, str] = {}
         if request.cursor is not None:

@@ -154,6 +154,7 @@ class SnapshotStore(Protocol):
         user_id: str | None,
         offset: int,
         limit: int,
+        locator_prefix: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
     def search_items(
@@ -1184,6 +1185,7 @@ class PostgresSnapshotStore:
         user_id: str | None,
         offset: int,
         limit: int,
+        locator_prefix: str | None = None,
     ) -> list[dict[str, Any]]:
         connector_acl = ""
         if snapshot.source_type is SnapshotSourceType.CONNECTOR:
@@ -1217,6 +1219,18 @@ class PostgresSnapshotStore:
                     )
               )
             """
+        locator_filter = ""
+        if locator_prefix is not None:
+            locator_filter = """
+              AND (
+                  BTRIM(source_snapshot_items.locator, '/')
+                      = :locator_prefix
+                  OR LEFT(
+                      BTRIM(source_snapshot_items.locator, '/'),
+                      LENGTH(:locator_descendant)
+                  ) = :locator_descendant
+              )
+            """
         rows = session.execute(
             text(
                 f"""
@@ -1225,6 +1239,7 @@ class PostgresSnapshotStore:
                 FROM source_snapshot_items
                 WHERE snapshot_id = :snapshot_id
                 {connector_acl}
+                {locator_filter}
                 ORDER BY ordinal
                 OFFSET :offset LIMIT :limit
                 """
@@ -1235,6 +1250,12 @@ class PostgresSnapshotStore:
                 "user_id": user_id,
                 "offset": offset,
                 "limit": limit,
+                "locator_prefix": locator_prefix,
+                "locator_descendant": (
+                    f"{locator_prefix}/"
+                    if locator_prefix is not None
+                    else None
+                ),
             },
         ).mappings().all()
         return [
@@ -1483,11 +1504,14 @@ class SnapshotService:
         include_items: bool = False,
         item_offset: int = 0,
         item_limit: int = 100,
+        locator_prefix: str | None = None,
     ) -> dict[str, Any]:
         if item_offset < 0:
             raise ValueError("item_offset must be non-negative")
         if not 1 <= item_limit <= 500:
             raise ValueError("item_limit must be between 1 and 500")
+        if locator_prefix is not None and not locator_prefix.strip():
+            raise ValueError("locator_prefix must not be empty")
         with self.session_factory() as session:
             snapshot = self.store.get_snapshot(session, snapshot_id)
             if snapshot is None:
@@ -1502,6 +1526,7 @@ class SnapshotService:
                     user_id=user_id,
                     offset=item_offset,
                     limit=item_limit,
+                    locator_prefix=locator_prefix,
                 )
                 result["item_offset"] = item_offset
                 result["item_limit"] = item_limit

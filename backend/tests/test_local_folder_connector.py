@@ -111,6 +111,36 @@ def test_sync_rejects_root_escape_and_symlink_targets(tmp_path: Path) -> None:
     assert result.records == ()
 
 
+def test_sync_rejects_configured_root_swapped_for_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    allowed = tmp_path / "allowed"
+    configured = allowed / "configured"
+    outside = tmp_path / "outside"
+    configured.mkdir(parents=True)
+    outside.mkdir()
+    (configured / "safe.txt").write_text("safe", encoding="utf-8")
+    (outside / "secret.txt").write_text("outside-secret", encoding="utf-8")
+    connector = _connector(allowed)
+    original_resolve = connector._resolve_root
+    calls = 0
+
+    def swap_after_resolution(configuration):
+        nonlocal calls
+        resolved = original_resolve(configuration)
+        calls += 1
+        if calls == 2:
+            configured.rename(allowed / "moved")
+            configured.symlink_to(outside, target_is_directory=True)
+        return resolved
+
+    monkeypatch.setattr(connector, "_resolve_root", swap_after_resolution)
+
+    with pytest.raises(ValueError, match="could not be opened"):
+        connector.sync(_request(configured))
+
+
 def test_sync_requires_an_existing_directory(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="directory"):
         _connector(tmp_path).sync(_request(tmp_path / "missing"))
@@ -168,13 +198,20 @@ def test_excluded_directories_are_pruned_before_traversal(
     (hidden / "credentials.txt").write_text("secret", encoding="utf-8")
     (tmp_path / "safe.txt").write_text("safe", encoding="utf-8")
     real_scandir = os.scandir
+    real_open = os.open
 
     def guarded_scandir(path):
-        if Path(path).name == ".git":
+        if not isinstance(path, int) and Path(path).name == ".git":
             raise AssertionError("excluded directory was traversed")
         return real_scandir(path)
 
+    def guarded_open(path, flags, *args, **kwargs):
+        if path == ".git" and kwargs.get("dir_fd") is not None:
+            raise AssertionError("excluded directory was opened")
+        return real_open(path, flags, *args, **kwargs)
+
     monkeypatch.setattr(local_folder.os, "scandir", guarded_scandir)
+    monkeypatch.setattr(local_folder.os, "open", guarded_open)
 
     result = _connector(tmp_path).sync(_request(tmp_path))
 

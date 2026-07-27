@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import replace
 from typing import Any
@@ -361,3 +362,48 @@ def test_run_once_enforces_deadline_and_requeues_retryable_timeout() -> None:
     assert result["status"] == "pending"
     assert store.retryable is True
     assert "timed out" in result["error"]
+
+
+def test_non_cooperative_provider_timeouts_have_bounded_threads() -> None:
+    from synsc.connectors import service as service_module
+
+    service, provider, _ = _service()
+    service.timeout_ms = 1
+    release = threading.Event()
+    baseline = {
+        thread.ident
+        for thread in threading.enumerate()
+        if thread.name.startswith("connector-provider-")
+    }
+    new_threads: list[threading.Thread] = []
+
+    def blocking(_request):
+        release.wait()
+        return ConnectorSyncResponse(records=(), next_cursor={})
+
+    provider.sync = blocking
+    try:
+        results = [
+            service.run_once(worker_id="worker-1")
+            for _ in range(service_module._MAX_PROVIDER_CALLS + 20)
+        ]
+        new_threads = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name.startswith("connector-provider-")
+            and thread.ident not in baseline
+        ]
+
+        assert len(new_threads) <= service_module._MAX_PROVIDER_CALLS
+        assert sum(result is not None for result in results) <= (
+            service_module._MAX_PROVIDER_CALLS
+        )
+    finally:
+        release.set()
+        deadline = time.monotonic() + 2
+        while (
+            any(thread.is_alive() for thread in new_threads)
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+        assert not any(thread.is_alive() for thread in new_threads)

@@ -24,6 +24,9 @@ from synsc.providers.contracts import (
     ProviderUnavailableError,
 )
 
+_MAX_PROVIDER_CALLS = 4
+_PROVIDER_CALL_CAPACITY = threading.BoundedSemaphore(_MAX_PROVIDER_CALLS)
+
 
 def _secret_strings(value: Any) -> list[str]:
     if isinstance(value, Mapping):
@@ -70,23 +73,32 @@ def _provider_failure_is_retryable(
 def _sync_with_deadline(
     provider: ConnectorProvider,
     request: ConnectorSyncRequest,
+    *,
+    capacity: threading.BoundedSemaphore,
 ) -> ConnectorSyncResponse:
-    """Enforce the provider deadline even for a non-cooperative adapter."""
+    """Enforce a deadline while retaining capacity until the call exits."""
 
     outcome: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
 
     def invoke() -> None:
         try:
-            outcome.put((True, provider.sync(request)))
-        except Exception as exc:
-            outcome.put((False, exc))
+            try:
+                outcome.put((True, provider.sync(request)))
+            except Exception as exc:
+                outcome.put((False, exc))
+        finally:
+            capacity.release()
 
     thread = threading.Thread(
         target=invoke,
         daemon=True,
         name=f"connector-provider-{provider.descriptor.name}",
     )
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        capacity.release()
+        raise
     thread.join(request.timeout_ms / 1000)
     if thread.is_alive():
         request.cancellation.cancel()
@@ -338,84 +350,93 @@ class ConnectorSyncService:
         return self.store.get_job(job_id, user_id=user_id)
 
     def run_once(self, *, worker_id: str) -> dict[str, Any] | None:
-        claimed = self.store.claim_next_job(worker_id=worker_id)
-        if claimed is None:
+        if not _PROVIDER_CALL_CAPACITY.acquire(blocking=False):
             return None
-        job, source = claimed
-        if job.worker_id != worker_id or job.status != "running":
-            raise RuntimeError(
-                f"connector job {job.job_id} has an invalid worker lease"
-            )
+        capacity_transferred = False
         provider: ConnectorProvider | None = None
         try:
-            provider = self.registry.create(source.provider)
-            response = _sync_with_deadline(
-                provider,
-                ConnectorSyncRequest(
-                    user_id=source.user_id,
-                    configuration=source.configuration,
-                    cursor=source.cursor,
-                    limit=self.page_limit,
-                    timeout_ms=self.timeout_ms,
-                    cancellation=CancellationToken(),
-                ),
-            )
-            if len(response.records) > self.page_limit:
-                raise ValueError(
-                    "Connector provider exceeded the requested page limit."
-                )
-            response_bytes = len(
-                json.dumps(
-                    response.to_dict(),
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    ensure_ascii=False,
-                    allow_nan=False,
-                ).encode("utf-8")
-            )
-            max_response_bytes = (
-                provider.descriptor.max_response_bytes or 100_000_000
-            )
-            if response_bytes > max_response_bytes:
-                raise ValueError(
-                    "Connector provider exceeded its response byte limit."
-                )
-            if (
-                response.has_more
-                and response.next_cursor == source.cursor
-            ):
-                raise ValueError(
-                    "Connector provider did not advance cursor for a "
-                    "paginated response."
-                )
-            return self.store.apply_sync_page(
-                job,
-                source,
-                response,
-            )
-        except Exception as exc:
-            error_message = _safe_provider_error(exc, source)
-            retryable = _provider_failure_is_retryable(
-                exc,
-                supports_retry=bool(
-                    provider is not None
-                    and provider.descriptor.supports_retry
-                ),
-            )
-            status = self.store.fail_job(
-                job,
-                error_message=error_message,
-                retryable=retryable,
-            )
-            if status is None:
+            claimed = self.store.claim_next_job(worker_id=worker_id)
+            if claimed is None:
+                return None
+            job, source = claimed
+            if job.worker_id != worker_id or job.status != "running":
                 raise RuntimeError(
-                    f"connector job {job.job_id} lost its failure lease"
-                ) from exc
-            return {
-                "job_id": job.job_id,
-                "status": status,
-                "error": error_message,
-            }
+                    f"connector job {job.job_id} has an invalid worker lease"
+                )
+            try:
+                provider = self.registry.create(source.provider)
+                capacity_transferred = True
+                response = _sync_with_deadline(
+                    provider,
+                    ConnectorSyncRequest(
+                        user_id=source.user_id,
+                        configuration=source.configuration,
+                        cursor=source.cursor,
+                        limit=self.page_limit,
+                        timeout_ms=self.timeout_ms,
+                        cancellation=CancellationToken(),
+                    ),
+                    capacity=_PROVIDER_CALL_CAPACITY,
+                )
+                if len(response.records) > self.page_limit:
+                    raise ValueError(
+                        "Connector provider exceeded the requested page limit."
+                    )
+                response_bytes = len(
+                    json.dumps(
+                        response.to_dict(),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                        allow_nan=False,
+                    ).encode("utf-8")
+                )
+                max_response_bytes = (
+                    provider.descriptor.max_response_bytes or 100_000_000
+                )
+                if response_bytes > max_response_bytes:
+                    raise ValueError(
+                        "Connector provider exceeded its response byte limit."
+                    )
+                if (
+                    response.has_more
+                    and response.next_cursor == source.cursor
+                ):
+                    raise ValueError(
+                        "Connector provider did not advance cursor for a "
+                        "paginated response."
+                    )
+                return self.store.apply_sync_page(
+                    job,
+                    source,
+                    response,
+                )
+            except Exception as exc:
+                error_message = _safe_provider_error(exc, source)
+                retryable = _provider_failure_is_retryable(
+                    exc,
+                    supports_retry=bool(
+                        provider is not None
+                        and provider.descriptor.supports_retry
+                    ),
+                )
+                status = self.store.fail_job(
+                    job,
+                    error_message=error_message,
+                    retryable=retryable,
+                )
+                if status is None:
+                    raise RuntimeError(
+                        f"connector job {job.job_id} lost its failure lease"
+                    ) from exc
+                return {
+                    "job_id": job.job_id,
+                    "status": status,
+                    "error": error_message,
+                }
+        finally:
+            if not capacity_transferred:
+                _PROVIDER_CALL_CAPACITY.release()
 
     def schedule_due(self, *, limit: int = 100) -> int:
         if not 1 <= limit <= 1000:

@@ -180,12 +180,21 @@ class FakeSnapshotStore:
         user_id: str | None,
         offset: int,
         limit: int,
+        locator_prefix: str | None = None,
     ) -> list[dict[str, Any]]:
         assert user_id == "user-1"
-        return [
+        items = [
             item.to_dict(include_content=True)
-            for item in self.items[snapshot.snapshot_id][offset : offset + limit]
+            for item in self.items[snapshot.snapshot_id]
         ]
+        if locator_prefix is not None:
+            items = [
+                item
+                for item in items
+                if item["locator"] == locator_prefix
+                or item["locator"].startswith(f"{locator_prefix}/")
+            ]
+        return items[offset : offset + limit]
 
 
 def _service(store: FakeSnapshotStore) -> SnapshotService:
