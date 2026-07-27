@@ -119,6 +119,7 @@ class PgVectorManager:
         repo_ids: list[str] | None = None,
         language: str | None = None,
         top_k: int = 10,
+        timeout_ms: int = 120_000,
     ) -> list[dict[str, Any]]:
         """Search for similar vectors using pgvector.
         
@@ -144,6 +145,13 @@ class PgVectorManager:
         query_list = query_embedding[0].tolist()
         
         with get_session() as session:
+            session.execute(
+                text(
+                    "SELECT set_config("
+                    "'statement_timeout', :timeout, true)"
+                ),
+                {"timeout": f"{timeout_ms}ms"},
+            )
             # Tune HNSW search quality — ef_search=100 gives good recall
             session.execute(text("SET LOCAL hnsw.ef_search = 100"))
 

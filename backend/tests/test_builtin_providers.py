@@ -54,6 +54,9 @@ def test_builtin_catalog_loads_without_remote_credentials(monkeypatch) -> None:
         "spreadsheet-connector",
     } <= descriptors.keys()
     assert descriptors["local-embeddings"].execution is ExecutionLocation.LOCAL
+    assert descriptors["local-index"].execution is ExecutionLocation.LOCAL
+    assert ProviderCapability.SEARCH in descriptors["local-index"].capabilities
+    assert descriptors["local-index"].supports_cancellation is True
     assert descriptors["gemini-research"].execution is ExecutionLocation.REMOTE
     assert descriptors["gemini-research"].supports_streaming is False
     assert descriptors["gemini-research"].supports_cancellation is False

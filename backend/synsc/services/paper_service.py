@@ -31,6 +31,7 @@ from synsc.database.models import (
     UserPaper,
 )
 from synsc.embeddings.generator import EmbeddingProvider
+from synsc.providers.contracts import CancellationToken
 
 logger = structlog.get_logger(__name__)
 
@@ -825,6 +826,9 @@ class PaperService:
         query: str,
         top_k: int = 10,
         rerank: bool = True,
+        paper_ids: list[str] | None = None,
+        timeout_ms: int = 120_000,
+        cancellation: CancellationToken | None = None,
     ) -> dict[str, Any]:
         """Search papers using hybrid retrieval + cross-encoder reranking.
 
@@ -849,17 +853,60 @@ class PaperService:
             )
 
             start = _time.time()
+            token = cancellation or CancellationToken()
+            if not 1 <= timeout_ms <= 300_000:
+                raise ValueError("timeout_ms must be between 1 and 300000")
+            deadline_monotonic = _time.monotonic() + timeout_ms / 1000
+
+            def remaining_timeout_ms() -> int:
+                return max(
+                    1,
+                    int(
+                        (deadline_monotonic - _time.monotonic()) * 1000
+                    ),
+                )
+
+            def stopped() -> bool:
+                return (
+                    token.cancelled
+                    or _time.monotonic() >= deadline_monotonic
+                )
+
+            if stopped():
+                return {
+                    "success": False,
+                    "error": "Search cancelled",
+                    "results": [],
+                }
             embedding_gen = self._get_embedding_generator()
             query_embedding = embedding_gen.generate_single(query)
+            if stopped():
+                return {
+                    "success": False,
+                    "error": "Search cancelled",
+                    "results": [],
+                }
 
             results = hybrid_search_papers(
                 user_id=self.user_id,
                 query=query,
                 query_embedding=query_embedding,
                 top_k=top_k * 3,  # over-fetch for rerank
+                paper_ids=paper_ids,
+                timeout_ms=remaining_timeout_ms(),
             )
-            if rerank:
+            if (
+                rerank
+                and not stopped()
+                and deadline_monotonic - _time.monotonic() >= 0.25
+            ):
                 results = rerank_papers(query, results)
+            if stopped():
+                return {
+                    "success": False,
+                    "error": "Search cancelled or timed out",
+                    "results": [],
+                }
             results = results[:top_k]
 
             elapsed = (_time.time() - start) * 1000

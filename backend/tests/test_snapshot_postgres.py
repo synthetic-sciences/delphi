@@ -144,6 +144,15 @@ def test_repository_snapshots_preserve_old_content_and_vectors() -> None:
             service.get(first.snapshot_id, user_id=None)["snapshot_id"]
             == first.snapshot_id
         )
+        public_hits = service.search(
+            (first.snapshot_id,),
+            "alpha",
+            user_id=None,
+        )
+        assert [hit["snapshot_id"] for hit in public_hits] == [
+            first.snapshot_id
+        ]
+        assert public_hits[0]["content"] == "alpha"
 
         with get_session() as session:
             session.execute(
@@ -159,6 +168,12 @@ def test_repository_snapshots_preserve_old_content_and_vectors() -> None:
 
         with pytest.raises(SnapshotAccessDeniedError):
             service.get(first.snapshot_id, user_id=None)
+        with pytest.raises(SnapshotAccessDeniedError):
+            service.search(
+                (first.snapshot_id,),
+                "alpha",
+                user_id=None,
+            )
         assert (
             service.list(
                 user_id=None,
@@ -239,6 +254,22 @@ def test_repository_snapshots_preserve_old_content_and_vectors() -> None:
         snapshot_ids.append(second.snapshot_id)
 
         assert second.snapshot_id != first.snapshot_id
+        old_hits = service.search(
+            (first.snapshot_id,),
+            "alpha",
+            user_id=user_id,
+        )
+        new_hits = service.search(
+            (second.snapshot_id,),
+            "beta",
+            user_id=user_id,
+        )
+        assert [hit["snapshot_id"] for hit in old_hits] == [
+            first.snapshot_id
+        ]
+        assert [hit["snapshot_id"] for hit in new_hits] == [
+            second.snapshot_id
+        ]
         with get_session() as session:
             rows = session.execute(
                 text(
@@ -397,6 +428,157 @@ def test_repository_snapshots_preserve_old_content_and_vectors() -> None:
                         """
                     ),
                     {"snapshot_ids": snapshot_ids},
+                )
+            session.execute(
+                text("DELETE FROM repositories WHERE repo_id = :repo_id"),
+                {"repo_id": repo_id},
+            )
+
+
+def test_snapshot_search_rechecks_access_in_the_result_query() -> None:
+    from synsc.database.connection import get_session
+    from synsc.snapshots.contracts import SnapshotSourceType
+    from synsc.snapshots.service import (
+        PostgresSnapshotStore,
+        SnapshotService,
+    )
+
+    owner_id = str(uuid.uuid4())
+    viewer_id = str(uuid.uuid4())
+    repo_id = str(uuid.uuid4())
+    file_id = str(uuid.uuid4())
+    chunk_id = str(uuid.uuid4())
+    snapshot_id: str | None = None
+
+    class RevokingStore(PostgresSnapshotStore):
+        revoked = False
+
+        def search_items(self, *args, **kwargs):
+            with get_session() as revoke_session:
+                revoke_session.execute(
+                    text(
+                        """
+                        DELETE FROM user_repositories
+                        WHERE user_id = :user_id AND repo_id = :repo_id
+                        """
+                    ),
+                    {"user_id": viewer_id, "repo_id": repo_id},
+                )
+            self.revoked = True
+            return super().search_items(*args, **kwargs)
+
+    try:
+        with get_session() as session:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO repositories (
+                        repo_id, url, owner, name, branch, commit_sha,
+                        is_public, visibility, indexed_by, embedding_model
+                    ) VALUES (
+                        :repo_id, :url, 'example', 'acl-race', 'main', 'sha',
+                        FALSE, 'private', :owner_id, 'local-model'
+                    )
+                    """
+                ),
+                {
+                    "repo_id": repo_id,
+                    "url": f"https://example.invalid/{repo_id}",
+                    "owner_id": owner_id,
+                },
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO user_repositories (user_id, repo_id)
+                    VALUES (:owner_id, :repo_id), (:viewer_id, :repo_id)
+                    """
+                ),
+                {
+                    "owner_id": owner_id,
+                    "viewer_id": viewer_id,
+                    "repo_id": repo_id,
+                },
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO repository_files (
+                        file_id, repo_id, file_path, file_name
+                    ) VALUES (:file_id, :repo_id, 'private.py', 'private.py')
+                    """
+                ),
+                {"file_id": file_id, "repo_id": repo_id},
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO code_chunks (
+                        chunk_id, repo_id, file_id, chunk_index, content,
+                        start_line, end_line, token_count
+                    ) VALUES (
+                        :chunk_id, :repo_id, :file_id, 0,
+                        'revocation sentinel', 1, 1, 2
+                    )
+                    """
+                ),
+                {
+                    "chunk_id": chunk_id,
+                    "repo_id": repo_id,
+                    "file_id": file_id,
+                },
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO chunk_embeddings (
+                        chunk_id, repo_id, embedding
+                    ) VALUES (:chunk_id, :repo_id, :embedding)
+                    """
+                ),
+                {
+                    "chunk_id": chunk_id,
+                    "repo_id": repo_id,
+                    "embedding": _vector(),
+                },
+            )
+
+        published = SnapshotService().publish(
+            SnapshotSourceType.REPOSITORY,
+            repo_id,
+            user_id=owner_id,
+        )
+        snapshot_id = published.snapshot_id
+        store = RevokingStore()
+
+        hits = SnapshotService(store=store).search(
+            (snapshot_id,),
+            "revocation",
+            user_id=viewer_id,
+        )
+
+        assert store.revoked is True
+        assert hits == []
+    finally:
+        with get_session() as session:
+            session.execute(
+                text(
+                    """
+                    DELETE FROM source_snapshot_heads
+                    WHERE source_type = 'repo' AND source_id = :repo_id
+                    """
+                ),
+                {"repo_id": repo_id},
+            )
+            if snapshot_id is not None:
+                session.execute(
+                    text(
+                        """
+                        DELETE FROM source_snapshots
+                        WHERE snapshot_id = :snapshot_id
+                        """
+                    ),
+                    {"snapshot_id": snapshot_id},
                 )
             session.execute(
                 text("DELETE FROM repositories WHERE repo_id = :repo_id"),

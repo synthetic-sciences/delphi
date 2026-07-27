@@ -110,10 +110,10 @@ def test_unified_retrieve_merges_and_normalizes(monkeypatch):
     # Disable rerank so we test pure normalization
     monkeypatch.setattr(
         "synsc.services.source_service._maybe_cross_source_rerank",
-        lambda q, h: h,
+        lambda q, h, **_kwargs: h,
     )
     monkeypatch.setattr(
-        source_service, "_attach_trust_scores", lambda h: h
+        source_service, "_attach_trust_scores", lambda h, **_kwargs: h
     )
 
     out = source_service.unified_retrieve(

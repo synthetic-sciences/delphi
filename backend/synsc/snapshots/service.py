@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -11,13 +12,16 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from synsc.database.connection import get_session
-from synsc.providers.contracts import ContentClassification
+from synsc.providers.contracts import (
+    CancellationToken,
+    ContentClassification,
+)
 from synsc.snapshots.contracts import (
     SnapshotItem,
     SnapshotSourceType,
@@ -122,6 +126,16 @@ class SnapshotStore(Protocol):
         user_id: str | None,
     ) -> bool: ...
 
+    def get_search_snapshots(
+        self,
+        session: Session,
+        snapshot_ids: tuple[str, ...],
+        user_id: str | None,
+        *,
+        timeout_ms: int,
+        cancellation: CancellationToken,
+    ) -> list[tuple[SourceSnapshot, bool]]: ...
+
     def list_snapshots(
         self,
         session: Session,
@@ -141,9 +155,22 @@ class SnapshotStore(Protocol):
         limit: int,
     ) -> list[dict[str, Any]]: ...
 
+    def search_items(
+        self,
+        session: Session,
+        snapshot_ids: tuple[str, ...],
+        query: str,
+        limit: int,
+        user_id: str | None,
+        *,
+        timeout_ms: int,
+        source_types: tuple[SnapshotSourceType, ...],
+    ) -> list[dict[str, Any]]: ...
+
 
 _SessionFactory = Callable[[], AbstractContextManager[Session]]
 _RowData = Mapping[str, Any] | RowMapping
+_SnapshotSearchResults = list[dict[str, Any]]
 _CAPTURE_RETRY_SQLSTATES = frozenset({"40001", "40P01"})
 
 
@@ -213,6 +240,95 @@ def _snapshot_from_mapping(row: _RowData) -> SourceSnapshot:
 
 class PostgresSnapshotStore:
     """PostgreSQL implementation that copies source chunks and vectors."""
+
+    _ACCESS_TABLES = {
+        "repo": (
+            "repositories",
+            "repo_id",
+            "user_repositories",
+            "repo_id",
+        ),
+        "paper": (
+            "papers",
+            "paper_id",
+            "user_papers",
+            "paper_id",
+        ),
+        "dataset": (
+            "datasets",
+            "dataset_id",
+            "user_datasets",
+            "dataset_id",
+        ),
+        "docs": (
+            "documentation_sources",
+            "docs_id",
+            "user_documentation_sources",
+            "docs_id",
+        ),
+    }
+
+    @classmethod
+    def _snapshot_access_predicate(
+        cls,
+        alias: str = "snapshot",
+        source_types: tuple[SnapshotSourceType, ...] | None = None,
+    ) -> str:
+        """Build one ACL predicate from fixed table identifiers."""
+
+        branches = []
+        selected = (
+            tuple(source_type.value for source_type in source_types)
+            if source_types is not None
+            else tuple(cls._ACCESS_TABLES)
+        )
+        for (
+            source_type,
+            (
+                source_table,
+                source_id_column,
+                access_table,
+                access_id_column,
+            ),
+        ) in (
+            (source_type, cls._ACCESS_TABLES[source_type])
+            for source_type in selected
+        ):
+            branches.append(
+                f"""
+                (
+                    {alias}.source_type = '{source_type}'
+                    AND EXISTS (
+                        SELECT 1 FROM {source_table} current_source
+                        WHERE CAST(
+                                  current_source.{source_id_column} AS TEXT
+                              ) = {alias}.source_id
+                          AND (
+                              current_source.is_public IS TRUE
+                              OR (
+                                  :user_id IS NOT NULL
+                                  AND (
+                                      CAST(
+                                          current_source.indexed_by AS TEXT
+                                      ) = :user_id
+                                      OR EXISTS (
+                                          SELECT 1 FROM {access_table} access
+                                          WHERE CAST(
+                                                    access.user_id AS TEXT
+                                                ) = :user_id
+                                            AND CAST(
+                                                    access.{access_id_column}
+                                                    AS TEXT
+                                                ) = {alias}.source_id
+                                      )
+                                  )
+                              )
+                          )
+                    )
+                )
+                """
+            )
+        return "(" + " OR ".join(branches) + ")"
 
     _METADATA_QUERIES = {
         SnapshotSourceType.REPOSITORY: """
@@ -914,6 +1030,93 @@ class PostgresSnapshotStore:
             )
         )
 
+    def get_search_snapshots(
+        self,
+        session: Session,
+        snapshot_ids: tuple[str, ...],
+        user_id: str | None,
+        *,
+        timeout_ms: int,
+        cancellation: CancellationToken,
+    ) -> list[tuple[SourceSnapshot, bool]]:
+        """Batch snapshot identity and current-source ACL preflight."""
+
+        deadline = time.monotonic() + timeout_ms / 1000
+
+        def remaining_timeout_ms() -> int:
+            if cancellation.cancelled:
+                raise TimeoutError("Snapshot search cancelled.")
+            remaining = int((deadline - time.monotonic()) * 1000)
+            if remaining <= 0:
+                raise TimeoutError("Snapshot search timed out.")
+            return remaining
+
+        def apply_statement_timeout() -> None:
+            session.execute(
+                text(
+                    """
+                    SELECT set_config(
+                        'statement_timeout',
+                        :statement_timeout,
+                        true
+                    )
+                    """
+                ),
+                {
+                    "statement_timeout": (
+                        f"{remaining_timeout_ms()}ms"
+                    )
+                },
+            )
+
+        apply_statement_timeout()
+        snapshot_statement = text(
+            """
+            SELECT snapshot.*
+            FROM source_snapshots snapshot
+            WHERE snapshot.snapshot_id IN :snapshot_ids
+              AND snapshot.sealed_at IS NOT NULL
+            """
+        ).bindparams(bindparam("snapshot_ids", expanding=True))
+        rows = session.execute(
+            snapshot_statement,
+            {"snapshot_ids": snapshot_ids},
+        ).mappings().all()
+        snapshots = [_snapshot_from_mapping(row) for row in rows]
+        if not snapshots:
+            return []
+
+        source_types = tuple(
+            dict.fromkeys(snapshot.source_type for snapshot in snapshots)
+        )
+        access_predicate = self._snapshot_access_predicate(
+            source_types=source_types,
+        )
+        apply_statement_timeout()
+        access_statement = text(
+            f"""
+            SELECT snapshot.snapshot_id::text AS snapshot_id
+            FROM source_snapshots snapshot
+            WHERE snapshot.snapshot_id IN :snapshot_ids
+              AND snapshot.sealed_at IS NOT NULL
+              AND {access_predicate}
+            """
+        ).bindparams(bindparam("snapshot_ids", expanding=True))
+        accessible_ids = {
+            str(row["snapshot_id"])
+            for row in session.execute(
+                access_statement,
+                {
+                    "snapshot_ids": snapshot_ids,
+                    "user_id": user_id,
+                },
+            ).mappings().all()
+        }
+        return [
+            (snapshot, snapshot.snapshot_id in accessible_ids)
+            for snapshot in snapshots
+        ]
+
     def list_snapshots(
         self,
         session: Session,
@@ -924,118 +1127,13 @@ class PostgresSnapshotStore:
         limit: int,
     ) -> list[SourceSnapshot]:
         clauses = [
-            """
-            (
-                (
-                    snapshot.source_type = 'repo'
-                    AND EXISTS (
-                        SELECT 1 FROM repositories current_source
-                        WHERE CAST(current_source.repo_id AS TEXT)
-                              = snapshot.source_id
-                          AND (
-                              current_source.is_public IS TRUE
-                              OR (
-                                  :user_id IS NOT NULL
-                                  AND (
-                                      CAST(
-                                          current_source.indexed_by AS TEXT
-                                      ) = :user_id
-                                      OR EXISTS (
-                                          SELECT 1
-                                          FROM user_repositories access
-                                          WHERE CAST(access.user_id AS TEXT)
-                                                = :user_id
-                                            AND CAST(access.repo_id AS TEXT)
-                                                = snapshot.source_id
-                                      )
-                                  )
-                              )
-                          )
-                    )
+            self._snapshot_access_predicate(
+                source_types=(
+                    (source_type,)
+                    if source_type is not None
+                    else None
                 )
-                OR (
-                    snapshot.source_type = 'paper'
-                    AND EXISTS (
-                        SELECT 1 FROM papers current_source
-                        WHERE CAST(current_source.paper_id AS TEXT)
-                              = snapshot.source_id
-                          AND (
-                              current_source.is_public IS TRUE
-                              OR (
-                                  :user_id IS NOT NULL
-                                  AND (
-                                      CAST(
-                                          current_source.indexed_by AS TEXT
-                                      ) = :user_id
-                                      OR EXISTS (
-                                          SELECT 1 FROM user_papers access
-                                          WHERE CAST(access.user_id AS TEXT)
-                                                = :user_id
-                                            AND CAST(access.paper_id AS TEXT)
-                                                = snapshot.source_id
-                                      )
-                                  )
-                              )
-                          )
-                    )
-                )
-                OR (
-                    snapshot.source_type = 'dataset'
-                    AND EXISTS (
-                        SELECT 1 FROM datasets current_source
-                        WHERE CAST(current_source.dataset_id AS TEXT)
-                              = snapshot.source_id
-                          AND (
-                              current_source.is_public IS TRUE
-                              OR (
-                                  :user_id IS NOT NULL
-                                  AND (
-                                      CAST(
-                                          current_source.indexed_by AS TEXT
-                                      ) = :user_id
-                                      OR EXISTS (
-                                          SELECT 1
-                                          FROM user_datasets access
-                                          WHERE CAST(access.user_id AS TEXT)
-                                                = :user_id
-                                            AND CAST(access.dataset_id AS TEXT)
-                                                = snapshot.source_id
-                                      )
-                                  )
-                              )
-                          )
-                    )
-                )
-                OR (
-                    snapshot.source_type = 'docs'
-                    AND EXISTS (
-                        SELECT 1
-                        FROM documentation_sources current_source
-                        WHERE CAST(current_source.docs_id AS TEXT)
-                              = snapshot.source_id
-                          AND (
-                              current_source.is_public IS TRUE
-                              OR (
-                                  :user_id IS NOT NULL
-                                  AND (
-                                      CAST(
-                                          current_source.indexed_by AS TEXT
-                                      ) = :user_id
-                                      OR EXISTS (
-                                          SELECT 1
-                                          FROM user_documentation_sources access
-                                          WHERE CAST(access.user_id AS TEXT)
-                                                = :user_id
-                                            AND CAST(access.docs_id AS TEXT)
-                                                = snapshot.source_id
-                                      )
-                                  )
-                              )
-                            )
-                        )
-                    )
             )
-            """
         ]
         params: dict[str, Any] = {"limit": limit, "user_id": user_id}
         if source_type is not None:
@@ -1100,6 +1198,94 @@ class PostgresSnapshotStore:
             for row in rows
         ]
 
+    def search_items(
+        self,
+        session: Session,
+        snapshot_ids: tuple[str, ...],
+        query: str,
+        limit: int,
+        user_id: str | None,
+        *,
+        timeout_ms: int,
+        source_types: tuple[SnapshotSourceType, ...],
+    ) -> list[dict[str, Any]]:
+        session.execute(
+            text(
+                """
+                SELECT set_config(
+                    'statement_timeout',
+                    :statement_timeout,
+                    true
+                )
+                """
+            ),
+            {"statement_timeout": f"{timeout_ms}ms"},
+        )
+        access_predicate = self._snapshot_access_predicate(
+            source_types=source_types,
+        )
+        statement = text(
+            f"""
+            WITH search_query AS (
+                SELECT websearch_to_tsquery('simple', :query) AS value
+            )
+            SELECT item.snapshot_id::text AS snapshot_id,
+                   snapshot.source_id::text AS source_id,
+                   snapshot.source_type,
+                   item.origin_item_id,
+                   item.locator,
+                   item.content,
+                   item.metadata,
+                   LEAST(
+                       1.0,
+                       ts_rank_cd(
+                           to_tsvector('simple', item.content),
+                           search_query.value
+                       )
+                       + CASE
+                           WHEN strpos(lower(item.content), lower(:query)) > 0
+                           THEN 0.2
+                           ELSE 0.0
+                         END
+                   ) AS score
+            FROM source_snapshot_items AS item
+            JOIN source_snapshots AS snapshot
+              ON snapshot.snapshot_id = item.snapshot_id
+            CROSS JOIN search_query
+            WHERE item.snapshot_id IN :snapshot_ids
+              AND snapshot.sealed_at IS NOT NULL
+              AND {access_predicate}
+              AND (
+                  to_tsvector('simple', item.content) @@ search_query.value
+                  OR strpos(lower(item.content), lower(:query)) > 0
+              )
+            ORDER BY score DESC, item.snapshot_id::text, item.ordinal
+            LIMIT :limit
+            """
+        ).bindparams(bindparam("snapshot_ids", expanding=True))
+        rows = session.execute(
+            statement,
+            {
+                "snapshot_ids": snapshot_ids,
+                "query": query,
+                "limit": limit,
+                "user_id": user_id,
+            },
+        ).mappings().all()
+        return [
+            {
+                "snapshot_id": str(row["snapshot_id"]),
+                "source_id": str(row["source_id"]),
+                "source_type": str(row["source_type"]),
+                "origin_item_id": str(row["origin_item_id"]),
+                "locator": str(row["locator"]),
+                "content": str(row["content"]),
+                "score": float(row["score"] or 0.0),
+                "metadata": row.get("metadata") or {},
+            }
+            for row in rows
+        ]
+
 
 class SnapshotService:
     """Publish, resolve, and inspect immutable source versions."""
@@ -1109,9 +1295,11 @@ class SnapshotService:
         *,
         store: SnapshotStore | None = None,
         session_factory: _SessionFactory = get_session,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.store = store or PostgresSnapshotStore()
         self.session_factory = session_factory
+        self.clock = clock
 
     def publish(
         self,
@@ -1276,6 +1464,94 @@ class SnapshotService:
                     user_id,
                 )
             ]
+
+    def search(
+        self,
+        snapshot_ids: tuple[str, ...],
+        query: str,
+        *,
+        user_id: str | None,
+        limit: int = 10,
+        expected_sources: tuple[tuple[str, str], ...] | None = None,
+        timeout_ms: int = 10_000,
+        cancellation: CancellationToken | None = None,
+    ) -> _SnapshotSearchResults:
+        """Search only the named sealed snapshots after current-source ACL checks."""
+
+        if not snapshot_ids:
+            raise ValueError("at least one snapshot_id is required")
+        if len(snapshot_ids) != len(set(snapshot_ids)):
+            raise ValueError("snapshot_ids cannot contain duplicates")
+        if len(snapshot_ids) > 100:
+            raise ValueError("snapshot_ids can contain at most 100 entries")
+        if any(not snapshot_id.strip() for snapshot_id in snapshot_ids):
+            raise ValueError("snapshot_ids cannot contain empty values")
+        if not query.strip():
+            raise ValueError("query must not be empty")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+        if not 1 <= timeout_ms <= 300_000:
+            raise ValueError("timeout_ms must be between 1 and 300000")
+        if expected_sources is not None:
+            if len(expected_sources) != len(snapshot_ids):
+                raise ValueError(
+                    "expected_sources must align with snapshot_ids"
+                )
+            if any(
+                source_type not in {item.value for item in SnapshotSourceType}
+                or not source_id.strip()
+                for source_type, source_id in expected_sources
+            ):
+                raise ValueError("expected_sources contains an invalid source")
+
+        token = cancellation or CancellationToken()
+        deadline = self.clock() + timeout_ms / 1000
+
+        def remaining_timeout_ms() -> int:
+            remaining = int((deadline - self.clock()) * 1000)
+            if token.cancelled:
+                raise TimeoutError("Snapshot search cancelled.")
+            if remaining <= 0:
+                raise TimeoutError("Snapshot search timed out.")
+            return remaining
+
+        with self.session_factory() as session:
+            resolved = self.store.get_search_snapshots(
+                session,
+                snapshot_ids,
+                user_id,
+                timeout_ms=remaining_timeout_ms(),
+                cancellation=token,
+            )
+            remaining_timeout_ms()
+            resolved_by_id = {
+                snapshot.snapshot_id: (snapshot, can_access)
+                for snapshot, can_access in resolved
+            }
+            resolved_source_types: list[SnapshotSourceType] = []
+            for index, snapshot_id in enumerate(snapshot_ids):
+                resolved_snapshot = resolved_by_id.get(snapshot_id)
+                if resolved_snapshot is None:
+                    raise SnapshotNotFoundError("Snapshot not found.")
+                snapshot, can_access = resolved_snapshot
+                if expected_sources is not None and (
+                    snapshot.source_type.value,
+                    snapshot.source_id,
+                ) != expected_sources[index]:
+                    raise SnapshotNotFoundError("Snapshot not found.")
+                if not can_access:
+                    raise SnapshotAccessDeniedError("Snapshot not found.")
+                if snapshot.source_type not in resolved_source_types:
+                    resolved_source_types.append(snapshot.source_type)
+            return self.store.search_items(
+                session,
+                snapshot_ids,
+                query,
+                limit,
+                user_id,
+                timeout_ms=remaining_timeout_ms(),
+                source_types=tuple(resolved_source_types),
+            )
 
 
 def publish_source_snapshot(

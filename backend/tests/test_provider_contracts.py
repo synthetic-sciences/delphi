@@ -14,6 +14,9 @@ from synsc.providers.contracts import (
     ProviderFailure,
     ProviderFailureCode,
     ProviderHealth,
+    ProviderSearchHit,
+    ProviderSearchRequest,
+    ProviderSearchResponse,
     ProviderUnavailableError,
 )
 
@@ -121,3 +124,97 @@ def test_provider_unavailable_error_exposes_only_safe_failure_message() -> None:
     assert error.failure is failure
     assert str(error) == "remote-test: Provider construction failed."
     assert "secret-value" not in str(error)
+
+
+def test_search_provider_contracts_are_bounded_and_json_safe() -> None:
+    request = ProviderSearchRequest(
+        query="validate token",
+        limit=5,
+        timeout_ms=1500,
+        source_ids=("repo-1",),
+        source_types=("repo",),
+        snapshot_ids=(),
+    )
+    hit = ProviderSearchHit(
+        hit_id="chunk-1",
+        text="def validate_token(): ...",
+        score=0.8,
+        title="validate_token",
+        source_type="repo",
+        source_id="repo-1",
+        locator="src/auth.py:10-20",
+        metadata={"language": "python"},
+    )
+    response = ProviderSearchResponse(hits=(hit,))
+
+    assert request.to_dict() == {
+        "query": "validate token",
+        "limit": 5,
+        "timeout_ms": 1500,
+        "max_response_bytes": 2_000_000,
+        "source_ids": ["repo-1"],
+        "source_types": ["repo"],
+        "snapshot_ids": [],
+    }
+    assert response.to_dict()["hits"][0]["metadata"] == {"language": "python"}
+    assert response.consumed_bytes > len(hit.text)
+
+
+def test_snapshot_request_allows_two_versions_of_the_same_source() -> None:
+    request = ProviderSearchRequest(
+        query="historic behavior",
+        source_ids=("repo-1", "repo-1"),
+        source_types=("repo", "repo"),
+        snapshot_ids=("snapshot-1", "snapshot-2"),
+    )
+
+    assert request.source_ids == ("repo-1", "repo-1")
+    assert request.snapshot_ids == ("snapshot-1", "snapshot-2")
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"query": ""},
+        {"limit": 0},
+        {"limit": 101},
+        {"timeout_ms": 0},
+        {"max_response_bytes": 255},
+    ],
+)
+def test_search_provider_request_rejects_invalid_bounds(kwargs: dict[str, object]) -> None:
+    values: dict[str, object] = {
+        "query": "query",
+        "limit": 10,
+        "timeout_ms": 1000,
+        "max_response_bytes": 2_000_000,
+    }
+    values.update(kwargs)
+
+    with pytest.raises(ValueError):
+        ProviderSearchRequest(**values)  # type: ignore[arg-type]
+
+
+def test_search_provider_request_caps_source_bindings() -> None:
+    with pytest.raises(ValueError, match="at most 100"):
+        ProviderSearchRequest(
+            query="bounded",
+            source_ids=tuple(f"repo-{index}" for index in range(101)),
+            source_types=("repo",) * 101,
+        )
+
+
+def test_search_provider_hit_rejects_non_finite_or_out_of_range_scores() -> None:
+    with pytest.raises(ValueError):
+        ProviderSearchHit(hit_id="h", text="x", score=float("nan"))
+    with pytest.raises(ValueError):
+        ProviderSearchHit(hit_id="h", text="x", score=-0.1)
+    with pytest.raises(ValueError):
+        ProviderSearchHit(hit_id="h", text="x", score=1.1)
+    with pytest.raises(TypeError):
+        ProviderSearchHit(
+            hit_id="h",
+            text="x",
+            score=0.5,
+            metadata={"not_json": float("nan")},
+        )

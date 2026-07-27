@@ -131,6 +131,23 @@ synsc-context snapshots list --type repo --source-id SOURCE_ID --json
 synsc-context snapshots show SNAPSHOT_ID --include-items --json
 ```
 
+### Policy-aware retrieval
+
+Retrieval is planned before providers run. The planner searches the local index
+first, keeps pinned snapshot scopes exact, and only admits optional remote
+search when both the deployment network ceiling and the request-level egress
+policy allow it. Plans are deterministic and auditable: admitted steps, denied
+alternatives, provider choices, privacy decisions, and hard call/result/
+provider-hit-payload/deadline budgets are recorded without exposing user
+identities.
+
+Execution binds the plan to the independently authenticated user and revalidates
+plan integrity, provider health and capabilities, and egress immediately before
+each call. Providers receive the remaining deadline, a bounded response
+contract, and cooperative cancellation. Provider failures remain isolated, and
+results carry fused per-provider provenance. The default remains local-only;
+remote providers are optional.
+
 ---
 
 ## MCP Tools

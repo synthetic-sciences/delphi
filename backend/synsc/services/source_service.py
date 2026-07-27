@@ -9,10 +9,12 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from synsc.providers.contracts import CancellationToken
 from synsc.snapshots.service import publish_source_snapshot
 
 logger = structlog.get_logger(__name__)
@@ -252,9 +254,12 @@ def unified_retrieve(
     query: str,
     source_ids: list[str] | None = None,
     source_types: list[str] | None = None,
+    source_bindings: list[tuple[str, str]] | None = None,
     k: int = 10,
     user_id: str | None = None,
     auto_index_on_miss: bool = False,
+    timeout_ms: int = 120_000,
+    cancellation: CancellationToken | None = None,
 ) -> list[dict[str, Any]]:
     """Fan out a query across code / papers / datasets, merge and sort.
 
@@ -271,43 +276,91 @@ def unified_retrieve(
     if auto_index_on_miss:
         _maybe_auto_index_on_miss(query, user_id)
 
-    types = set(source_types or ["repo", "paper", "dataset", "docs"])
+    if not 1 <= timeout_ms <= 300_000:
+        raise ValueError("timeout_ms must be between 1 and 300000")
+    token = cancellation or CancellationToken()
+    deadline = time.monotonic() + timeout_ms / 1000
+
+    def remaining_ms() -> int:
+        return max(1, int((deadline - time.monotonic()) * 1000))
+
+    def stopped() -> bool:
+        return token.cancelled or time.monotonic() >= deadline
+
+    typed_ids: dict[str, list[str]] = {}
+    for source_type, source_id in source_bindings or []:
+        if not source_type.strip() or not source_id.strip():
+            raise ValueError("source_bindings cannot contain empty values")
+        typed_ids.setdefault(source_type, []).append(source_id)
+
+    types = (
+        set(source_types)
+        if source_types is not None
+        else {"repo", "paper", "dataset", "docs"}
+    )
+    if source_bindings:
+        types.intersection_update(typed_ids)
     hits: list[dict[str, Any]] = []
 
-    if "repo" in types:
+    if "repo" in types and not stopped():
         try:
+            repo_ids = typed_ids.get("repo")
+            if repo_ids is None:
+                repo_ids = (
+                    source_ids if _any_looks_like_uuid(source_ids) else None
+                )
             res = _get_search_service(user_id).search_code(
                 query=query,
-                repo_ids=source_ids if _any_looks_like_uuid(source_ids) else None,
+                repo_ids=repo_ids,
                 top_k=k,
                 user_id=user_id,
+                timeout_ms=remaining_ms(),
+                cancellation=token,
             )
             for r in res.get("results", []):
                 hits.append(_norm_code_hit(r))
         except Exception as exc:
             logger.warning("unified_retrieve: code branch failed", error=str(exc))
 
-    if "paper" in types and user_id:
+    if "paper" in types and user_id and not stopped():
         try:
-            res = _get_paper_service(user_id).search_papers(query=query, top_k=k)
+            res = _get_paper_service(user_id).search_papers(
+                query=query,
+                top_k=k,
+                paper_ids=typed_ids.get("paper"),
+                timeout_ms=remaining_ms(),
+                cancellation=token,
+            )
             for r in res.get("results", []):
                 hits.append(_norm_paper_hit(r))
         except Exception as exc:
             logger.warning("unified_retrieve: paper branch failed", error=str(exc))
 
-    if "dataset" in types and user_id:
+    if "dataset" in types and user_id and not stopped():
         try:
-            res = _get_dataset_service(user_id).search_datasets(query=query, top_k=k)
+            res = _get_dataset_service(user_id).search_datasets(
+                query=query,
+                top_k=k,
+                dataset_ids=typed_ids.get("dataset"),
+                timeout_ms=remaining_ms(),
+                cancellation=token,
+            )
             for r in res.get("results", []):
                 hits.append(_norm_dataset_hit(r))
         except Exception as exc:
             logger.warning("unified_retrieve: dataset branch failed", error=str(exc))
 
-    if "docs" in types and user_id:
+    if "docs" in types and user_id and not stopped():
         try:
             from synsc.services.docs_service import get_docs_service
 
-            res = get_docs_service(user_id=user_id).search_docs(query=query, top_k=k)
+            res = get_docs_service(user_id=user_id).search_docs(
+                query=query,
+                top_k=k,
+                docs_ids=typed_ids.get("docs"),
+                timeout_ms=remaining_ms(),
+                cancellation=token,
+            )
             for r in res.get("results", []):
                 hits.append(_norm_docs_hit(r))
         except Exception as exc:
@@ -316,7 +369,12 @@ def unified_retrieve(
     # Apply per-source trust boost so high-authority sources tie-break above
     # low-authority ones at the same retrieval score. Boost is small (max
     # +0.1) so it never overwhelms semantic relevance.
-    hits = _attach_trust_scores(hits)
+    if not stopped():
+        hits = _attach_trust_scores(
+            hits,
+            deadline_monotonic=deadline,
+            cancellation=token,
+        )
 
     # Per-branch normalization: each branch (code / paper / dataset / docs)
     # has its own score distribution. Without normalization, the highest-
@@ -334,7 +392,13 @@ def unified_retrieve(
     # Apply cross-source cross-encoder rerank when the reranker is enabled.
     # Falls back silently to the un-reranked order on failure so a missing
     # model never breaks search.
-    hits = _maybe_cross_source_rerank(query, hits)
+    if not stopped():
+        hits = _maybe_cross_source_rerank(
+            query,
+            hits,
+            deadline_monotonic=deadline,
+            cancellation=token,
+        )
 
     hits.sort(
         key=lambda h: (
@@ -514,7 +578,13 @@ def _normalize_per_branch(hits: list[dict[str, Any]]) -> None:
             h["score"] = (float(h["score"]) - lo) / span
 
 
-def _maybe_cross_source_rerank(query: str, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _maybe_cross_source_rerank(
+    query: str,
+    hits: list[dict[str, Any]],
+    *,
+    deadline_monotonic: float | None = None,
+    cancellation: CancellationToken | None = None,
+) -> list[dict[str, Any]]:
     """Apply cross-encoder rerank to the merged result set when enabled.
 
     Returns the original list on any failure so retrieval stays resilient.
@@ -523,6 +593,17 @@ def _maybe_cross_source_rerank(query: str, hits: list[dict[str, Any]]) -> list[d
     the in-branch reranker for consistency.
     """
     try:
+        def stopped() -> bool:
+            return bool(
+                (cancellation is not None and cancellation.cancelled)
+                or (
+                    deadline_monotonic is not None
+                    and time.monotonic() >= deadline_monotonic
+                )
+            )
+
+        if stopped():
+            return hits
         from synsc.config import get_config
 
         cfg = get_config()
@@ -533,7 +614,12 @@ def _maybe_cross_source_rerank(query: str, hits: list[dict[str, Any]]) -> list[d
         from synsc.services.reranker import get_reranker
 
         reranker = get_reranker()
-        if reranker is None:
+        if reranker is None or stopped():
+            return hits
+        if (
+            deadline_monotonic is not None
+            and deadline_monotonic - time.monotonic() < 0.25
+        ):
             return hits
         # Rerank the top 50 — anything past rank 50 is unlikely to surface.
         head = hits[:50]
@@ -544,13 +630,20 @@ def _maybe_cross_source_rerank(query: str, hits: list[dict[str, Any]]) -> list[d
             content_key="text",
             score_key="score",
         )
+        if stopped():
+            return hits
         return reranked + tail
     except Exception as exc:
         logger.debug("unified_retrieve: cross-source rerank failed", error=str(exc))
         return hits
 
 
-def _attach_trust_scores(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _attach_trust_scores(
+    hits: list[dict[str, Any]],
+    *,
+    deadline_monotonic: float | None = None,
+    cancellation: CancellationToken | None = None,
+) -> list[dict[str, Any]]:
     """Backfill trust_score on hits by fetching the source row.
 
     One DB call per distinct source_id+source_type. Cheap enough at k<=100.
@@ -568,6 +661,8 @@ def _attach_trust_scores(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     scores: dict[tuple[str, str], float] = {}
     try:
+        from sqlalchemy import text
+
         from synsc.database.connection import get_session
         from synsc.database.models import (
             DocumentationSource,
@@ -575,11 +670,43 @@ def _attach_trust_scores(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
             Repository,
         )
 
+        def stopped() -> bool:
+            return bool(
+                (cancellation is not None and cancellation.cancelled)
+                or (
+                    deadline_monotonic is not None
+                    and time.monotonic() >= deadline_monotonic
+                )
+            )
+
+        def apply_statement_timeout(session: Any) -> bool:
+            if stopped():
+                return False
+            timeout_ms = (
+                max(
+                    1,
+                    int(
+                        (deadline_monotonic - time.monotonic())
+                        * 1000
+                    ),
+                )
+                if deadline_monotonic is not None
+                else 120_000
+            )
+            session.execute(
+                text(
+                    "SELECT set_config("
+                    "'statement_timeout', :timeout, true)"
+                ),
+                {"timeout": f"{timeout_ms}ms"},
+            )
+            return True
+
         with get_session() as session:
             repo_ids = [sid for (stype, sid) in need if stype == "repo"]
             paper_ids = [sid for (stype, sid) in need if stype == "paper"]
             docs_ids = [sid for (stype, sid) in need if stype == "docs"]
-            if repo_ids:
+            if repo_ids and apply_statement_timeout(session):
                 for r in (
                     session.query(Repository)
                     .filter(Repository.repo_id.in_(repo_ids))
@@ -588,7 +715,7 @@ def _attach_trust_scores(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     scores[("repo", str(r.repo_id))] = _trust_score(
                         r.repo_metadata
                     )
-            if paper_ids:
+            if paper_ids and apply_statement_timeout(session):
                 for p in (
                     session.query(Paper)
                     .filter(Paper.paper_id.in_(paper_ids))
@@ -597,7 +724,7 @@ def _attach_trust_scores(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     scores[("paper", str(p.paper_id))] = _trust_score(
                         getattr(p, "paper_metadata", None)
                     )
-            if docs_ids:
+            if docs_ids and apply_statement_timeout(session):
                 for d in (
                     session.query(DocumentationSource)
                     .filter(DocumentationSource.docs_id.in_(docs_ids))

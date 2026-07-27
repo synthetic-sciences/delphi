@@ -40,7 +40,7 @@ import httpx
 import numpy as np
 import structlog
 from markdownify import markdownify
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,7 @@ from synsc.database.models import (
     DocumentationSource,
     UserDocumentationSource,
 )
+from synsc.providers.contracts import CancellationToken
 
 logger = structlog.get_logger(__name__)
 
@@ -654,7 +655,14 @@ class DocsService:
         )
         return True
 
-    def search_docs(self, query: str, top_k: int = 10) -> dict[str, Any]:
+    def search_docs(
+        self,
+        query: str,
+        top_k: int = 10,
+        docs_ids: list[str] | None = None,
+        timeout_ms: int = 120_000,
+        cancellation: CancellationToken | None = None,
+    ) -> dict[str, Any]:
         """Hybrid docs search: vector + BM25 full-text fused, then sorted.
 
         Scoped to docs the current user has in their collection. The full-
@@ -666,10 +674,41 @@ class DocsService:
             return {"success": False, "error": "User ID required", "results": []}
 
         try:
+            token = cancellation or CancellationToken()
+            if not 1 <= timeout_ms <= 300_000:
+                raise ValueError("timeout_ms must be between 1 and 300000")
+            deadline_monotonic = time.monotonic() + timeout_ms / 1000
+
+            def remaining_timeout_ms() -> int:
+                return max(
+                    1,
+                    int(
+                        (deadline_monotonic - time.monotonic()) * 1000
+                    ),
+                )
+
+            def stopped() -> bool:
+                return (
+                    token.cancelled
+                    or time.monotonic() >= deadline_monotonic
+                )
+
+            if stopped():
+                return {
+                    "success": False,
+                    "error": "Search cancelled",
+                    "results": [],
+                }
             from synsc.embeddings.generator import get_paper_embedding_generator
 
             gen = get_paper_embedding_generator()
             q_emb = gen.generate_single(query)
+            if stopped():
+                return {
+                    "success": False,
+                    "error": "Search cancelled",
+                    "results": [],
+                }
             emb_list = (
                 q_emb.tolist() if hasattr(q_emb, "tolist") else list(q_emb)
             )
@@ -682,30 +721,84 @@ class DocsService:
             # work with. 3x final-k is the same heuristic hybrid_retrieval
             # uses for code.
             fetch_k = max(top_k * 3, 30)
+            docs_clause = (
+                "AND c.docs_id IN :docs_ids"
+                if docs_ids
+                else ""
+            )
+            vector_statement = text(
+                f"""
+                SELECT c.chunk_id AS chunk_id,
+                       c.docs_id AS docs_id,
+                       c.page_url,
+                       c.heading,
+                       c.content,
+                       1 - (e.embedding <=> CAST(:q AS vector)) AS similarity,
+                       ds.url AS docs_url,
+                       ds.display_name
+                FROM documentation_chunk_embeddings e
+                JOIN documentation_chunks c ON c.chunk_id = e.chunk_id
+                JOIN documentation_sources ds ON ds.docs_id = c.docs_id
+                JOIN user_documentation_sources uds ON uds.docs_id = ds.docs_id
+                WHERE uds.user_id = :uid
+                {docs_clause}
+                ORDER BY e.embedding <=> CAST(:q AS vector)
+                LIMIT :k
+                """
+            )
+            bm25_statement = text(
+                f"""
+                SELECT c.chunk_id AS chunk_id,
+                       c.docs_id AS docs_id,
+                       c.page_url,
+                       c.heading,
+                       c.content,
+                       ts_rank_cd(
+                           c.content_tsv,
+                           plainto_tsquery('english', :q_text)
+                       ) AS similarity,
+                       ds.url AS docs_url,
+                       ds.display_name
+                FROM documentation_chunks c
+                JOIN documentation_sources ds ON ds.docs_id = c.docs_id
+                JOIN user_documentation_sources uds ON uds.docs_id = ds.docs_id
+                WHERE uds.user_id = :uid
+                  AND c.content_tsv @@ plainto_tsquery('english', :q_text)
+                {docs_clause}
+                ORDER BY ts_rank_cd(
+                    c.content_tsv,
+                    plainto_tsquery('english', :q_text)
+                ) DESC
+                LIMIT :k
+                """
+            )
+            if docs_ids:
+                vector_statement = vector_statement.bindparams(
+                    bindparam("docs_ids", expanding=True)
+                )
+                bm25_statement = bm25_statement.bindparams(
+                    bindparam("docs_ids", expanding=True)
+                )
 
             with get_session() as session:
+                session.execute(
+                    text(
+                        "SELECT set_config("
+                        "'statement_timeout', :timeout, true)"
+                    ),
+                    {"timeout": f"{remaining_timeout_ms()}ms"},
+                )
+                vector_params: dict[str, Any] = {
+                    "q": emb_str,
+                    "uid": uid,
+                    "k": fetch_k,
+                }
+                if docs_ids:
+                    vector_params["docs_ids"] = docs_ids
                 vec_rows: Sequence[RowMapping] = (
                     session.execute(
-                        text(
-                            """
-                            SELECT c.chunk_id AS chunk_id,
-                                   c.docs_id AS docs_id,
-                                   c.page_url,
-                                   c.heading,
-                                   c.content,
-                                   1 - (e.embedding <=> CAST(:q AS vector)) AS similarity,
-                                   ds.url AS docs_url,
-                                   ds.display_name
-                            FROM documentation_chunk_embeddings e
-                            JOIN documentation_chunks c ON c.chunk_id = e.chunk_id
-                            JOIN documentation_sources ds ON ds.docs_id = c.docs_id
-                            JOIN user_documentation_sources uds ON uds.docs_id = ds.docs_id
-                            WHERE uds.user_id = :uid
-                            ORDER BY e.embedding <=> CAST(:q AS vector)
-                            LIMIT :k
-                            """
-                        ),
-                        {"q": emb_str, "uid": uid, "k": fetch_k},
+                        vector_statement,
+                        vector_params,
                     )
                     .mappings()
                     .all()
@@ -715,28 +808,34 @@ class DocsService:
                 # column isn't present (older bench DBs).
                 bm25_rows: Sequence[RowMapping] = []
                 try:
+                    if stopped():
+                        return {
+                            "success": False,
+                            "error": "Search cancelled",
+                            "results": [],
+                        }
+                    session.execute(
+                        text(
+                            "SELECT set_config("
+                            "'statement_timeout', :timeout, true)"
+                        ),
+                        {
+                            "timeout": (
+                                f"{remaining_timeout_ms()}ms"
+                            )
+                        },
+                    )
+                    bm25_params: dict[str, Any] = {
+                        "q_text": query,
+                        "uid": uid,
+                        "k": fetch_k,
+                    }
+                    if docs_ids:
+                        bm25_params["docs_ids"] = docs_ids
                     bm25_rows = (
                         session.execute(
-                            text(
-                                """
-                                SELECT c.chunk_id AS chunk_id,
-                                       c.docs_id AS docs_id,
-                                       c.page_url,
-                                       c.heading,
-                                       c.content,
-                                       ts_rank_cd(c.content_tsv, plainto_tsquery('english', :q_text)) AS similarity,
-                                       ds.url AS docs_url,
-                                       ds.display_name
-                                FROM documentation_chunks c
-                                JOIN documentation_sources ds ON ds.docs_id = c.docs_id
-                                JOIN user_documentation_sources uds ON uds.docs_id = ds.docs_id
-                                WHERE uds.user_id = :uid
-                                  AND c.content_tsv @@ plainto_tsquery('english', :q_text)
-                                ORDER BY ts_rank_cd(c.content_tsv, plainto_tsquery('english', :q_text)) DESC
-                                LIMIT :k
-                                """
-                            ),
-                            {"q_text": query, "uid": uid, "k": fetch_k},
+                            bm25_statement,
+                            bm25_params,
                         )
                         .mappings()
                         .all()

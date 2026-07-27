@@ -8,7 +8,11 @@ from synsc.providers.contracts import (
     ProviderFailure,
     ProviderFailureCode,
     ProviderHealth,
+    ProviderSearchHit,
+    ProviderSearchRequest,
+    ProviderSearchResponse,
     ProviderUnavailableError,
+    SearchProvider,
 )
 from synsc.providers.policy import (
     EgressDecision,
@@ -45,7 +49,11 @@ __all__ = [
     "ProviderRegistration",
     "ProviderRegistry",
     "ProviderRegistryError",
+    "ProviderSearchHit",
+    "ProviderSearchRequest",
+    "ProviderSearchResponse",
     "ProviderUnavailableError",
+    "SearchProvider",
     "get_provider_registry",
     "reset_provider_registry",
 ]
