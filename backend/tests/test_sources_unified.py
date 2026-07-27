@@ -95,14 +95,207 @@ def test_unified_search_dedupes_by_text_hash(monkeypatch):
     assert {h["chunk_id"] for h in result["results"]} == {"c1", "c2"}
 
 
-def test_unified_search_web_mode_returns_stub():
+def test_unified_search_web_mode_uses_policy_executor(monkeypatch):
+    from synsc.planner.contracts import (
+        QueryExecution,
+        RetrievalHit,
+        RetrievalProvenance,
+    )
+    from synsc.providers.contracts import ExecutionLocation
+    from synsc.services import query_planner_service, source_service
+
+    captured = {}
+
+    def execute(request, *, authenticated_user_id):
+        captured["request"] = request
+        captured["authenticated_user_id"] = authenticated_user_id
+        return QueryExecution(
+            plan_id="plan-1",
+            hits=(
+                RetrievalHit(
+                    result_id="result-1",
+                    text="Current public changes.",
+                    score=1.0,
+                    title="Release notes",
+                    url="https://example.com/releases",
+                    source_type="web",
+                    source_id="https://example.com/releases",
+                    locator="https://example.com/releases",
+                    provenance=(
+                        RetrievalProvenance(
+                            step_id="01-provider-search",
+                            provider="firecrawl-web",
+                            execution=ExecutionLocation.REMOTE,
+                            rank=1,
+                            provider_score=1.0,
+                        ),
+                    ),
+                ),
+            ),
+            records=(),
+            stop_reason="completed",
+            calls_used=1,
+            remote_calls_used=1,
+            bytes_used=200,
+            elapsed_ms=5,
+        )
+
+    monkeypatch.setattr(query_planner_service, "execute_query", execute)
+
+    result = source_service.unified_search(
+        query="latest public release",
+        k=10,
+        mode="web",
+        user_id="u1",
+        network="online",
+        query_classification="public",
+        preferred_search_provider="firecrawl-web",
+    )
+
+    assert result["mode_applied"] == "web"
+    assert result["total"] == 1
+    assert result["results"][0]["chunk_id"] == "result-1"
+    assert result["results"][0]["url"] == "https://example.com/releases"
+    assert result["provider_execution"] == {
+        "stop_reason": "completed",
+        "calls_used": 1,
+        "remote_calls_used": 1,
+        "bytes_used": 200,
+        "elapsed_ms": 5,
+        "records": [],
+    }
+    request = captured["request"]
+    assert request.source_types == ()
+    assert request.include_web is True
+    assert request.network.value == "online"
+    assert request.query_classification.value == "public"
+    assert request.preferred_search_provider == "firecrawl-web"
+    assert captured["authenticated_user_id"] == "u1"
+
+
+def test_unified_search_web_mode_is_local_only_and_private_by_default(
+    monkeypatch,
+):
+    from synsc.planner.contracts import QueryExecution
+    from synsc.services import query_planner_service, source_service
+
+    captured = {}
+
+    def execute(request, *, authenticated_user_id):
+        captured["request"] = request
+        return QueryExecution(
+            plan_id="plan-1",
+            hits=(),
+            records=(),
+            stop_reason="completed",
+            calls_used=0,
+            remote_calls_used=0,
+            bytes_used=0,
+            elapsed_ms=0,
+        )
+
+    monkeypatch.setattr(query_planner_service, "execute_query", execute)
+
+    result = source_service.unified_search(
+        query="possibly private query",
+        mode="web",
+    )
+
+    assert captured["request"].network.value == "local_only"
+    assert captured["request"].query_classification.value == "private"
+    assert result["results"] == []
+    assert result["notice"] == (
+        "Web search was not executed; check request consent, deployment "
+        "policy, provider availability, and credentials."
+    )
+
+
+def test_unified_search_web_mode_rejects_invalid_policy_values():
     from synsc.services.source_service import unified_search
 
-    result = unified_search(query="anything", k=10, mode="web")
-    assert result["mode_applied"] == "web"
-    assert result["results"] == []
-    assert result["total"] == 0
-    assert result["notice"] == "web mode not yet implemented"
+    with pytest.raises(ValueError, match="unsupported network policy"):
+        unified_search(query="query", mode="web", network="internet")
+    with pytest.raises(ValueError, match="unsupported query classification"):
+        unified_search(
+            query="query",
+            mode="web",
+            query_classification="secret",
+        )
+
+
+def test_unified_search_web_mode_runs_registered_provider_end_to_end(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from synsc.providers.contracts import (
+        ContentClassification,
+        ExecutionLocation,
+        ProviderCapability,
+        ProviderDescriptor,
+        ProviderSearchHit,
+        ProviderSearchResponse,
+    )
+    from synsc.providers.policy import NetworkPolicy
+    from synsc.providers.registry import ProviderRegistry
+    from synsc.services import query_planner_service, source_service
+
+    class Provider:
+        def search(self, request):
+            return ProviderSearchResponse(
+                hits=(
+                    ProviderSearchHit(
+                        hit_id="web-1",
+                        text="Current release notes.",
+                        score=1.0,
+                        title="Release",
+                        url="https://example.com/release",
+                        source_type="web",
+                        source_id="https://example.com/release",
+                        locator="https://example.com/release",
+                    ),
+                )
+            )
+
+    registry = ProviderRegistry()
+    registry.register(
+        ProviderDescriptor(
+            name="remote-web",
+            version="1",
+            capabilities=frozenset({ProviderCapability.SEARCH}),
+            execution=ExecutionLocation.REMOTE,
+            accepted_classifications=frozenset(
+                {ContentClassification.PUBLIC}
+            ),
+        ),
+        lambda **_: Provider(),
+    )
+    monkeypatch.setattr(
+        query_planner_service,
+        "get_provider_registry",
+        lambda: registry,
+    )
+    monkeypatch.setattr(
+        query_planner_service,
+        "get_provider_policy_config",
+        lambda: SimpleNamespace(
+            network_policy=NetworkPolicy.ONLINE,
+            allowed_remote_providers=[],
+        ),
+    )
+
+    result = source_service.unified_search(
+        query="current release",
+        mode="web",
+        network="online",
+        query_classification="public",
+        preferred_search_provider="remote-web",
+    )
+
+    assert result["total"] == 1
+    assert result["results"][0]["text"] == "Current release notes."
+    assert result["provider_execution"]["remote_calls_used"] == 1
+    assert result["provider_execution"]["records"][0]["status"] == "success"
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +571,52 @@ def test_post_v1_search_invalid_mode_returns_400(client):
     r = client.post("/v1/search", json={"query": "q", "mode": "zoomzoom"})
     assert r.status_code == 400
     assert "unsupported search mode" in r.json()["detail"]
+
+
+def test_post_v1_search_forwards_explicit_web_policy_controls(
+    client,
+    monkeypatch,
+):
+    from synsc.services import source_service
+
+    captured = {}
+
+    def fake_search(**kwargs):
+        captured.update(kwargs)
+        return {"results": [], "total": 0, "mode_applied": "web"}
+
+    monkeypatch.setattr(source_service, "unified_search", fake_search)
+
+    response = client.post(
+        "/v1/search",
+        json={
+            "query": "latest public release",
+            "mode": "web",
+            "network": "allowlisted",
+            "query_classification": "public",
+            "allowed_providers": ["firecrawl-web"],
+            "preferred_search_provider": "firecrawl-web",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["network"] == "allowlisted"
+    assert captured["query_classification"] == "public"
+    assert captured["allowed_providers"] == ["firecrawl-web"]
+    assert captured["preferred_search_provider"] == "firecrawl-web"
+
+
+def test_post_v1_search_rejects_invalid_web_policy_control(client):
+    response = client.post(
+        "/v1/search",
+        json={
+            "query": "latest public release",
+            "mode": "web",
+            "network": "internet",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_get_v1_sources_returns_listing(client, monkeypatch):

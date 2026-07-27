@@ -781,3 +781,53 @@ def test_executor_counts_canonical_hit_array_framing_across_steps() -> None:
     assert result.bytes_used <= byte_budget
     assert len(result.hits) == 1
     assert result.stop_reason != "completed"
+
+
+def test_executor_closes_constructed_provider_after_success_and_failure() -> None:
+    closed: list[str] = []
+
+    class CloseableProvider:
+        def __init__(self, *, fail: bool) -> None:
+            self.fail = fail
+
+        def search(
+            self,
+            request: ProviderSearchRequest,
+        ) -> ProviderSearchResponse:
+            if self.fail:
+                raise RuntimeError("provider failure")
+            return ProviderSearchResponse()
+
+        def close(self) -> None:
+            closed.append("closed")
+
+    registry = ProviderRegistry()
+    registry.register(
+        _descriptor("local-index", ExecutionLocation.LOCAL),
+        lambda **_: CloseableProvider(fail=False),
+    )
+    success_plan = QueryPlanner(registry=registry).plan(
+        QueryRequest(query="success", user_id="u1")
+    )
+
+    success = QueryExecutor(registry=registry).execute(
+        success_plan,
+        authenticated_user_id="u1",
+    )
+
+    failing_registry = ProviderRegistry()
+    failing_registry.register(
+        _descriptor("local-index", ExecutionLocation.LOCAL),
+        lambda **_: CloseableProvider(fail=True),
+    )
+    failure_plan = QueryPlanner(registry=failing_registry).plan(
+        QueryRequest(query="failure", user_id="u1")
+    )
+    failure = QueryExecutor(registry=failing_registry).execute(
+        failure_plan,
+        authenticated_user_id="u1",
+    )
+
+    assert success.records[0].status == "success"
+    assert failure.records[0].status == "failure"
+    assert closed == ["closed", "closed"]

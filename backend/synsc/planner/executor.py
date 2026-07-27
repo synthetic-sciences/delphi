@@ -7,6 +7,7 @@ import json
 import time
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from threading import Lock, Thread
 from typing import Any
@@ -219,14 +220,20 @@ class QueryExecutor:
 
         def call() -> ProviderSearchResponse:
             provider = self.registry.create(step.provider, user_id=user_id)
-            if not isinstance(provider, SearchProvider):
-                raise TypeError("provider does not implement search")
-            response = provider.search(effective_request)
-            if not isinstance(response, ProviderSearchResponse):
-                raise TypeError("provider returned an invalid search response")
-            if response.consumed_bytes > effective_request.max_response_bytes:
-                raise TypeError("provider response exceeded its byte ceiling")
-            return response
+            try:
+                if not isinstance(provider, SearchProvider):
+                    raise TypeError("provider does not implement search")
+                response = provider.search(effective_request)
+                if not isinstance(response, ProviderSearchResponse):
+                    raise TypeError("provider returned an invalid search response")
+                if response.consumed_bytes > effective_request.max_response_bytes:
+                    raise TypeError("provider response exceeded its byte ceiling")
+                return response
+            finally:
+                close = getattr(provider, "close", None)
+                if callable(close):
+                    with suppress(BaseException):
+                        close()
 
         state = _PROVIDER_CALLS.reserve(
             self.registry,

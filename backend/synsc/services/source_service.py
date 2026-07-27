@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from synsc.providers.contracts import CancellationToken
+from synsc.providers.contracts import (
+    CancellationToken,
+    ContentClassification,
+)
+from synsc.providers.policy import NetworkPolicy
 from synsc.snapshots.service import publish_source_snapshot
 
 logger = structlog.get_logger(__name__)
@@ -781,6 +785,10 @@ def unified_search(
     k: int = 10,
     mode: str = "precise",
     user_id: str | None = None,
+    network: str = "local_only",
+    query_classification: str = "private",
+    allowed_providers: list[str] | None = None,
+    preferred_search_provider: str | None = None,
 ) -> dict[str, Any]:
     """Unified search across code + papers + datasets.
 
@@ -798,7 +806,15 @@ def unified_search(
     normalized = normalize_mode(mode)
 
     if normalized == "web":
-        return _web_search_stub(query, k)
+        return _web_search(
+            query=query,
+            k=k,
+            user_id=user_id,
+            network=network,
+            query_classification=query_classification,
+            allowed_providers=allowed_providers,
+            preferred_search_provider=preferred_search_provider,
+        )
 
     resolved_ids: list[str] | None = None
     if source_ids:
@@ -838,15 +854,96 @@ def unified_search(
     return {"results": out, "total": len(out), "mode_applied": normalized}
 
 
-def _web_search_stub(query: str, k: int) -> dict[str, Any]:
-    """Stub for web-mode search. Real provider wiring is a P2 follow-up."""
-    logger.info("unified_search: web mode stub returned empty", query=query)
-    return {
-        "results": [],
-        "total": 0,
-        "mode_applied": "web",
-        "notice": "web mode not yet implemented",
+def _web_search(
+    *,
+    query: str,
+    k: int,
+    user_id: str | None,
+    network: str,
+    query_classification: str,
+    allowed_providers: list[str] | None,
+    preferred_search_provider: str | None,
+) -> dict[str, Any]:
+    """Execute a web-only request through the policy-aware query planner."""
+
+    from synsc.planner.contracts import QueryBudget, QueryRequest
+    from synsc.services import query_planner_service
+
+    try:
+        parsed_network = NetworkPolicy(network)
+    except ValueError as exc:
+        raise ValueError(f"unsupported network policy: {network}") from exc
+    try:
+        parsed_classification = ContentClassification(query_classification)
+    except ValueError as exc:
+        raise ValueError(
+            f"unsupported query classification: {query_classification}"
+        ) from exc
+
+    execution = query_planner_service.execute_query(
+        QueryRequest(
+            query=query,
+            user_id=user_id,
+            source_types=(),
+            include_web=True,
+            query_classification=parsed_classification,
+            network=parsed_network,
+            allowed_providers=frozenset(allowed_providers or ()),
+            preferred_search_provider=preferred_search_provider,
+            budget=QueryBudget(
+                max_calls=1,
+                max_remote_calls=1,
+                max_results=k,
+                max_response_bytes=2_000_000,
+                deadline_ms=15_000,
+            ),
+        ),
+        authenticated_user_id=user_id,
+    )
+    results = []
+    for hit in execution.hits:
+        payload = hit.to_dict()
+        results.append(
+            {
+                "source_type": hit.source_type or "web",
+                "source_id": hit.source_id or hit.url or "",
+                "chunk_id": hit.result_id,
+                "text": hit.text,
+                "score": hit.score,
+                "title": hit.title,
+                "url": hit.url,
+                "path": hit.locator,
+                "line_no": None,
+                "metadata": payload["metadata"],
+                "provenance": payload["provenance"],
+            }
+        )
+
+    provider_execution = {
+        "stop_reason": execution.stop_reason,
+        "calls_used": execution.calls_used,
+        "remote_calls_used": execution.remote_calls_used,
+        "bytes_used": execution.bytes_used,
+        "elapsed_ms": execution.elapsed_ms,
+        "records": [record.to_dict() for record in execution.records],
     }
+    response: dict[str, Any] = {
+        "results": results,
+        "total": len(results),
+        "mode_applied": "web",
+        "provider_execution": provider_execution,
+    }
+    if not results and execution.remote_calls_used == 0:
+        response["notice"] = (
+            "Web search was not executed; check request consent, deployment "
+            "policy, provider availability, and credentials."
+        )
+    elif not results:
+        response["notice"] = (
+            "Web search returned no results; inspect provider_execution for "
+            "the normalized provider outcome."
+        )
+    return response
 
 
 # ---------------------------------------------------------------------------

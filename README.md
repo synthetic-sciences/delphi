@@ -148,6 +148,12 @@ contract, and cooperative cancellation. Provider failures remain isolated, and
 results carry fused per-provider provenance. The default remains local-only;
 remote providers are optional.
 
+An optional hosted adapter supplies web search and bounded public-site crawling
+without changing the local-first default. It is registered lazily, requires no
+cloud credential at startup, and cannot run unless both deployment policy and
+the individual request permit public egress. See
+[`docs/env-advanced.md`](docs/env-advanced.md#optional-provider-network-policy).
+
 ---
 
 ## MCP Tools

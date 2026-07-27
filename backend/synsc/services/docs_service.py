@@ -25,9 +25,7 @@ Bench-driven refinements (May 2026):
 """
 from __future__ import annotations
 
-import ipaddress
 import re
-import socket
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -35,7 +33,6 @@ from collections.abc import Iterator, Sequence
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-import httpcore
 import httpx
 import numpy as np
 import structlog
@@ -50,6 +47,18 @@ from synsc.database.models import (
     DocumentationSource,
     UserDocumentationSource,
 )
+from synsc.network.public_http import (
+    PublicHTTPTransport as _PublicHTTPTransport,
+)
+from synsc.network.public_http import (
+    PublicNetworkBackend as _PublicNetworkBackend,  # noqa: F401
+)
+from synsc.network.public_http import (
+    resolve_public_addresses as _resolve_public_addresses,  # noqa: F401
+)
+from synsc.network.public_http import (
+    validate_public_http_url as _validate_public_url,
+)
 from synsc.providers.contracts import CancellationToken
 
 logger = structlog.get_logger(__name__)
@@ -63,85 +72,6 @@ _CHUNK_TOKENS = 800
 _CHUNK_OVERLAP = 80
 
 _SM_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-
-
-def _resolve_public_addresses(hostname: str, port: int) -> tuple[str, ...]:
-    """Resolve once and return only globally routable addresses."""
-    try:
-        resolved = socket.getaddrinfo(
-            hostname,
-            port,
-            type=socket.SOCK_STREAM,
-        )
-    except socket.gaierror as exc:
-        raise ValueError("Documentation URL hostname could not be resolved") from exc
-
-    addresses = tuple(dict.fromkeys(str(item[4][0]) for item in resolved))
-    parsed_addresses = tuple(ipaddress.ip_address(address) for address in addresses)
-    if not parsed_addresses or any(
-        not address.is_global for address in parsed_addresses
-    ):
-        raise ValueError(
-            "Documentation URL must resolve only to public IP addresses"
-        )
-    return addresses
-
-
-def _validate_public_url(url: str) -> None:
-    """Reject non-HTTP and non-public documentation crawl targets."""
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("Documentation URL must be a public HTTP(S) URL")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("Documentation URL must not contain credentials")
-
-    _resolve_public_addresses(
-        parsed.hostname,
-        parsed.port or (443 if parsed.scheme == "https" else 80),
-    )
-
-
-class _PublicNetworkBackend(httpcore.SyncBackend):
-    """Pin connections to addresses validated during the connect operation."""
-
-    def connect_tcp(
-        self,
-        host: str,
-        port: int,
-        timeout: float | None = None,
-        local_address: str | None = None,
-        socket_options: Any = None,
-    ) -> httpcore.NetworkStream:
-        last_error: Exception | None = None
-        for address in _resolve_public_addresses(host, port):
-            try:
-                # httpcore retains the original hostname for the Host header,
-                # TLS SNI, and certificate checks. Only TCP uses this pinned IP.
-                return super().connect_tcp(
-                    address,
-                    port,
-                    timeout=timeout,
-                    local_address=local_address,
-                    socket_options=socket_options,
-                )
-            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
-                last_error = exc
-        assert last_error is not None
-        raise last_error
-
-
-class _PublicHTTPTransport(httpx.HTTPTransport):
-    """HTTP transport whose sockets use the public-only pinned resolver."""
-
-    def __init__(self) -> None:
-        super().__init__(trust_env=False)
-        self._pool.close()
-        self._pool = httpcore.ConnectionPool(
-            ssl_context=httpx.create_ssl_context(trust_env=False),
-            max_connections=20,
-            max_keepalive_connections=10,
-            network_backend=_PublicNetworkBackend(),
-        )
 
 
 class DocsService:

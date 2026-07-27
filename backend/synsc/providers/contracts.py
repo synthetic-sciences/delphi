@@ -355,8 +355,131 @@ class ProviderSearchResponse:
         }
 
 
+@dataclass(frozen=True)
+class ProviderCrawlRequest:
+    """Bounded input for an optional single-site crawl provider."""
+
+    url: str
+    max_pages: int = 20
+    max_depth: int = 2
+    timeout_ms: int = 60_000
+    max_response_bytes: int = 10_000_000
+    same_origin_only: bool = True
+    cancellation: CancellationToken = field(
+        default_factory=CancellationToken,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        if not self.url.strip():
+            raise ValueError("crawl url must not be empty")
+        if len(self.url) > 4096:
+            raise ValueError("crawl url must not exceed 4096 characters")
+        if not 1 <= self.max_pages <= 100:
+            raise ValueError("crawl max_pages must be between 1 and 100")
+        if not 0 <= self.max_depth <= 10:
+            raise ValueError("crawl max_depth must be between 0 and 10")
+        if not 1_000 <= self.timeout_ms <= 300_000:
+            raise ValueError("crawl timeout_ms must be between 1000 and 300000")
+        if not 256 <= self.max_response_bytes <= 100_000_000:
+            raise ValueError(
+                "crawl max_response_bytes must be between 256 and 100000000"
+            )
+        if not isinstance(self.same_origin_only, bool):
+            raise TypeError("same_origin_only must be a boolean")
+        if not isinstance(self.cancellation, CancellationToken):
+            raise TypeError("cancellation must be a CancellationToken")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "url": self.url,
+            "max_pages": self.max_pages,
+            "max_depth": self.max_depth,
+            "timeout_ms": self.timeout_ms,
+            "max_response_bytes": self.max_response_bytes,
+            "same_origin_only": self.same_origin_only,
+        }
+
+
+@dataclass(frozen=True)
+class ProviderCrawlPage:
+    """One normalized page returned by a crawl provider."""
+
+    page_id: str
+    url: str
+    markdown: str = field(repr=False)
+    title: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.page_id.strip():
+            raise ValueError("crawl page_id must not be empty")
+        if not self.url.strip():
+            raise ValueError("crawl page url must not be empty")
+        if not self.markdown:
+            raise ValueError("crawl page markdown must not be empty")
+        if self.title is not None and not self.title.strip():
+            raise ValueError("crawl page title must not be empty")
+        frozen = _freeze_json(self.metadata)
+        assert isinstance(frozen, Mapping)
+        object.__setattr__(self, "metadata", frozen)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "page_id": self.page_id,
+            "url": self.url,
+            "markdown": self.markdown,
+            "title": self.title,
+            "metadata": _copy_json(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
+class ProviderCrawlResponse:
+    """Validated crawl output with a conservative serialized-byte count."""
+
+    pages: tuple[ProviderCrawlPage, ...] = ()
+    job_id: str | None = None
+    truncated: bool = False
+    consumed_bytes: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.pages, tuple) or any(
+            not isinstance(page, ProviderCrawlPage) for page in self.pages
+        ):
+            raise TypeError("crawl response pages must be a tuple of ProviderCrawlPage")
+        if self.job_id is not None and not self.job_id.strip():
+            raise ValueError("crawl job_id must not be empty")
+        if not isinstance(self.truncated, bool):
+            raise TypeError("crawl truncated must be a boolean")
+        encoded = json.dumps(
+            [page.to_dict() for page in self.pages],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        object.__setattr__(self, "consumed_bytes", len(encoded))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "pages": [page.to_dict() for page in self.pages],
+            "job_id": self.job_id,
+            "truncated": self.truncated,
+            "consumed_bytes": self.consumed_bytes,
+        }
+
+
 @runtime_checkable
 class SearchProvider(Protocol):
     """Runtime-checkable boundary implemented by search adapters."""
 
     def search(self, request: ProviderSearchRequest) -> ProviderSearchResponse: ...
+
+
+@runtime_checkable
+class CrawlProvider(Protocol):
+    """Runtime-checkable boundary implemented by crawl adapters."""
+
+    def crawl(self, request: ProviderCrawlRequest) -> ProviderCrawlResponse: ...

@@ -61,6 +61,15 @@ def _gemini_research(**kwargs: Any) -> object:
     return GeminiResearchProvider(api_key=api_key)
 
 
+def _firecrawl_web(**kwargs: Any) -> object:
+    from synsc.providers.firecrawl import FirecrawlProvider
+
+    api_key = kwargs.get("api_key")
+    return FirecrawlProvider(
+        api_key=api_key if isinstance(api_key, str) else None
+    )
+
+
 def _connector(source_type: str) -> object:
     from synsc.services.connectors import get_connector
 
@@ -156,6 +165,29 @@ def register_builtin_providers(registry: ProviderRegistry) -> None:
             extra_capabilities=frozenset({ProviderCapability.RESEARCH}),
         ),
         _gemini_research,
+        priority=100,
+    )
+    registry.register(
+        ProviderDescriptor(
+            name="firecrawl-web",
+            version="2",
+            capabilities=frozenset(
+                {
+                    ProviderCapability.SEARCH,
+                    ProviderCapability.CRAWL,
+                }
+            ),
+            execution=ExecutionLocation.REMOTE,
+            accepted_classifications=frozenset(
+                {ContentClassification.PUBLIC}
+            ),
+            health=ProviderHealth.READY,
+            supports_cancellation=True,
+            supports_retry=True,
+            max_request_bytes=16_384,
+            max_response_bytes=10_000_000,
+        ),
+        _firecrawl_web,
         priority=100,
     )
     registry.register(
