@@ -11,7 +11,11 @@
 
 export const API_URL = "";
 
-export const DIRECT_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+// Browser requests must remain same-origin so the httpOnly session cookie set
+// through the Next.js proxy is sent consistently in local, container, and
+// split-host deployments. The server-side rewrite still uses
+// INTERNAL_API_URL/NEXT_PUBLIC_API_URL to reach the backend.
+export const DIRECT_API_URL = API_URL;
 
 /**
  * Check if user has a valid session.
