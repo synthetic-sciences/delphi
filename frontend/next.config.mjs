@@ -24,9 +24,9 @@ const nextConfig = {
     // address that *server* can reach. In docker-compose that's the api
     // service hostname (`http://api:8742`), not `localhost:8742` which
     // would resolve back to the frontend container itself and 500.
-    // NEXT_PUBLIC_API_URL stays the browser-facing value (baked into the
-    // client bundle for direct fetch calls in lib/api.ts) and is the
-    // fallback for `next dev` outside docker.
+    // NEXT_PUBLIC_API_URL is retained as a server-side compatibility fallback
+    // for existing deployments. Browser calls stay same-origin and reach this
+    // target only through the proxy, preserving httpOnly session cookies.
     const apiUrl =
       process.env.INTERNAL_API_URL ||
       process.env.NEXT_PUBLIC_API_URL ||

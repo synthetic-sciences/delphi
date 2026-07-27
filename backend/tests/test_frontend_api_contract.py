@@ -31,3 +31,10 @@ def test_frontend_proxy_covers_v2_workspace_routes() -> None:
     config = FRONTEND_CONFIG.read_text()
 
     assert "{ source: '/v2/:path*'," in config
+
+
+def test_browser_api_calls_stay_same_origin_for_session_cookies() -> None:
+    source = FRONTEND_API.read_text()
+
+    assert "export const DIRECT_API_URL = API_URL;" in source
+    assert 'process.env.NEXT_PUBLIC_API_URL || ""' not in source
