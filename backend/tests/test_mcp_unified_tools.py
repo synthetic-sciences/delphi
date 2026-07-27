@@ -78,6 +78,11 @@ def test_mcp_index_source_repo_dispatches(monkeypatch):
     monkeypatch.setattr(
         source_service, "_get_indexing_service", lambda user_id: fake_indexer
     )
+    monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        lambda *args, **kwargs: {"snapshot_id": "snapshot-repo"},
+    )
 
     server = create_server()
     tool = server._tool_manager._tools["index_source"]
@@ -116,6 +121,7 @@ def test_mcp_index_source_docs_dispatches(monkeypatch):
     import synsc.api.mcp_server as mcp_mod
     from synsc.api.mcp_server import create_server
     from synsc.services import docs_service as ds_mod
+    from synsc.services import source_service
 
     # Docs branch requires user_id; pre-seed the per-test contextvar.
     mcp_mod._current_user_id.set("u1")
@@ -127,6 +133,11 @@ def test_mcp_index_source_docs_dispatches(monkeypatch):
         "docs_id": "d-uuid",
     }
     monkeypatch.setattr(ds_mod, "get_docs_service", lambda user_id=None: fake)
+    monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        lambda *args, **kwargs: {"snapshot_id": "snapshot-docs"},
+    )
 
     server = create_server()
     tool = server._tool_manager._tools["index_source"]

@@ -153,6 +153,90 @@ def cmd_policy_check(args: argparse.Namespace) -> int:
     return 0 if allowed else 2
 
 
+def cmd_snapshots_list(args: argparse.Namespace) -> int:
+    """List source snapshots visible to the selected identity."""
+
+    from synsc.snapshots.contracts import SnapshotSourceType
+    from synsc.snapshots.service import SnapshotService
+
+    source_type = (
+        SnapshotSourceType(args.source_type)
+        if args.source_type is not None
+        else None
+    )
+    snapshots = SnapshotService().list(
+        user_id=args.user_id,
+        source_type=source_type,
+        source_id=args.source_id,
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps({"snapshots": snapshots}, sort_keys=True))
+        return 0
+
+    print("SNAPSHOT\tTYPE\tSOURCE\tVERSION\tITEMS")
+    for snapshot in snapshots:
+        print(
+            f"{snapshot.get('snapshot_id', '')}\t"
+            f"{snapshot.get('source_type', '')}\t"
+            f"{snapshot.get('source_id', '')}\t"
+            f"{snapshot.get('version', '')}\t"
+            f"{snapshot.get('item_count', '')}"
+        )
+    return 0
+
+
+def cmd_snapshots_show(args: argparse.Namespace) -> int:
+    """Show one source snapshot, optionally including copied items."""
+
+    from synsc.snapshots.service import SnapshotService
+
+    snapshot = SnapshotService().get(
+        args.snapshot_id,
+        user_id=args.user_id,
+        include_items=args.include_items,
+        item_offset=args.item_offset,
+        item_limit=args.item_limit,
+    )
+    if args.json:
+        print(json.dumps(snapshot, sort_keys=True))
+        return 0
+
+    print(f"Snapshot: {snapshot.get('snapshot_id', '')}")
+    print(f"Source: {snapshot.get('source_type', '')}/{snapshot.get('source_id', '')}")
+    print(f"Version: {snapshot.get('version', '')}")
+    print(f"Items: {snapshot.get('item_count', 0)}")
+    if args.include_items:
+        for item in snapshot.get("items", []):
+            print(
+                f"  [{item.get('ordinal', '')}] "
+                f"{item.get('locator', '')}"
+            )
+    return 0
+
+
+def cmd_snapshots_capture(args: argparse.Namespace) -> int:
+    """Capture the current indexed state as an immutable snapshot."""
+
+    from synsc.snapshots.contracts import SnapshotSourceType
+    from synsc.snapshots.service import SnapshotService
+
+    snapshot = SnapshotService().publish(
+        SnapshotSourceType(args.source_type),
+        args.source_id,
+        user_id=args.user_id,
+    ).to_dict()
+    if args.json:
+        print(json.dumps(snapshot, sort_keys=True))
+    else:
+        print(
+            f"Captured snapshot {snapshot.get('snapshot_id', '')} "
+            f"for {snapshot.get('source_type', '')}/"
+            f"{snapshot.get('source_id', '')}"
+        )
+    return 0
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create the argument parser."""
     parser = argparse.ArgumentParser(
@@ -231,6 +315,69 @@ def create_parser() -> argparse.ArgumentParser:
         help="Emit deterministic machine-readable output",
     )
     policy_parser.set_defaults(func=cmd_policy_check)
+
+    snapshots_parser = subparsers.add_parser(
+        "snapshots",
+        help="Capture and inspect immutable source snapshots",
+    )
+    snapshot_subparsers = snapshots_parser.add_subparsers(
+        dest="snapshot_command",
+        help="Snapshot command",
+    )
+    snapshot_types = ("repo", "paper", "dataset", "docs")
+
+    snapshots_list_parser = snapshot_subparsers.add_parser(
+        "list",
+        help="List visible snapshots",
+    )
+    snapshots_list_parser.add_argument(
+        "--type",
+        choices=snapshot_types,
+        dest="source_type",
+    )
+    snapshots_list_parser.add_argument("--source-id")
+    snapshots_list_parser.add_argument("--user-id")
+    snapshots_list_parser.add_argument("--limit", type=int, default=100)
+    snapshots_list_parser.add_argument("--json", action="store_true")
+    snapshots_list_parser.set_defaults(func=cmd_snapshots_list)
+
+    snapshots_show_parser = snapshot_subparsers.add_parser(
+        "show",
+        help="Show one visible snapshot",
+    )
+    snapshots_show_parser.add_argument("snapshot_id")
+    snapshots_show_parser.add_argument("--user-id")
+    snapshots_show_parser.add_argument(
+        "--include-items",
+        action="store_true",
+    )
+    snapshots_show_parser.add_argument(
+        "--item-offset",
+        type=int,
+        default=0,
+    )
+    snapshots_show_parser.add_argument(
+        "--item-limit",
+        type=int,
+        default=100,
+    )
+    snapshots_show_parser.add_argument("--json", action="store_true")
+    snapshots_show_parser.set_defaults(func=cmd_snapshots_show)
+
+    snapshots_capture_parser = snapshot_subparsers.add_parser(
+        "capture",
+        help="Capture the current indexed source state",
+    )
+    snapshots_capture_parser.add_argument("source_id")
+    snapshots_capture_parser.add_argument(
+        "--type",
+        choices=snapshot_types,
+        dest="source_type",
+        required=True,
+    )
+    snapshots_capture_parser.add_argument("--user-id")
+    snapshots_capture_parser.add_argument("--json", action="store_true")
+    snapshots_capture_parser.set_defaults(func=cmd_snapshots_capture)
     
     return parser
 

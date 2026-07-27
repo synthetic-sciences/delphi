@@ -181,6 +181,11 @@ def test_index_source_docs_dispatches_to_docs_service(monkeypatch):
         "chunks": 88,
     }
     monkeypatch.setattr(ds_mod, "get_docs_service", lambda user_id=None: fake_svc)
+    monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        lambda *args, **kwargs: {"snapshot_id": "snapshot-docs"},
+    )
 
     out = source_service.index_source(
         source_type="docs",

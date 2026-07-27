@@ -112,6 +112,25 @@ curl "http://localhost:8742/api/search/code?query=authentication+middleware" \
 ```
 </details>
 
+### Reproducible source versions
+
+Completed indexing runs publish immutable, content-addressed snapshots of
+repositories, papers, datasets, and documentation. Each version keeps its own
+normalized chunks and vectors, while a separate head identifies the current
+version. This is fully local and does not require a hosted service.
+
+```bash
+# Authenticated HTTP
+curl "http://localhost:8742/v2/sources/SOURCE_ID/snapshots?type=repo" \
+  -H "Authorization: Bearer your-api-key"
+curl "http://localhost:8742/v2/snapshots/SNAPSHOT_ID?include_items=true" \
+  -H "Authorization: Bearer your-api-key"
+
+# Local database CLI
+synsc-context snapshots list --type repo --source-id SOURCE_ID --json
+synsc-context snapshots show SNAPSHOT_ID --include-items --json
+```
+
 ---
 
 ## MCP Tools

@@ -303,6 +303,21 @@ class DatasetService:
                     try:
                         from synsc.embeddings.generator import get_paper_embedding_generator
                         embedding_gen = get_paper_embedding_generator()
+                        session.execute(
+                            text(
+                                """
+                                UPDATE datasets
+                                SET embedding_model = :embedding_model
+                                WHERE dataset_id = :dataset_id
+                                """
+                            ),
+                            {
+                                "embedding_model": str(
+                                    embedding_gen.model_name
+                                ),
+                                "dataset_id": dataset_id,
+                            },
+                        )
                         chunk_texts = [
                             c.get("content", "") for c in chunks[: len(chunk_ids)]
                         ]

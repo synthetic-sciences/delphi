@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from synsc.snapshots.service import publish_source_snapshot
+
 logger = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
@@ -763,6 +765,31 @@ def _normalize_index_response(
     }
 
 
+def _attach_snapshot(
+    envelope: dict[str, Any],
+    *,
+    user_id: str | None,
+) -> dict[str, Any]:
+    """Publish durable source state before reporting a ready index."""
+
+    source_id = envelope.get("source_id")
+    source_type = envelope.get("source_type")
+    status = envelope.get("status")
+    if (
+        not isinstance(source_id, str)
+        or not source_id
+        or source_type not in {"repo", "paper", "dataset", "docs"}
+        or status in {"error", "pending", "queued", "processing"}
+    ):
+        return envelope
+    envelope["snapshot"] = publish_source_snapshot(
+        source_type,
+        source_id,
+        user_id=user_id,
+    )
+    return envelope
+
+
 def index_source(
     source_type: str,
     url: str,
@@ -850,7 +877,7 @@ def index_source(
             except Exception as exc:
                 logger.warning("auto_index_docs: discovery failed", error=str(exc))
 
-        return envelope
+        return _attach_snapshot(envelope, user_id=user_id)
 
     if source_type == "paper":
         if not user_id:
@@ -941,11 +968,14 @@ def index_source(
                     os.unlink(pdf_path)
             ext_ref = arxiv_id
 
-        return _normalize_index_response(
-            source_type="paper",
-            res=res,
-            id_key="paper_id",
-            external_ref=ext_ref,
+        return _attach_snapshot(
+            _normalize_index_response(
+                source_type="paper",
+                res=res,
+                id_key="paper_id",
+                external_ref=ext_ref,
+            ),
+            user_id=user_id,
         )
 
     if source_type == "dataset":
@@ -960,11 +990,14 @@ def index_source(
             hf_id = url.strip()
 
         res = _get_dataset_service(user_id).index_dataset(hf_id)
-        return _normalize_index_response(
-            source_type="dataset",
-            res=res,
-            id_key="dataset_id",
-            external_ref=hf_id,
+        return _attach_snapshot(
+            _normalize_index_response(
+                source_type="dataset",
+                res=res,
+                id_key="dataset_id",
+                external_ref=hf_id,
+            ),
+            user_id=user_id,
         )
 
     if source_type == "docs":
@@ -981,11 +1014,14 @@ def index_source(
             req_delay_s=float(opts.get("req_delay_s", 1.0)),
             version=opts.get("version"),
         )
-        return _normalize_index_response(
-            source_type="docs",
-            res=res,
-            id_key="docs_id",
-            external_ref=url,
+        return _attach_snapshot(
+            _normalize_index_response(
+                source_type="docs",
+                res=res,
+                id_key="docs_id",
+                external_ref=url,
+            ),
+            user_id=user_id,
         )
 
     # Fall through to the connector registry. Connectors raise

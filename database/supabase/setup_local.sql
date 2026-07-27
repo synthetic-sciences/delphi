@@ -389,6 +389,7 @@ CREATE TABLE IF NOT EXISTS papers (
     page_count INTEGER DEFAULT 0,
     chunk_count INTEGER DEFAULT 0,
     citation_count INTEGER DEFAULT 0,
+    embedding_model VARCHAR(255),
 
     -- Timestamps
     indexed_at TIMESTAMPTZ DEFAULT NOW(),
@@ -401,6 +402,8 @@ CREATE TABLE IF NOT EXISTS papers (
 -- Keep reruns compatible with databases created before visibility existed.
 ALTER TABLE papers
     ADD COLUMN IF NOT EXISTS visibility VARCHAR(16);
+ALTER TABLE papers
+    ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(255);
 UPDATE papers
 SET visibility = CASE WHEN is_public THEN 'public' ELSE 'private' END
 WHERE visibility IS NULL;
@@ -572,6 +575,7 @@ CREATE TABLE IF NOT EXISTS datasets (
     visibility VARCHAR(16) NOT NULL DEFAULT 'public',
     indexed_by UUID,
     chunk_count INTEGER DEFAULT 0,
+    embedding_model VARCHAR(255),
     indexed_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -579,6 +583,8 @@ CREATE TABLE IF NOT EXISTS datasets (
 -- Keep reruns compatible with databases created before visibility existed.
 ALTER TABLE datasets
     ADD COLUMN IF NOT EXISTS visibility VARCHAR(16);
+ALTER TABLE datasets
+    ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(255);
 UPDATE datasets
 SET visibility = CASE WHEN is_public THEN 'public' ELSE 'private' END
 WHERE visibility IS NULL;
@@ -1061,6 +1067,173 @@ ALTER TABLE repositories ADD COLUMN IF NOT EXISTS deep_indexed BOOLEAN DEFAULT F
 
 
 -- ============================================================================
+-- PART 21: IMMUTABLE SOURCE SNAPSHOTS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS source_snapshots (
+    snapshot_id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    source_id VARCHAR(36) NOT NULL,
+    source_type VARCHAR(24) NOT NULL,
+    version TEXT NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    external_ref TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    classification VARCHAR(16) NOT NULL,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    embedding_model VARCHAR(255) NOT NULL,
+    embedding_fingerprint VARCHAR(64) NOT NULL,
+    vector_count INTEGER NOT NULL DEFAULT 0,
+    vectors_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by VARCHAR(36),
+    manifest JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sealed_at TIMESTAMPTZ,
+    CONSTRAINT ck_source_snapshots_type CHECK (
+        source_type IN ('repo', 'paper', 'dataset', 'docs')
+    ),
+    CONSTRAINT ck_source_snapshots_classification CHECK (
+        classification IN ('public', 'unlisted', 'private', 'local_sensitive')
+    ),
+    CONSTRAINT uq_source_snapshot_version_content UNIQUE (
+        source_type, source_id, version, content_hash,
+        embedding_model, embedding_fingerprint
+    ),
+    CONSTRAINT ck_source_snapshot_vector_count CHECK (
+        vector_count >= 0 AND vector_count <= item_count
+    ),
+    CONSTRAINT ck_source_snapshot_vector_completeness CHECK (
+        vectors_complete = (vector_count = item_count)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_snapshots_source
+    ON source_snapshots(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_source_snapshots_created
+    ON source_snapshots(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_source_snapshots_created_by
+    ON source_snapshots(created_by);
+
+CREATE TABLE IF NOT EXISTS source_snapshot_items (
+    item_id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    snapshot_id VARCHAR(36) NOT NULL
+        REFERENCES source_snapshots(snapshot_id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    origin_item_id VARCHAR(36) NOT NULL,
+    locator TEXT NOT NULL,
+    content_hash VARCHAR(64) NOT NULL,
+    content TEXT NOT NULL,
+    token_count INTEGER,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_source_snapshot_item_ordinal
+        UNIQUE (snapshot_id, ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_snapshot_items_snapshot
+    ON source_snapshot_items(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_source_snapshot_items_origin
+    ON source_snapshot_items(origin_item_id);
+
+CREATE TABLE IF NOT EXISTS source_snapshot_item_embeddings (
+    embedding_id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    snapshot_id VARCHAR(36) NOT NULL
+        REFERENCES source_snapshots(snapshot_id) ON DELETE CASCADE,
+    item_id VARCHAR(36) NOT NULL UNIQUE
+        REFERENCES source_snapshot_items(item_id) ON DELETE CASCADE,
+    embedding vector(768) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_snapshot_item_embeddings_snapshot
+    ON source_snapshot_item_embeddings(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_source_snapshot_item_embeddings_item
+    ON source_snapshot_item_embeddings(item_id);
+CREATE INDEX IF NOT EXISTS idx_source_snapshot_item_embeddings_vector
+    ON source_snapshot_item_embeddings
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+CREATE TABLE IF NOT EXISTS source_snapshot_heads (
+    source_type VARCHAR(24) NOT NULL,
+    source_id VARCHAR(36) NOT NULL,
+    snapshot_id VARCHAR(36) NOT NULL
+        REFERENCES source_snapshots(snapshot_id) ON DELETE RESTRICT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (source_type, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_source_snapshot_heads_snapshot
+    ON source_snapshot_heads(snapshot_id);
+
+CREATE OR REPLACE FUNCTION prevent_source_snapshot_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.sealed_at IS NULL
+       AND NEW.sealed_at IS NOT NULL
+       AND (to_jsonb(OLD) - 'sealed_at')
+           = (to_jsonb(NEW) - 'sealed_at') THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'published source snapshots are append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_source_snapshots_immutable ON source_snapshots;
+CREATE TRIGGER trg_source_snapshots_immutable
+BEFORE UPDATE ON source_snapshots
+FOR EACH ROW EXECUTE FUNCTION prevent_source_snapshot_update();
+
+CREATE OR REPLACE FUNCTION prevent_sealed_snapshot_item_change()
+RETURNS TRIGGER AS $$
+DECLARE
+    target_snapshot_id VARCHAR(36);
+    previous_snapshot_id VARCHAR(36);
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        target_snapshot_id := NEW.snapshot_id;
+    ELSIF TG_OP = 'DELETE' THEN
+        IF pg_trigger_depth() > 1 THEN
+            RETURN OLD;
+        END IF;
+        target_snapshot_id := OLD.snapshot_id;
+    ELSE
+        target_snapshot_id := NEW.snapshot_id;
+        previous_snapshot_id := OLD.snapshot_id;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM source_snapshots
+        WHERE snapshot_id IN (
+            target_snapshot_id,
+            previous_snapshot_id
+        )
+          AND sealed_at IS NOT NULL
+    ) THEN
+        RAISE EXCEPTION 'sealed source snapshot contents are immutable';
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_source_snapshot_items_immutable
+    ON source_snapshot_items;
+CREATE TRIGGER trg_source_snapshot_items_immutable
+BEFORE INSERT OR UPDATE OR DELETE ON source_snapshot_items
+FOR EACH ROW EXECUTE FUNCTION prevent_sealed_snapshot_item_change();
+
+DROP TRIGGER IF EXISTS trg_source_snapshot_item_embeddings_immutable
+    ON source_snapshot_item_embeddings;
+CREATE TRIGGER trg_source_snapshot_item_embeddings_immutable
+BEFORE INSERT OR UPDATE OR DELETE ON source_snapshot_item_embeddings
+FOR EACH ROW EXECUTE FUNCTION prevent_sealed_snapshot_item_change();
+
+
+-- ============================================================================
 -- LOCAL DEVELOPMENT DATA
 -- ============================================================================
 
@@ -1097,6 +1270,7 @@ AND table_name IN (
     'repositories', 'user_repositories', 'repository_files', 'code_chunks', 'chunk_embeddings', 'symbols',
     'papers', 'user_papers', 'paper_chunks', 'paper_chunk_embeddings', 'citations', 'equations', 'paper_code_snippets',
     'datasets', 'user_datasets', 'dataset_chunks', 'dataset_chunk_embeddings',
+    'source_snapshots', 'source_snapshot_heads', 'source_snapshot_items', 'source_snapshot_item_embeddings',
     'indexing_jobs', 'activity_log'
 )
 ORDER BY table_name;

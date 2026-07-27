@@ -218,6 +218,11 @@ def test_index_source_auto_docs_opt_in(monkeypatch):
         lambda uid: FakeIndexingService(),
     )
     monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        lambda *args, **kwargs: {"snapshot_id": "snapshot-repo"},
+    )
+    monkeypatch.setattr(
         docs_autodiscover,
         "discover_docs_url",
         lambda repo_url, branch="main": "https://docs.example.com/",
@@ -270,6 +275,11 @@ def test_index_source_no_auto_when_opted_out(monkeypatch):
         source_service,
         "_get_indexing_service",
         lambda uid: FakeIndexingService(),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        lambda *args, **kwargs: {"snapshot_id": "snapshot-repo"},
     )
 
     def boom(*a, **k):

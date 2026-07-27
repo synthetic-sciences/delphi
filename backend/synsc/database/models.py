@@ -513,6 +513,7 @@ class Paper(Base):
     page_count: Mapped[int] = mapped_column(Integer, default=0)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     citation_count: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_model: Mapped[str | None] = mapped_column(String(255))
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now, onupdate=utc_now
@@ -795,6 +796,7 @@ class DocumentationSource(Base):
     visibility: Mapped[str] = mapped_column(
         String(16), default="public", nullable=False
     )
+    embedding_model: Mapped[str | None] = mapped_column(String(255))
     pages_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     chunks_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
@@ -861,6 +863,165 @@ class UserDocumentationSource(Base):
         primary_key=True,
     )
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+
+
+# ==============================================================================
+# IMMUTABLE SOURCE SNAPSHOTS
+# ==============================================================================
+
+
+class SourceSnapshot(Base):
+    """Append-only metadata for one content-addressed source version."""
+
+    __tablename__ = "source_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_type",
+            "source_id",
+            "version",
+            "content_hash",
+            "embedding_model",
+            "embedding_fingerprint",
+            name="uq_source_snapshot_version_content",
+        ),
+        Index("idx_source_snapshots_source", "source_type", "source_id"),
+        Index("idx_source_snapshots_created", "created_at"),
+        Index("idx_source_snapshots_created_by", "created_by"),
+    )
+
+    snapshot_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    source_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    version: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    classification: Mapped[str] = mapped_column(String(16), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    embedding_fingerprint: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+    )
+    vector_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    vectors_complete: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+    created_by: Mapped[str | None] = mapped_column(String(36))
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+    sealed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    items: Mapped[list["SourceSnapshotItem"]] = relationship(
+        "SourceSnapshotItem",
+        back_populates="snapshot",
+        cascade="all, delete-orphan",
+    )
+
+
+class SourceSnapshotHead(Base):
+    """Mutable pointer from one logical source to its current snapshot."""
+
+    __tablename__ = "source_snapshot_heads"
+    __table_args__ = (
+        Index("idx_source_snapshot_heads_snapshot", "snapshot_id"),
+    )
+
+    source_type: Mapped[str] = mapped_column(String(24), primary_key=True)
+    source_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    snapshot_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("source_snapshots.snapshot_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    snapshot: Mapped["SourceSnapshot"] = relationship("SourceSnapshot")
+
+
+class SourceSnapshotItem(Base):
+    """Immutable normalized chunk payload owned by one snapshot."""
+
+    __tablename__ = "source_snapshot_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "snapshot_id",
+            "ordinal",
+            name="uq_source_snapshot_item_ordinal",
+        ),
+        Index("idx_source_snapshot_items_snapshot", "snapshot_id"),
+        Index("idx_source_snapshot_items_origin", "origin_item_id"),
+    )
+
+    item_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("source_snapshots.snapshot_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    origin_item_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    locator: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    token_count: Mapped[int | None] = mapped_column(Integer)
+    item_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
+
+    snapshot: Mapped["SourceSnapshot"] = relationship(
+        "SourceSnapshot",
+        back_populates="items",
+    )
+
+
+class SourceSnapshotItemEmbedding(Base):
+    """Copied vector for a snapshot item; vector is defined by migration SQL."""
+
+    __tablename__ = "source_snapshot_item_embeddings"
+    __table_args__ = (
+        Index(
+            "idx_source_snapshot_item_embeddings_snapshot",
+            "snapshot_id",
+        ),
+        Index("idx_source_snapshot_item_embeddings_item", "item_id"),
+    )
+
+    embedding_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    snapshot_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("source_snapshots.snapshot_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    item_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("source_snapshot_items.item_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=utc_now, nullable=False
+    )
 
 
 # ==============================================================================

@@ -121,3 +121,4 @@ def test_index_docs_persists_version(monkeypatch):
     assert docs_row is not None
     assert docs_row.version == "v1.2.3"
     assert docs_row.url == "https://docs.example.com/"
+    assert docs_row.embedding_model == "unknown"

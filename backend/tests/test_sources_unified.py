@@ -11,14 +11,26 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _disable_slowapi():
+def _disable_slowapi(monkeypatch):
     """Slowapi keeps a global in-memory rate-limit counter that leaks across
     tests (no per-test reset hook). Disable it for this file so the tight
     INDEX_LIMIT (5/min) doesn't 429 the second /v1/sources test that runs."""
     from synsc.api.rate_limit import limiter
+    from synsc.services import source_service
 
     was_enabled = limiter.enabled
     limiter.enabled = False
+    monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        lambda source_type, source_id, user_id: {
+            "snapshot_id": f"snapshot-{source_id}",
+            "source_id": source_id,
+            "source_type": source_type,
+            "version": "test-version",
+        },
+        raising=False,
+    )
     yield
     limiter.enabled = was_enabled
 
@@ -123,6 +135,88 @@ def test_index_source_repo_dispatches_to_indexing_service(monkeypatch):
     assert result["source_type"] == "repo"
     assert result["status"] == "indexed"
     assert result["external_ref"] == "https://github.com/owner/repo"
+    assert result["snapshot"]["snapshot_id"] == "snapshot-r-uuid"
+
+
+def test_successful_index_publishes_snapshot_before_ready_response(
+    monkeypatch,
+) -> None:
+    from synsc.services import source_service
+
+    fake_indexer = MagicMock()
+    fake_indexer.index_repository.return_value = {
+        "success": True,
+        "repo_id": "r-uuid",
+        "status": "updated",
+    }
+    publish = MagicMock(
+        return_value={
+            "snapshot_id": "snapshot-1",
+            "source_id": "r-uuid",
+            "source_type": "repo",
+            "version": "commit-a",
+        }
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_get_indexing_service",
+        lambda user_id: fake_indexer,
+    )
+    monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        publish,
+    )
+
+    result = source_service.index_source(
+        source_type="repo",
+        url="https://github.com/owner/repo",
+        user_id="u1",
+    )
+
+    publish.assert_called_once_with("repo", "r-uuid", user_id="u1")
+    assert result["snapshot"]["snapshot_id"] == "snapshot-1"
+
+
+def test_pending_or_failed_index_does_not_publish_snapshot(monkeypatch) -> None:
+    from synsc.services import source_service
+
+    publish = MagicMock()
+    monkeypatch.setattr(
+        source_service,
+        "publish_source_snapshot",
+        publish,
+    )
+    fake_indexer = MagicMock()
+    monkeypatch.setattr(
+        source_service,
+        "_get_indexing_service",
+        lambda user_id: fake_indexer,
+    )
+
+    fake_indexer.index_repository.return_value = {
+        "success": True,
+        "repo_id": "pending-id",
+        "status": "pending",
+    }
+    pending = source_service.index_source(
+        source_type="repo",
+        url="https://github.com/owner/repo",
+        user_id="u1",
+    )
+    fake_indexer.index_repository.return_value = {
+        "success": False,
+        "error": "clone failed",
+    }
+    failed = source_service.index_source(
+        source_type="repo",
+        url="https://github.com/owner/repo",
+        user_id="u1",
+    )
+
+    assert pending["status"] == "pending"
+    assert failed["status"] == "error"
+    publish.assert_not_called()
 
 
 def test_index_source_repo_failure_surfaces_error_envelope(monkeypatch):
