@@ -265,7 +265,10 @@ def create_parser() -> argparse.ArgumentParser:
     status_parser.set_defaults(func=cmd_status)
     
     # worker command
-    worker_parser = subparsers.add_parser("worker", help="Run background indexing worker")
+    worker_parser = subparsers.add_parser(
+        "worker",
+        help="Run background source-indexing and research worker",
+    )
     worker_parser.add_argument("--worker-id", help="Unique worker identifier")
     worker_parser.add_argument("--max-workers", type=int, default=4, help="Max parallel threads")
     worker_parser.add_argument("--poll-interval", type=float, default=2.0, help="Seconds between job polls")

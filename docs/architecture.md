@@ -100,11 +100,13 @@ backend/
     │   ├── paper_service.py      Papers ingest + reports + comparison
     │   ├── dataset_service.py    HuggingFace dataset indexing
     │   ├── job_queue_service.py  Enqueue/claim jobs against indexing_jobs table
+    │   ├── research_job_service.py Durable research queue + replay log
     │   ├── reranker.py           Optional cross-encoder reranker
     │   └── token_encryption.py   Fernet for OAuth tokens at rest
     │
     └── workers/
-        └── indexing_worker.py    Background worker — pulls jobs from job_queue_service
+        ├── indexing_worker.py    Composite background worker process
+        └── research_worker.py    Leased research execution + recovery
 ```
 
 ### Entry points (declared in `backend/pyproject.toml`)
@@ -115,7 +117,7 @@ backend/
 | `synsc-context-http` | `synsc.api.http_server:run_http_server` | FastAPI server (default port 8742) |
 | `synsc-context-mcp` | `synsc.api.mcp_server:run_server` | Standalone MCP server (stdio) |
 | `synsc-context-proxy` | `synsc.mcp_stdio_proxy:main` | Stdio-to-HTTP proxy for `uvx` users |
-| `synsc-context-worker` | `synsc.workers.indexing_worker:run_worker` | Background job runner |
+| `synsc-context-worker` | `synsc.workers.indexing_worker:run_worker` | Background source-indexing and research runner |
 
 ### Backend-internal dependency flow
 
@@ -203,7 +205,7 @@ Flags: `--no-worker`, `--no-frontend`, `--docker` (full compose), `--help`.
 |---|---|---|
 | `postgres` | pgvector/pgvector:pg16 | Mounts `./database/supabase/setup_local.sql` on init |
 | `api` | `./backend` (target `api`) | FastAPI + alembic upgrade head on boot |
-| `worker` | `./backend` (target `worker`) | Background indexer |
+| `worker` | `./backend` (target `worker`) | Background source-indexing and durable-research runner |
 | `frontend` | `./frontend` | Next.js dev server |
 
 `backend/Dockerfile` has two targets (`api`, `worker`). Both copy `synsc/`, `alembic/`, `alembic.ini`, `pyproject.toml`, `uv.lock`, `README.md` into the image and pre-download the sentence-transformers model during the build stage.

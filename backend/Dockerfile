@@ -111,7 +111,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
 CMD ["sh", "-c", "alembic upgrade head && uvicorn synsc.api.http_server:app --host 0.0.0.0 --port 8742"]
 
 # ---------------------------------------------------------------------------
-# Target: worker
+# Target: source-indexing + durable-research worker
 # ---------------------------------------------------------------------------
 FROM runtime AS worker
 

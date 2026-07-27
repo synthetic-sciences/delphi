@@ -203,6 +203,23 @@ the individual request permit public egress. See
 | `index_dataset` | Index a HuggingFace dataset card. |
 | `search_datasets` | Semantic dataset search with cross-encoder rerank. |
 
+### Durable research
+
+| Tool | Description |
+|------|-------------|
+| `research_start` | Queue a `quick`, `deep`, or `oracle` research session and return immediately. |
+| `research_list` | List the caller's sessions, including work recovered after a restart. |
+| `research_status` | Read the latest persisted answer, citations, usage, and status. |
+| `research_events` | Replay the append-only progress log from a sequence cursor. |
+| `research_followup` | Persist a follow-up turn and requeue the same conversation. |
+| `research_cancel` | Cancel pending work or request cooperative cancellation of a running job. |
+
+Async research is backed by PostgreSQL rather than API-process memory. The
+worker uses leased claims, heartbeats, bounded retries, stale-job recovery, and
+generation fencing so an interrupted or superseded worker cannot publish a
+late answer. The HTTP equivalents are under `/v2/research`; SSE reconnects can
+send `Last-Event-ID` and receive only later persisted events.
+
 ### Atlas integration (optional)
 
 Delphi can ingest and retrieve over an [Atlas](https://github.com/synthetic-sciences/atlas) research graph (nodes, edges, artifacts, executions, tool contracts), with graph-aware context packs and "what was tried / don't-repeat / decision recall" surfaces. **Off by default** — these tools only make sense if you're pushing graph data into Delphi from an Atlas workspace, and they cost MCP-handshake tokens when exposed. Set `SYNSC_MCP_PROFILE=atlas` (or `all`) to turn them on. Full tool list and ingestion contracts in [`docs/atlas-integration.md`](docs/atlas-integration.md).

@@ -58,13 +58,12 @@ def test_snapshot_search_migration_is_current_head() -> None:
     assert migration.down_revision == "013_visibility_contracts"
     assert search_migration.revision == "015_snapshot_search"
     assert search_migration.down_revision == migration.revision
-    assert search_migration.revision == EXPECTED_ALEMBIC_REVISION
 
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     assert (
         ScriptDirectory.from_config(config).get_current_head()
-        == search_migration.revision
+        == EXPECTED_ALEMBIC_REVISION
     )
 
 

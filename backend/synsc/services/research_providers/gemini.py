@@ -9,6 +9,7 @@ from typing import Any
 
 from google import genai
 
+from synsc.config import get_config
 from synsc.services.research_providers.base import GeneratedAnswer
 
 
@@ -18,7 +19,12 @@ class GeminiResearchProvider:
     def __init__(self, api_key: str):
         if not api_key:
             raise ValueError("GeminiResearchProvider requires a non-empty api_key")
-        self._client = genai.Client(api_key=api_key)
+        self._client = genai.Client(
+            api_key=api_key,
+            http_options={
+                "timeout": get_config().research.provider_timeout_ms,
+            },
+        )
 
     def generate(
         self,

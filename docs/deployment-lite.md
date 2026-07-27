@@ -20,7 +20,13 @@ docker compose -f docker-compose.lite.yml up --build
 | Embeddings | sentence-transformers (~1.2 GB download) | `hash` provider — **no download** |
 | Reranker | optional cross-encoder | off |
 | Indexing | async via worker | synchronous via the API |
+| Research | synchronous `/v1/research` + durable `/v2/research` | synchronous `/v1/research` only |
 | Cold boot | model load (GB of RAM) | seconds, low RAM |
+
+The durable `/v2/research` API intentionally requires a worker. In the lite
+profile, use `/v1/research` for synchronous calls, or run
+`uv run synsc-context-worker` beside the API to enable restart-safe sessions,
+event replay, follow-ups, and cancellation.
 
 ## How it stays useful without a real embedding model
 

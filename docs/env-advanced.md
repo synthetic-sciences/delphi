@@ -128,8 +128,13 @@ and includes tests/docs/examples/configs/manifests in the index.
 |---|---|---|
 | `SYNSC_RESEARCH_PROVIDER` | `gemini` | Backend for the `research` MCP tool. Currently only `gemini` is implemented. |
 | `SYNSC_RESEARCH_API_KEY` | falls back to `GEMINI_API_KEY` | Provider key. Set to use a different key from the embeddings one. |
-| `SYNSC_RESEARCH_MODEL_QUICK` | `gemini-2.5-flash-lite` | Model for `mode=quick` calls. |
+| `SYNSC_RESEARCH_MODEL_QUICK` | `gemini-2.5-flash` | Model for `mode=quick` calls. |
 | `SYNSC_RESEARCH_MODEL_DEEP` | `gemini-2.5-pro` | Model for `mode=deep` and `mode=oracle`. |
+| `SYNSC_RESEARCH_PROVIDER_TIMEOUT_MS` | `120000` | Per-request provider transport timeout. |
+| `SYNSC_RESEARCH_QUICK_TIMEOUT_SECONDS` | `180` | Hard deadline for a queued quick job. |
+| `SYNSC_RESEARCH_DEEP_TIMEOUT_SECONDS` | `600` | Hard deadline for a queued deep job. |
+| `SYNSC_RESEARCH_ORACLE_TIMEOUT_SECONDS` | `900` | Hard deadline for a queued oracle job. |
+| `SYNSC_RESEARCH_MAX_EXECUTION_THREADS` | `4` | Maximum active plus quarantined research executions. New claims pause when all slots are occupied. |
 
 Authenticated users can bring their own provider key without changing server
 configuration:
@@ -148,6 +153,22 @@ first and falls back to the server-level variables above only after a successful
 lookup confirms that no user key exists. Credential-storage failures return 503
 without consuming the server key. Gemini is the only implemented research
 provider; other providers are rejected until their runtimes land.
+
+`POST /v2/research` queues restart-safe work and returns `202` with a session
+ID. The shared worker persists progress events, the latest answer, citations,
+usage, and conversation turns in PostgreSQL. Use `GET /v2/research`, `GET
+/v2/research/{id}`, `GET /v2/research/{id}/events`, `POST
+/v2/research/{id}/messages`, and `DELETE /v2/research/{id}` to list, inspect,
+replay, follow up, and cancel. SSE clients may reconnect with
+`Last-Event-ID`. Run `synsc-context-worker`; without it, queued sessions remain
+pending by design.
+
+Provider calls run with a transport timeout and every queued mode has a hard
+deadline. If a provider runtime ignores cooperative cancellation, the worker
+fences late research events/results and marks the job timed out. Timed-out
+threads retain a bounded quarantine slot until they exit; the worker pauses new
+claims when that budget is full. The provider timeout is capped to the shortest
+configured job deadline.
 
 ---
 

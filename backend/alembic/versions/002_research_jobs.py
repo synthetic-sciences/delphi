@@ -32,6 +32,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # setup_local.sql is intentionally a complete fresh-install bootstrap.
+    # Deployments run that script before Alembic, so released migrations must
+    # tolerate their table already existing and let later reconciliation
+    # revisions add any newer columns or constraints.
+    if "research_jobs" in sa.inspect(op.get_bind()).get_table_names():
+        return
+
     op.create_table(
         "research_jobs",
         sa.Column("job_id", sa.String(length=36), primary_key=True),

@@ -1557,7 +1557,7 @@ Provides deep context to AI agents through:
         replayed event log, and ``research_followup`` to ask a follow-up
         on a completed session.
 
-        DISCOVER -> INDEX -> SEARCH (Nia Oracle parity): when ``auto_index`` is
+        DISCOVER -> INDEX -> SEARCH: when ``auto_index`` is
         True (default) and the query mentions an unindexed library / repo /
         arxiv / hf dataset, the session indexes it before searching.
         Budget-guarded: max 3 auto-indexes per session.
@@ -1571,6 +1571,12 @@ Provides deep context to AI agents through:
                 "message": f"Invalid mode '{mode}': expected quick / deep / oracle",
             }
         user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "authentication_required",
+                "message": "authentication is required for durable research",
+            }
         session = await start_session(
             query=query,
             mode=mode,
@@ -1586,30 +1592,65 @@ Provides deep context to AI agents through:
         }
 
     @_tool_in("research")
+    def research_list(
+        limit: int = 50,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        """List durable research sessions owned by the current user."""
+        from synsc.services.research_sessions import list_sessions
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "authentication_required",
+                "message": "authentication is required for durable research",
+            }
+        try:
+            sessions = list_sessions(
+                user_id=user_id,
+                limit=limit,
+                status=status,
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error_code": "invalid_input",
+                "message": str(exc),
+            }
+        return {
+            "success": True,
+            "sessions": sessions,
+            "count": len(sessions),
+        }
+
+    @_tool_in("research")
     def research_status(session_id: str) -> dict[str, Any]:
         """Get current state of an async research session."""
+        from synsc.services.research_job_service import ResearchJobNotFoundError
         from synsc.services.research_sessions import get_session
 
-        session = get_session(session_id)
-        if not session:
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "authentication_required",
+                "message": "authentication is required for durable research",
+            }
+        try:
+            session = get_session(session_id, user_id=user_id)
+        except ResearchJobNotFoundError:
             return {
                 "success": False,
                 "error_code": "not_found",
                 "message": "session not found",
-            }
-        user_id = get_authenticated_user_id()
-        if session.user_id and user_id and session.user_id != user_id:
-            return {
-                "success": False,
-                "error_code": "forbidden",
-                "message": "not your session",
             }
         return {"success": True, **session.to_public()}
 
     @_tool_in("research")
     def research_events(
         session_id: str,
-        since_seq: int = 0,
+        since_seq: int = -1,
     ) -> dict[str, Any]:
         """Get the event log for a research session.
 
@@ -1617,38 +1658,47 @@ Provides deep context to AI agents through:
         that prefer a polling loop. Pair with ``research_status`` to know
         when status='completed'.
         """
+        from synsc.services.research_job_service import (
+            ResearchJobNotFoundError,
+            get_research_job_service,
+        )
         from synsc.services.research_sessions import get_session
 
-        session = get_session(session_id)
-        if not session:
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "authentication_required",
+                "message": "authentication is required for durable research",
+            }
+        try:
+            session = get_session(session_id, user_id=user_id)
+            records = get_research_job_service().list_events(
+                session_id,
+                user_id=user_id,
+                since_seq=since_seq,
+            )
+        except ResearchJobNotFoundError:
             return {
                 "success": False,
                 "error_code": "not_found",
                 "message": "session not found",
             }
-        user_id = get_authenticated_user_id()
-        if session.user_id and user_id and session.user_id != user_id:
-            return {
-                "success": False,
-                "error_code": "forbidden",
-                "message": "not your session",
-            }
         events = [
             {
-                "seq": ev.seq,
-                "type": ev.type,
-                "timestamp": ev.timestamp,
-                "payload": ev.payload,
+                "seq": record.seq,
+                "type": record.event_type,
+                "timestamp": record.created_at.timestamp(),
+                "payload": record.payload,
             }
-            for ev in session.events
-            if ev.seq > since_seq
+            for record in records
         ]
         return {
             "success": True,
             "session_id": session_id,
             "status": session.status,
             "events": events,
-            "latest_seq": session.events[-1].seq if session.events else -1,
+            "latest_seq": events[-1]["seq"] if events else since_seq,
         }
 
     @_tool_in("research")
@@ -1658,20 +1708,36 @@ Provides deep context to AI agents through:
     ) -> dict[str, Any]:
         """Post a follow-up question on a completed research session.
 
-        Stitches the prior question + answer into the new query so the
-        follow-up has continuity. Returns the new answer + citations.
+        Persists the turn, requeues the session, and returns accepted status.
+        Poll ``research_status`` and ``research_events`` for the new answer.
         """
+        from synsc.services.research_job_service import (
+            ResearchJobNotFoundError,
+            ResearchJobStateError,
+        )
         from synsc.services.research_sessions import post_followup
 
         user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "authentication_required",
+                "message": "authentication is required for durable research",
+            }
         try:
             result = await post_followup(
                 session_id=session_id, message=message, user_id=user_id
             )
-        except PermissionError as exc:
+        except ResearchJobNotFoundError:
             return {
                 "success": False,
-                "error_code": "forbidden",
+                "error_code": "not_found",
+                "message": "session not found",
+            }
+        except ResearchJobStateError as exc:
+            return {
+                "success": False,
+                "error_code": "conflict",
                 "message": str(exc),
             }
         except ValueError as exc:
@@ -1681,6 +1747,42 @@ Provides deep context to AI agents through:
                 "message": str(exc),
             }
         return {"success": True, **result}
+
+    @_tool_in("research")
+    def research_cancel(session_id: str) -> dict[str, Any]:
+        """Cancel pending research or request cooperative worker cancellation."""
+        from synsc.services.research_job_service import (
+            ResearchJobNotFoundError,
+            ResearchJobStateError,
+        )
+        from synsc.services.research_sessions import cancel_session
+
+        user_id = get_authenticated_user_id()
+        if not user_id:
+            return {
+                "success": False,
+                "error_code": "authentication_required",
+                "message": "authentication is required for durable research",
+            }
+        try:
+            session = cancel_session(session_id, user_id=user_id)
+        except ResearchJobNotFoundError:
+            return {
+                "success": False,
+                "error_code": "not_found",
+                "message": "session not found",
+            }
+        except ResearchJobStateError as exc:
+            return {
+                "success": False,
+                "error_code": "conflict",
+                "message": str(exc),
+            }
+        return {
+            "success": True,
+            "session_id": session.session_id,
+            "status": session.status,
+        }
 
     @_tool_in("research")
     def research(

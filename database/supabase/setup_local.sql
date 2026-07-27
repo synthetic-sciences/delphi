@@ -714,7 +714,110 @@ CREATE INDEX IF NOT EXISTS idx_jobs_priority_status ON indexing_jobs(priority DE
 
 
 -- ============================================================================
--- PART 18: ACTIVITY LOG (Per-User)
+-- PART 18: RESEARCH JOBS (Durable Async Queue + Replay Log)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS research_jobs (
+    job_id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    mode TEXT NOT NULL,
+    query TEXT NOT NULL,
+    source_ids TEXT[],
+    source_types TEXT[],
+    auto_index BOOLEAN NOT NULL DEFAULT TRUE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    answer_markdown TEXT,
+    citations JSONB,
+    usage JSONB NOT NULL DEFAULT '{}'::jsonb,
+    auto_indexed JSONB NOT NULL DEFAULT '[]'::jsonb,
+    tokens_in INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    worker_id VARCHAR(100),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 3,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    CONSTRAINT research_jobs_mode_check
+        CHECK (mode IN ('quick', 'deep', 'oracle')),
+    CONSTRAINT research_jobs_status_check
+        CHECK (
+            status IN (
+                'pending',
+                'running',
+                'cancelling',
+                'completed',
+                'failed',
+                'cancelled'
+            )
+        )
+);
+
+-- Reconcile databases initialized by older setup scripts or migration 002.
+ALTER TABLE research_jobs
+    ADD COLUMN IF NOT EXISTS auto_index BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN IF NOT EXISTS auto_indexed JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS usage JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS worker_id VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS max_attempts INTEGER NOT NULL DEFAULT 3,
+    ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE research_jobs
+    DROP CONSTRAINT IF EXISTS research_jobs_status_check;
+ALTER TABLE research_jobs
+    ADD CONSTRAINT research_jobs_status_check
+    CHECK (
+        status IN (
+            'pending',
+            'running',
+            'cancelling',
+            'completed',
+            'failed',
+            'cancelled'
+        )
+    );
+
+CREATE TABLE IF NOT EXISTS research_events (
+    event_id VARCHAR(36) PRIMARY KEY,
+    job_id VARCHAR(36) NOT NULL
+        REFERENCES research_jobs(job_id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    event_type VARCHAR(64) NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_research_events_job_seq UNIQUE (job_id, seq)
+);
+
+CREATE TABLE IF NOT EXISTS research_messages (
+    message_id VARCHAR(36) PRIMARY KEY,
+    job_id VARCHAR(36) NOT NULL
+        REFERENCES research_jobs(job_id) ON DELETE CASCADE,
+    role VARCHAR(16) NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    citations JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_jobs_user
+    ON research_jobs(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_research_jobs_status
+    ON research_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_research_jobs_claim
+    ON research_jobs(status, created_at)
+    WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_research_events_job_seq
+    ON research_events(job_id, seq);
+CREATE INDEX IF NOT EXISTS idx_research_messages_job_created
+    ON research_messages(job_id, created_at);
+
+
+-- ============================================================================
+-- PART 19: ACTIVITY LOG (Per-User)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS activity_log (
@@ -736,7 +839,7 @@ CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 
 
 -- ============================================================================
--- PART 19: HELPER FUNCTIONS
+-- PART 20: HELPER FUNCTIONS
 -- ============================================================================
 
 -- Create API key for a user (stores SHA-256 hash, returns plaintext once)
@@ -1274,7 +1377,8 @@ AND table_name IN (
     'papers', 'user_papers', 'paper_chunks', 'paper_chunk_embeddings', 'citations', 'equations', 'paper_code_snippets',
     'datasets', 'user_datasets', 'dataset_chunks', 'dataset_chunk_embeddings',
     'source_snapshots', 'source_snapshot_heads', 'source_snapshot_items', 'source_snapshot_item_embeddings',
-    'indexing_jobs', 'activity_log'
+    'indexing_jobs', 'research_jobs', 'research_events', 'research_messages',
+    'activity_log'
 )
 ORDER BY table_name;
 
@@ -1306,7 +1410,10 @@ ORDER BY table_name;
 --   - paper_code_snippets: Code from papers
 --
 --   Infrastructure:
---   - indexing_jobs: Background job queue
+--   - indexing_jobs: Background source-indexing job queue
+--   - research_jobs: Durable asynchronous research queue
+--   - research_events: Replayable research event log
+--   - research_messages: Durable research conversation turns
 --   - activity_log: User activity tracking
 --
 -- Next steps:
