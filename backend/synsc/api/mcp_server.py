@@ -1847,12 +1847,18 @@ Provides deep context to AI agents through:
         mode: str = "precise",
         topic: str | None = None,
         tokens: int | None = None,
+        network: str = "local_only",
+        query_classification: str = "private",
+        allowed_providers: list[str] | None = None,
+        preferred_search_provider: str | None = None,
     ) -> dict[str, Any]:
         """Unified search across indexed code + papers + datasets.
 
         Modes: 'precise' (fewer, higher quality), 'thorough' (more results),
-        'web' (fallback, returns empty stub). Accepts Nia aliases: 'targeted'
-        maps to 'precise', 'universal' maps to 'thorough'.
+        'web' (optional hosted provider). The 'targeted' alias maps to
+        'precise' and 'universal' maps to 'thorough'. Web mode remains
+        local-only and private unless the caller explicitly narrows those
+        controls and the deployment policy also permits the provider.
 
         Args:
             query: Natural language query.
@@ -1865,6 +1871,11 @@ Provides deep context to AI agents through:
             tokens: Optional total token budget across all returned hits.
                 Truncates trailing results to fit; the last partial hit is
                 marked ``_truncated: true``.
+            network: Request network ceiling. Defaults to ``local_only``.
+            query_classification: Privacy classification for the outbound
+                query. Hosted web search requires ``public``.
+            allowed_providers: Optional provider allowlist for this request.
+            preferred_search_provider: Optional strict provider selection.
         """
         from synsc.services.budget import (
             budget_results,
@@ -1882,6 +1893,10 @@ Provides deep context to AI agents through:
                 k=k,
                 mode=mode,
                 user_id=user_id,
+                network=network,
+                query_classification=query_classification,
+                allowed_providers=allowed_providers,
+                preferred_search_provider=preferred_search_provider,
             )
         except ValueError as e:
             return {

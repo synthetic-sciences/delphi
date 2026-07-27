@@ -375,7 +375,12 @@ class GrepSourceRequest(BaseModel):
 
 class UnifiedSearchRequest(BaseModel):
     """Request to /v1/search."""
-    query: str = Field(..., min_length=1, description="Natural language query")
+    query: str = Field(
+        ...,
+        min_length=1,
+        max_length=4000,
+        description="Natural language query",
+    )
     source_ids: list[str] | None = Field(default=None, description="Scope to these source IDs")
     source_types: list[str] | None = Field(
         default=None, description="Filter: 'repo' | 'paper' | 'dataset'"
@@ -385,8 +390,26 @@ class UnifiedSearchRequest(BaseModel):
         default="precise",
         description=(
             "precise | thorough | web "
-            "(Nia aliases: targeted=precise, universal=thorough)"
+            "(aliases: targeted=precise, universal=thorough)"
         ),
+    )
+    network: Literal[
+        "offline",
+        "local_only",
+        "allowlisted",
+        "online",
+    ] = "local_only"
+    query_classification: Literal[
+        "public",
+        "unlisted",
+        "private",
+        "local_sensitive",
+    ] = "private"
+    allowed_providers: list[str] = Field(default_factory=list, max_length=100)
+    preferred_search_provider: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
     )
 
 
@@ -2729,10 +2752,9 @@ def create_app() -> FastAPI:
     ) -> Response:
         """Unified search across indexed code + papers + datasets.
 
-        Modes: ``precise``, ``thorough``, ``web`` (web is a stub until a
-        provider lands). Nia compatibility: ``targeted`` aliases to
+        Modes: ``precise``, ``thorough``, ``web``. ``targeted`` aliases to
         ``precise`` and ``universal`` aliases to ``thorough`` so existing
-        Nia-shaped clients keep working.
+        clients keep working.
         """
         from synsc.services.source_service import unified_search
 
@@ -2745,6 +2767,10 @@ def create_app() -> FastAPI:
                 k=body.k,
                 mode=body.mode,
                 user_id=auth.user_id,
+                network=body.network,
+                query_classification=body.query_classification,
+                allowed_providers=body.allowed_providers,
+                preferred_search_provider=body.preferred_search_provider,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e

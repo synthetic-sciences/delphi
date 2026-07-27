@@ -49,6 +49,7 @@ def test_builtin_catalog_loads_without_remote_credentials(monkeypatch) -> None:
         "openai-embeddings",
         "huggingface-embeddings",
         "gemini-research",
+        "firecrawl-web",
         "slack-connector",
         "gdrive-connector",
         "spreadsheet-connector",
@@ -62,6 +63,15 @@ def test_builtin_catalog_loads_without_remote_credentials(monkeypatch) -> None:
     assert descriptors["gemini-research"].supports_cancellation is False
     assert descriptors["gemini-research"].supports_retry is False
     assert descriptors["gemini-embeddings"].supports_retry is False
+    assert descriptors["firecrawl-web"].execution is ExecutionLocation.REMOTE
+    assert descriptors["firecrawl-web"].capabilities == frozenset(
+        {ProviderCapability.SEARCH, ProviderCapability.CRAWL}
+    )
+    assert descriptors["firecrawl-web"].accepted_classifications == frozenset(
+        {ContentClassification.PUBLIC}
+    )
+    assert descriptors["firecrawl-web"].supports_cancellation is True
+    assert descriptors["firecrawl-web"].supports_retry is True
 
 
 def test_builtin_catalog_registration_does_not_construct_factories() -> None:

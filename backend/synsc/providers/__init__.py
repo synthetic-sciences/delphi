@@ -2,8 +2,12 @@
 
 from synsc.providers.contracts import (
     ContentClassification,
+    CrawlProvider,
     ExecutionLocation,
     ProviderCapability,
+    ProviderCrawlPage,
+    ProviderCrawlRequest,
+    ProviderCrawlResponse,
     ProviderDescriptor,
     ProviderFailure,
     ProviderFailureCode,
@@ -33,6 +37,7 @@ from synsc.providers.registry import (
 
 __all__ = [
     "ContentClassification",
+    "CrawlProvider",
     "EgressDecision",
     "EgressPolicy",
     "EgressRequest",
@@ -41,6 +46,9 @@ __all__ = [
     "OutboundField",
     "ProviderCapability",
     "ProviderCapabilityUnavailableError",
+    "ProviderCrawlPage",
+    "ProviderCrawlRequest",
+    "ProviderCrawlResponse",
     "ProviderDescriptor",
     "ProviderFailure",
     "ProviderFailureCode",

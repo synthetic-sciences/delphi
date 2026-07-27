@@ -46,10 +46,22 @@ def test_mcp_search_dispatches_to_unified_search(monkeypatch):
 
     server = create_server()
     tool = server._tool_manager._tools["search"]
-    out = tool.fn(query="q", k=5, mode="thorough")
+    out = tool.fn(
+        query="q",
+        k=5,
+        mode="web",
+        network="allowlisted",
+        query_classification="public",
+        allowed_providers=["firecrawl-web"],
+        preferred_search_provider="firecrawl-web",
+    )
     assert out["success"] is True
     assert captured["query"] == "q"
-    assert captured["mode"] == "thorough"
+    assert captured["mode"] == "web"
+    assert captured["network"] == "allowlisted"
+    assert captured["query_classification"] == "public"
+    assert captured["allowed_providers"] == ["firecrawl-web"]
+    assert captured["preferred_search_provider"] == "firecrawl-web"
 
 
 def test_mcp_search_invalid_mode_returns_structured_error(monkeypatch):

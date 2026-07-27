@@ -10,6 +10,9 @@ from synsc.providers.contracts import (
     ContentClassification,
     ExecutionLocation,
     ProviderCapability,
+    ProviderCrawlPage,
+    ProviderCrawlRequest,
+    ProviderCrawlResponse,
     ProviderDescriptor,
     ProviderFailure,
     ProviderFailureCode,
@@ -216,5 +219,95 @@ def test_search_provider_hit_rejects_non_finite_or_out_of_range_scores() -> None
             hit_id="h",
             text="x",
             score=0.5,
+            metadata={"not_json": float("nan")},
+        )
+
+
+def test_crawl_provider_contracts_are_bounded_and_json_safe() -> None:
+    request = ProviderCrawlRequest(
+        url="https://docs.example.com/",
+        max_pages=12,
+        max_depth=3,
+        timeout_ms=30_000,
+        max_response_bytes=4_000_000,
+    )
+    page = ProviderCrawlPage(
+        page_id="page-1",
+        url="https://docs.example.com/start",
+        markdown="# Start\n\nHello.",
+        title="Start",
+        metadata={"language": "en"},
+    )
+    response = ProviderCrawlResponse(
+        pages=(page,),
+        job_id="job-1",
+        truncated=False,
+    )
+
+    assert request.to_dict() == {
+        "url": "https://docs.example.com/",
+        "max_pages": 12,
+        "max_depth": 3,
+        "timeout_ms": 30_000,
+        "max_response_bytes": 4_000_000,
+        "same_origin_only": True,
+    }
+    assert response.to_dict()["pages"][0]["metadata"] == {"language": "en"}
+    assert response.consumed_bytes > len(page.markdown)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"url": ""},
+        {"url": "x" * 4097},
+        {"max_pages": 0},
+        {"max_pages": 101},
+        {"max_depth": -1},
+        {"max_depth": 11},
+        {"timeout_ms": 999},
+        {"max_response_bytes": 255},
+    ],
+)
+def test_crawl_provider_request_rejects_invalid_bounds(
+    kwargs: dict[str, object],
+) -> None:
+    values: dict[str, object] = {
+        "url": "https://docs.example.com/",
+        "max_pages": 10,
+        "max_depth": 2,
+        "timeout_ms": 30_000,
+        "max_response_bytes": 2_000_000,
+    }
+    values.update(kwargs)
+
+    with pytest.raises(ValueError):
+        ProviderCrawlRequest(**values)  # type: ignore[arg-type]
+
+
+def test_crawl_page_rejects_invalid_or_unbounded_metadata() -> None:
+    with pytest.raises(ValueError):
+        ProviderCrawlPage(
+            page_id="",
+            url="https://example.com/",
+            markdown="content",
+        )
+    with pytest.raises(ValueError):
+        ProviderCrawlPage(
+            page_id="page",
+            url="",
+            markdown="content",
+        )
+    with pytest.raises(ValueError):
+        ProviderCrawlPage(
+            page_id="page",
+            url="https://example.com/",
+            markdown="",
+        )
+    with pytest.raises(TypeError):
+        ProviderCrawlPage(
+            page_id="page",
+            url="https://example.com/",
+            markdown="content",
             metadata={"not_json": float("nan")},
         )

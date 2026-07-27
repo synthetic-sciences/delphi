@@ -70,11 +70,21 @@ add a provider the deployment has not approved.
 |---|---|---|
 | `SYNSC_NETWORK_POLICY` | `local_only` | Maximum network access: `offline`, `local_only`, `allowlisted`, or `online`. |
 | `SYNSC_ALLOWED_REMOTE_PROVIDERS` | — | Comma-separated provider names eligible under `allowlisted` policy. |
+| `FIRECRAWL_API_KEY` | — | Optional credential for the `firecrawl-web` search/crawl adapter. Registration is lazy; no key or cloud service is required for local indexing and search. |
 
 Inspect capabilities with `synsc-context providers --json`. Evaluate a proposed
 call without executing it with `synsc-context policy-check`.
 Catalog health describes whether an adapter is implemented and available; each
 provider validates required credentials when it is constructed for a call.
+
+Hosted web search is explicit at both layers. The deployment must permit
+`firecrawl-web`, and each `/v1/search` or MCP `search` request must use
+`mode=web`, request `network=online` (or `allowlisted`), and classify the query
+as `public`. The adapter sends only the query, result limit, and timeout; it
+does not send indexed source content. Hosted crawl requests accept only public
+HTTP(S) targets, reject credential-bearing/private-network URLs, stay on the
+original origin by default, respect robots rules, verify TLS, disable provider
+cache storage, and enforce page/depth/deadline/byte limits.
 
 ---
 
