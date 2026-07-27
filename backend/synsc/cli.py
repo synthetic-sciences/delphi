@@ -3,11 +3,13 @@
 import argparse
 import logging
 import sys
+from collections.abc import Callable
+from typing import cast
 
 import structlog
 
 
-def configure_logging():
+def configure_logging() -> None:
     """Configure structlog for CLI output."""
     # Set stdlib root logger to INFO so structlog's filter_by_level doesn't drop info/debug
     logging.basicConfig(format="%(message)s", stream=sys.stderr, level=logging.INFO)
@@ -145,7 +147,8 @@ def main() -> int:
         return 1
     
     if hasattr(args, "func"):
-        return args.func(args)
+        command = cast(Callable[[argparse.Namespace], int], args.func)
+        return command(args)
     
     parser.print_help()
     return 0

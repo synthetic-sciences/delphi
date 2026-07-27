@@ -9,13 +9,16 @@ import contextvars
 import json
 import os
 import time
-from typing import Any
+from collections.abc import Callable
+from typing import Any, ParamSpec, TypeVar, cast
 
 import structlog
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 logger = structlog.get_logger(__name__)
+P = ParamSpec("P")
+R = TypeVar("R")
 
 # Context variables for request-scoped auth (set by http_server.py /mcp proxy)
 _current_api_key: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -47,14 +50,14 @@ def get_current_user_id() -> str | None:
 
 
 def _log_activity(
-    user_id: str,
+    user_id: str | None,
     action: str,
     resource_type: str | None = None,
     resource_id: str | None = None,
     query: str | None = None,
     results_count: int | None = None,
     duration_ms: int | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Log a user activity to the activity_log table (best-effort)."""
     try:
@@ -176,7 +179,9 @@ Provides deep context to AI agents through:
             profile=_profile,
         )
 
-    def _tool_in(*groups: str):
+    def _tool_in(
+        *groups: str,
+    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
         """Wrap ``@server.tool()`` with a profile gate.
 
         Usage: ``@_tool_in("code")`` instead of ``@server.tool()``. If the
@@ -185,11 +190,15 @@ Provides deep context to AI agents through:
         """
         enabled = any(g in _enabled_groups for g in groups)
         if not enabled:
-            def _skip(fn):  # noqa: ANN001
+            def _skip(fn: Callable[P, R]) -> Callable[P, R]:
                 logger.debug("mcp: skipping tool by profile", tool=fn.__name__, groups=groups)
                 return fn
+
             return _skip
-        return server.tool()
+        return cast(
+            Callable[[Callable[P, R]], Callable[P, R]],
+            server.tool(),
+        )
 
     # ==========================================================================
     # AUTH HELPERS
@@ -421,15 +430,23 @@ Provides deep context to AI agents through:
             }
         if quality_mode is None:
             quality_mode = get_config().quality.mcp_default_mode
+        entry_url = entry.get("url")
+        if not isinstance(entry_url, str):
+            return {
+                "success": False,
+                "error_code": "invalid_catalog_entry",
+                "message": f"'{entry['name']}' does not have a valid repository URL.",
+                "entry": entry,
+            }
         service = IndexingService()
         user_id = get_authenticated_user_id()
         result = await asyncio.to_thread(
-            service.index_repository, entry["url"], None, user_id=user_id,
+            service.index_repository, entry_url, None, user_id=user_id,
             quality_mode=quality_mode,
         )
         if isinstance(result, dict):
             result.setdefault("resolved_from", entry["name"])
-            result.setdefault("source_url", entry["url"])
+            result.setdefault("source_url", entry_url)
         return result
 
     @_tool_in("code")
@@ -946,7 +963,7 @@ Provides deep context to AI agents through:
         user_id = get_authenticated_user_id()
         service = get_paper_service(user_id=user_id)
 
-        def _do_index():
+        def _do_index() -> dict[str, Any]:
             # Check if source is a local PDF
             if os.path.isfile(source) and source.lower().endswith(".pdf"):
                 return service.index_paper(pdf_path=source, source="upload")
@@ -3088,7 +3105,7 @@ Provides deep context to AI agents through:
     return server
 
 
-def run_server():
+def run_server() -> None:
     """Run the MCP server in stdio mode."""
     server = create_server()
     server.run(transport="stdio")

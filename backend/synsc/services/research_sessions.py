@@ -25,7 +25,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import structlog
 
@@ -60,8 +60,8 @@ class ResearchSession:
     created_at: float = field(default_factory=time.time)
     completed_at: float | None = None
     events: list[ResearchEvent] = field(default_factory=list)
-    queues: list[asyncio.Queue] = field(default_factory=list)
-    task: asyncio.Task | None = None
+    queues: list[asyncio.Queue[Any]] = field(default_factory=list)
+    task: asyncio.Task[Any] | None = None
 
     def to_public(self) -> dict[str, Any]:
         return {
@@ -86,7 +86,7 @@ _MAX_SESSIONS = 256  # FIFO eviction past this
 _MAX_AUTO_INDEX_PER_SESSION = 3
 
 
-def _gc_sessions():
+def _gc_sessions() -> None:
     if len(_SESSIONS) <= _MAX_SESSIONS:
         return
     # Drop oldest completed/failed first.
@@ -284,7 +284,7 @@ async def start_session(
     if runner is None:
         runner = lambda s: _default_runner(s, auto_index=auto_index)  # noqa: E731
 
-    async def _wrap():
+    async def _wrap() -> None:
         try:
             session.status = "running"
             _emit(session, "iteration", phase="start", query=session.query)
@@ -334,10 +334,14 @@ async def _default_runner(
     _emit(session, "iteration", phase="retrieve", hop=0)
 
     service = ResearchService()
+    mode = cast(
+        Literal["quick", "deep", "oracle"],
+        session.mode if session.mode in ("quick", "deep", "oracle") else "quick",
+    )
     result = await asyncio.to_thread(
         service.run,
         query=session.query,
-        mode=session.mode if session.mode in ("quick", "deep", "oracle") else "quick",
+        mode=mode,
         source_ids=session.source_ids,
         source_types=session.source_types,
         user_id=session.user_id,
@@ -365,7 +369,7 @@ async def subscribe(session_id: str) -> AsyncIterator[ResearchEvent]:
     if session.status not in ("running", "pending"):
         return
 
-    q: asyncio.Queue = asyncio.Queue(maxsize=256)
+    q: asyncio.Queue[Any] = asyncio.Queue[Any](maxsize=256)
     session.queues.append(q)
     try:
         while True:

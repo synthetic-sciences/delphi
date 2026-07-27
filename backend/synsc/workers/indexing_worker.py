@@ -17,6 +17,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 import structlog
@@ -76,7 +77,7 @@ class IndexingWorker:
       Phase 3 — Generate embeddings + store      (API-bound, semaphore-gated)
     """
     
-    def __init__(self, worker_id: str | None = None, max_workers: int = 4):
+    def __init__(self, worker_id: str | None = None, max_workers: int = 4) -> None:
         """Initialize the worker.
         
         Args:
@@ -103,7 +104,7 @@ class IndexingWorker:
             max_workers=max_workers,
         )
     
-    def _shutdown_handler(self, signum, frame):
+    def _shutdown_handler(self, signum: int, frame: FrameType | None) -> None:
         """Handle shutdown signals gracefully."""
         logger.info("Shutdown signal received", worker_id=self.worker_id)
         self.running = False
@@ -118,15 +119,22 @@ class IndexingWorker:
         updated = self.job_queue.update_progress(
             job.job_id,
             progress,
-            worker_id=job.worker_id,
+            worker_id=self._lease_worker_id(job),
             attempt_count=job.attempt_count,
             **details,
         )
         if updated is False:
             raise JobLeaseLost(f"Lease lost for job {job.job_id}")
         return True
+
+    @staticmethod
+    def _lease_worker_id(job: IndexingJob) -> str:
+        """Return the persisted lease owner or fail before mutating the job."""
+        if not job.worker_id:
+            raise JobLeaseLost(f"Job {job.job_id} has no active worker lease")
+        return job.worker_id
     
-    def run(self, poll_interval: float = 2.0):
+    def run(self, poll_interval: float = 2.0) -> None:
         """Run the worker loop.
         
         Polls for new jobs and processes them.
@@ -212,7 +220,7 @@ class IndexingWorker:
         
         logger.info("Worker stopped", worker_id=self.worker_id)
     
-    def _process_job(self, job: IndexingJob):
+    def _process_job(self, job: IndexingJob) -> None:
         """Process a single indexing job.
         
         Args:
@@ -301,7 +309,7 @@ class IndexingWorker:
                 files_processed=result["files_processed"],
                 chunks_created=result["chunks_created"],
                 symbols_extracted=result["symbols_extracted"],
-                worker_id=job.worker_id,
+                worker_id=self._lease_worker_id(job),
                 attempt_count=job.attempt_count,
             )
             if completed is False:
@@ -310,7 +318,7 @@ class IndexingWorker:
         except JobLeaseLost:
             self.job_queue.acknowledge_cancellation(
                 job.job_id,
-                worker_id=job.worker_id,
+                worker_id=self._lease_worker_id(job),
                 attempt_count=job.attempt_count,
             )
             logger.info("Stopped work after lease loss", job_id=job.job_id)
@@ -323,13 +331,13 @@ class IndexingWorker:
             failed = self.job_queue.fail_job(
                 job.job_id,
                 str(e),
-                worker_id=job.worker_id,
+                worker_id=self._lease_worker_id(job),
                 attempt_count=job.attempt_count,
             )
             if failed is False:
                 self.job_queue.acknowledge_cancellation(
                     job.job_id,
-                    worker_id=job.worker_id,
+                    worker_id=self._lease_worker_id(job),
                     attempt_count=job.attempt_count,
                 )
 
@@ -338,6 +346,9 @@ class IndexingWorker:
         from synsc.services.source_service import index_source
 
         source_type = "repo" if job.job_type == "repository" else job.job_type
+        if not job.source_url:
+            raise ValueError("Source indexing job is missing source_url")
+
         self._update_progress(
             job,
             progress=0.05,
@@ -353,7 +364,7 @@ class IndexingWorker:
                 try:
                     refreshed = self.job_queue.heartbeat_job(
                         job.job_id,
-                        worker_id=job.worker_id,
+                        worker_id=self._lease_worker_id(job),
                         attempt_count=job.attempt_count,
                     )
                     if refreshed is False:
@@ -395,7 +406,7 @@ class IndexingWorker:
             job.job_id,
             source_type=source_type,
             source_id=result.get("source_id") or None,
-            worker_id=job.worker_id,
+            worker_id=self._lease_worker_id(job),
             attempt_count=job.attempt_count,
         )
         if completed is False:
@@ -405,14 +416,14 @@ class IndexingWorker:
         self,
         job: IndexingJob,
         repo_path: Path,
-        files: list[dict],
+        files: list[dict[str, Any]],
         owner: str,
         name: str,
         branch: str,
         commit_sha: str,
         repo_url: str,
         user_id: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Process files through a fully parallel 3-phase pipeline.
         
         Phase 1: Read files + detect languages  (I/O-parallel)
@@ -470,9 +481,9 @@ class IndexingWorker:
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # Phase 1: Read files + detect languages (parallel I/O)
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        processed_files: list[dict] = []
+        processed_files: list[dict[str, Any]] = []
         total_files = len(files)
-        phase1_progress = {"done": 0}
+        phase1_progress: dict[str, int] = {"done": 0}
         
         self._update_progress(
             job, progress=0.20, stage="reading",
@@ -480,12 +491,12 @@ class IndexingWorker:
         )
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
+            read_futures = {
                 executor.submit(_read_repository_file, repo_path, file_info): file_info
                 for file_info in files
             }
-            for future in as_completed(futures):
-                result = future.result()
+            for read_future in as_completed(read_futures):
+                result = read_future.result()
                 if result["success"]:
                     with _lock:
                         processed_files.append(result)
@@ -522,16 +533,16 @@ class IndexingWorker:
         )
         
         chunks_to_embed: list[tuple[str, str]] = []  # (chunk_id, content)
-        phase2 = {"chunks": 0, "symbols": 0, "files_done": 0}
+        phase2: dict[str, int] = {"chunks": 0, "symbols": 0, "files_done": 0}
         phase2_errors: list[str] = []
         
         # Distribute files round-robin across worker threads
         n_batches = min(self.max_workers, len(processed_files))
-        file_batches: list[list[dict]] = [[] for _ in range(n_batches)]
+        file_batches: list[list[dict[str, Any]]] = [[] for _ in range(n_batches)]
         for i, fd in enumerate(processed_files):
             file_batches[i % n_batches].append(fd)
         
-        def chunk_file_batch(batch: list[dict], batch_idx: int):
+        def chunk_file_batch(batch: list[dict[str, Any]], batch_idx: int) -> None:
             """Process a batch of files: DB records + symbols + chunks.
             
             Each call opens its own DB session so transactions are isolated.
@@ -637,15 +648,15 @@ class IndexingWorker:
                 phase2["files_done"] += len(batch)
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
+            chunk_futures = {
                 executor.submit(chunk_file_batch, batch, i): i
                 for i, batch in enumerate(file_batches) if batch
             }
-            for future in as_completed(futures):
+            for chunk_future in as_completed(chunk_futures):
                 try:
-                    future.result()
+                    chunk_future.result()
                 except Exception as e:
-                    batch_idx = futures[future]
+                    batch_idx = chunk_futures[chunk_future]
                     logger.error("Chunk batch raised unexpectedly", batch=batch_idx, error=str(e))
                 
                 # Report progress after each batch completes
@@ -689,7 +700,7 @@ class IndexingWorker:
                 for i in range(0, len(chunks_to_embed), embed_batch_size)
             ]
             total_embed_batches = len(embed_batches)
-            embed_progress = {"done": 0}
+            embed_progress: dict[str, int] = {"done": 0}
             embed_errors: list[str] = []
             
             # Gate concurrent embedding API calls — 2 in-flight is safe;
@@ -697,7 +708,10 @@ class IndexingWorker:
             max_concurrent_api = min(2, self.max_workers)
             api_semaphore = threading.Semaphore(max_concurrent_api)
             
-            def embed_and_store(batch: list[tuple[str, str]], batch_num: int):
+            def embed_and_store(
+                batch: list[tuple[str, str]],
+                batch_num: int,
+            ) -> None:
                 """Generate embeddings for one batch and store in pgvector.
                 
                 Retry logic handles transient 429s with exponential
@@ -758,17 +772,17 @@ class IndexingWorker:
                 )
             
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {
+                embed_futures = {
                     executor.submit(embed_and_store, batch, i + 1): i
                     for i, batch in enumerate(embed_batches)
                 }
-                for future in as_completed(futures):
+                for embed_future in as_completed(embed_futures):
                     try:
-                        future.result()
+                        embed_future.result()
                     except JobLeaseLost:
                         raise
                     except Exception as e:
-                        batch_idx = futures[future]
+                        batch_idx = embed_futures[embed_future]
                         embed_errors.append(f"Batch {batch_idx + 1}: {e}")
                         logger.error(
                             "Embedding batch failed (skipped)",
@@ -789,13 +803,13 @@ class IndexingWorker:
         
         # ── Finalize: update repository stats ────────────────────────────
         with get_session() as session:
-            repo = session.query(Repository).filter(
+            stored_repo = session.query(Repository).filter(
                 Repository.repo_id == repo_id
             ).first()
-            if repo:
-                repo.files_count = len(processed_files)
-                repo.chunks_count = chunks_created
-                repo.symbols_count = symbols_extracted
+            if stored_repo:
+                stored_repo.files_count = len(processed_files)
+                stored_repo.chunks_count = chunks_created
+                stored_repo.symbols_count = symbols_extracted
                 session.commit()
         
         return {
@@ -807,7 +821,7 @@ class IndexingWorker:
         }
 
 
-def run_worker(worker_id: str | None = None, max_workers: int = 4):
+def run_worker(worker_id: str | None = None, max_workers: int = 4) -> None:
     """Run the indexing worker.
     
     Args:

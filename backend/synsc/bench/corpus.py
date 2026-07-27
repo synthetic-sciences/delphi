@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -58,7 +59,7 @@ class Corpus:
     def get(self, doc_id: str) -> Document | None:
         return self._by_id.get(doc_id)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[Document]:
         return iter(self.documents)
 
     def __len__(self) -> int:

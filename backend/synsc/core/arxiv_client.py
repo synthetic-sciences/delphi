@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import arxiv
+import arxiv  # type: ignore[import-untyped]  # arxiv does not publish typing metadata.
 import httpx
 
 
@@ -144,7 +144,7 @@ def download_arxiv_pdf(
     pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
 
     # Try downloading with retries
-    last_error = None
+    last_error: Exception | None = None
     for attempt in range(max_retries):
         try:
             # Download PDF

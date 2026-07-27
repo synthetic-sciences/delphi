@@ -26,7 +26,7 @@ class VectorStore:
     - UserRepository junction table (tracks which users have access)
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         self._manager = PgVectorManager()
         logger.info("Vector store initialized (pgvector)")
     

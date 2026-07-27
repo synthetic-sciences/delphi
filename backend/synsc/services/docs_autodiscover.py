@@ -159,21 +159,40 @@ def discover_docs_url(
         return None
     owner, name = m.group(1), m.group(2)
 
-    homepage_fallback = None
+    homepage_fallback: str | None = None
     with httpx.Client(follow_redirects=True) as client:
-        for fn in (_from_github_homepage, _from_readme, _from_pyproject):
-            try:
-                if fn is _from_github_homepage:
-                    found = fn(client, owner, name)
-                else:
-                    found = fn(client, owner, name, branch)
-            except Exception as exc:
-                logger.debug("autodiscover: branch failed", fn=fn.__name__, error=str(exc))
-                found = None
-            if not found:
-                continue
-            if fn is _from_github_homepage and found.endswith("#homepage"):
-                homepage_fallback = found.removesuffix("#homepage")
-                continue
-            return found
+        try:
+            homepage = _from_github_homepage(client, owner, name)
+        except Exception as exc:
+            logger.debug(
+                "autodiscover: homepage lookup failed",
+                error=str(exc),
+            )
+            homepage = None
+        if homepage and homepage.endswith("#homepage"):
+            homepage_fallback = homepage.removesuffix("#homepage")
+        elif homepage:
+            return homepage
+
+        try:
+            readme = _from_readme(client, owner, name, branch)
+        except Exception as exc:
+            logger.debug(
+                "autodiscover: README lookup failed",
+                error=str(exc),
+            )
+            readme = None
+        if readme:
+            return readme
+
+        try:
+            pyproject = _from_pyproject(client, owner, name, branch)
+        except Exception as exc:
+            logger.debug(
+                "autodiscover: pyproject lookup failed",
+                error=str(exc),
+            )
+            pyproject = None
+        if pyproject:
+            return pyproject
     return homepage_fallback

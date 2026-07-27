@@ -12,7 +12,7 @@ class EquationExtractor(BaseExtractor):
     def get_extractor_name(self) -> str:
         return "equation"
 
-    def extract(self, text: str, **kwargs) -> list[dict[str, Any]]:
+    def extract(self, text: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Extract equations from text."""
         equations = []
 

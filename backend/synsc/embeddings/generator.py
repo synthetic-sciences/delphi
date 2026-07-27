@@ -8,12 +8,34 @@ vector to match the pgvector schema.
 
 import logging
 import os
+from typing import Protocol
 
 import numpy as np
 
 from synsc.config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+class EmbeddingProvider(Protocol):
+    """Common surface implemented by local and remote embedding backends."""
+
+    model_name: str
+    dimension: int
+    batch_size: int
+    device: str
+
+    def generate(self, texts: list[str]) -> np.ndarray: ...
+
+    def generate_batched(
+        self,
+        texts: list[str],
+        batch_size: int | None = None,
+    ) -> np.ndarray: ...
+
+    def generate_single(self, text: str) -> np.ndarray: ...
+
+    def embed_query(self, query: str) -> np.ndarray: ...
 
 
 class EmbeddingGenerator:
@@ -236,10 +258,10 @@ PaperEmbeddingGenerator = EmbeddingGenerator
 # Singletons
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-_embedding_generator = None  # type: ignore[var-annotated]
+_embedding_generator: EmbeddingProvider | None = None
 
 
-def get_embedding_generator():
+def get_embedding_generator() -> EmbeddingProvider:
     """Get the global embedding generator.
 
     Dispatches based on the `EMBEDDING_PROVIDER` env var (`local` is the
@@ -284,7 +306,7 @@ def get_embedding_generator():
 get_paper_embedding_generator = get_embedding_generator
 
 
-def set_embedding_generator(generator: EmbeddingGenerator) -> None:
+def set_embedding_generator(generator: EmbeddingProvider) -> None:
     """Set global embedding generator."""
     global _embedding_generator
     _embedding_generator = generator
@@ -295,7 +317,7 @@ def cleanup_embedding_generator() -> None:
     global _embedding_generator
     if _embedding_generator is not None:
         # Only the local sentence-transformers backend holds a .model handle.
-        if hasattr(_embedding_generator, "model"):
+        if isinstance(_embedding_generator, EmbeddingGenerator):
             del _embedding_generator.model
         _embedding_generator = None
 

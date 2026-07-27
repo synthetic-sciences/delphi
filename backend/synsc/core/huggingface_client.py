@@ -72,7 +72,7 @@ def get_dataset_info(hf_id: str, hf_token: str | None = None) -> dict[str, Any]:
 
     try:
         from huggingface_hub import HfApi
-        from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
+        from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
 
         api = HfApi()
         info = api.dataset_info(hf_id, token=token)
@@ -107,7 +107,7 @@ def get_dataset_info(hf_id: str, hf_token: str | None = None) -> dict[str, Any]:
 
         # Extract tags, languages, license from card_data
         tags = list(info.tags) if info.tags else []
-        languages = []
+        languages: list[str] = []
         license_id = None
 
         if info.card_data:
@@ -117,8 +117,8 @@ def get_dataset_info(hf_id: str, hf_token: str | None = None) -> dict[str, Any]:
             license_id = info.card_data.get("license")
 
         # Extract features and splits from dataset_info if available
-        features = {}
-        splits = {}
+        features: dict[str, Any] | list[Any] = {}
+        splits: dict[str, Any] = {}
         dataset_size_bytes = None
 
         if hasattr(info, "card_data") and info.card_data:

@@ -43,6 +43,8 @@ jobs:
         run: uv sync --locked --extra dev
       - name: Lint backend
         run: uv run ruff check synsc tests
+      - name: Type-check backend
+        run: uv run mypy synsc
       - name: Audit backend dependencies
         run: |
           audit_requirements="$(mktemp)"

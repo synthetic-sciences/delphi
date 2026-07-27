@@ -8,6 +8,7 @@ import logging
 import os
 
 import structlog
+from structlog.typing import Processor
 
 
 def configure_logging(*, force: bool = False) -> None:
@@ -20,12 +21,13 @@ def configure_logging(*, force: bool = False) -> None:
     log_format = os.getenv("SYNSC_LOG_FORMAT", "console").lower()
     log_level = os.getenv("SYNSC_LOG_LEVEL", "INFO").upper()
 
+    renderer: Processor
     if log_format == "json":
         renderer = structlog.processors.JSONRenderer()
     else:
         renderer = structlog.dev.ConsoleRenderer()
 
-    shared_processors = [
+    shared_processors: list[Processor] = [
         structlog.stdlib.filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,

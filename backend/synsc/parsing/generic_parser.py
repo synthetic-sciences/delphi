@@ -231,10 +231,11 @@ class GenericTreeSitterParser(BaseParser):
             if child.type in BODY_NODE_TYPES:
                 body = child
                 break
+        node_text = node.text or b""
         raw = (
-            node.text[: body.start_byte - node.start_byte]
+            node_text[: body.start_byte - node.start_byte]
             if body is not None
-            else node.text
+            else node_text
         )
         text = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else str(raw)
         text = " ".join(text.split()).strip().rstrip("{(:").strip()

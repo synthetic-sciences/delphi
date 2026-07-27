@@ -31,7 +31,7 @@ class DatasetService:
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    def _check_duplicate_by_hf_id(self, hf_id: str) -> dict | None:
+    def _check_duplicate_by_hf_id(self, hf_id: str) -> dict[str, Any] | None:
         """Check if dataset with this HF ID already exists."""
         try:
             with get_session() as session:
@@ -384,7 +384,7 @@ class DatasetService:
                 "error": f"Failed to index dataset: {str(e)}",
             }
 
-    def get_dataset(self, dataset_id: str) -> dict | None:
+    def get_dataset(self, dataset_id: str) -> dict[str, Any] | None:
         """Get a specific dataset by ID."""
         try:
             with get_session() as session:
@@ -414,7 +414,7 @@ class DatasetService:
             logger.error(f"Failed to get dataset: {e}")
         return None
 
-    def list_datasets(self, limit: int = 50) -> list[dict]:
+    def list_datasets(self, limit: int = 50) -> list[dict[str, Any]]:
         """List datasets for the current user."""
         try:
             with get_session() as session:

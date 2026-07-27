@@ -12,7 +12,7 @@ Models for:
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -31,11 +31,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 # Try to import pgvector for PostgreSQL
 try:
-    from pgvector.sqlalchemy import Vector
+    from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
     PGVECTOR_AVAILABLE = True
 except ImportError:
     PGVECTOR_AVAILABLE = False
-    Vector = None  # type: ignore
+    Vector = None
 
 
 class Base(DeclarativeBase):
@@ -125,7 +125,7 @@ class Repository(Base):
     total_lines: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     
-    languages: Mapped[dict | None] = mapped_column(JSONB)
+    languages: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     local_path: Mapped[str | None] = mapped_column(Text)
     
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -133,10 +133,10 @@ class Repository(Base):
         DateTime, default=utc_now, onupdate=utc_now
     )
     
-    repo_metadata: Mapped[dict | None] = mapped_column(JSONB)
+    repo_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     # Diff-aware re-indexing metadata
-    last_diff_stats: Mapped[dict | None] = mapped_column(JSONB)
+    last_diff_stats: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     embedding_model: Mapped[str | None] = mapped_column(String(100))
 
     # Whether the repo was indexed with deep AST chunking
@@ -160,8 +160,8 @@ class Repository(Base):
         if not self.languages:
             return {}
         if isinstance(self.languages, dict):
-            return self.languages
-        return json.loads(self.languages)
+            return cast(dict[str, float], self.languages)
+        return cast(dict[str, float], json.loads(self.languages))
 
     def set_languages(self, languages: dict[str, float]) -> None:
         self.languages = languages  # jsonb column
@@ -171,7 +171,7 @@ class Repository(Base):
             return {}
         if isinstance(self.repo_metadata, dict):
             return self.repo_metadata
-        return json.loads(self.repo_metadata)
+        return cast(dict[str, Any], json.loads(self.repo_metadata))
 
     def set_metadata(self, metadata: dict[str, Any]) -> None:
         self.repo_metadata = metadata  # jsonb column
@@ -313,7 +313,7 @@ class CodeChunk(Base):
     def get_symbol_names(self) -> list[str]:
         if not self.symbol_names:
             return []
-        return json.loads(self.symbol_names)
+        return cast(list[str], json.loads(self.symbol_names))
 
     def set_symbol_names(self, names: list[str]) -> None:
         self.symbol_names = json.dumps(names)
@@ -390,9 +390,9 @@ class Symbol(Base):
         String(36), ForeignKey("symbols.symbol_id", ondelete="SET NULL")
     )
     
-    parameters: Mapped[list | None] = mapped_column(JSONB)
+    parameters: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     return_type: Mapped[str | None] = mapped_column(String(255))
-    decorators: Mapped[list | None] = mapped_column(JSONB)
+    decorators: Mapped[list[str] | None] = mapped_column(JSONB)
     
     language: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
@@ -415,7 +415,7 @@ class Symbol(Base):
             return []
         if isinstance(self.parameters, list):
             return self.parameters
-        return json.loads(self.parameters)
+        return cast(list[dict[str, Any]], json.loads(self.parameters))
 
     def set_parameters(self, params: list[dict[str, Any]]) -> None:
         self.parameters = params  # jsonb column
@@ -425,7 +425,7 @@ class Symbol(Base):
             return []
         if isinstance(self.decorators, list):
             return self.decorators
-        return json.loads(self.decorators)
+        return cast(list[str], json.loads(self.decorators))
 
     def set_decorators(self, decorators: list[str]) -> None:
         self.decorators = decorators  # jsonb column
@@ -502,7 +502,7 @@ class Paper(Base):
     )
     arxiv_id: Mapped[str | None] = mapped_column(String(50), unique=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
-    authors: Mapped[list | None] = mapped_column(JSONB)
+    authors: Mapped[list[str] | None] = mapped_column(JSONB)
     abstract: Mapped[str | None] = mapped_column(Text)
     published_date: Mapped[str | None] = mapped_column(String(50))
     pdf_url: Mapped[str | None] = mapped_column(Text)
@@ -517,7 +517,7 @@ class Paper(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now, onupdate=utc_now
     )
-    report: Mapped[dict | None] = mapped_column(JSONB)
+    report: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     # Relationships
     user_papers: Mapped[list["UserPaper"]] = relationship(
@@ -542,7 +542,7 @@ class Paper(Base):
             return []
         if isinstance(self.authors, list):
             return self.authors
-        return json.loads(self.authors)
+        return cast(list[str], json.loads(self.authors))
 
     def set_authors(self, authors: list[str]) -> None:
         self.authors = authors  # jsonb column accepts lists directly
@@ -552,7 +552,7 @@ class Paper(Base):
             return {}
         if isinstance(self.report, dict):
             return self.report
-        return json.loads(self.report)
+        return cast(dict[str, Any], json.loads(self.report))
 
     def set_metadata(self, metadata: dict[str, Any]) -> None:
         if isinstance(metadata, dict):
@@ -606,7 +606,7 @@ class PaperChunk(Base):
     chunk_type: Mapped[str] = mapped_column(String(50), default="section")
     page_number: Mapped[int | None] = mapped_column(Integer)
     token_count: Mapped[int | None] = mapped_column(Integer)
-    chunk_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    chunk_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     paper: Mapped["Paper"] = relationship("Paper", back_populates="paper_chunks")
@@ -634,7 +634,7 @@ class Citation(Base):
     citation_context: Mapped[str | None] = mapped_column(Text)
     page_number: Mapped[int | None] = mapped_column(Integer)
     citation_number: Mapped[int | None] = mapped_column(Integer)
-    external_reference: Mapped[dict | None] = mapped_column(JSONB)
+    external_reference: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     paper: Mapped["Paper"] = relationship(
@@ -893,7 +893,7 @@ class AtlasWorkspace(Base):
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     nodes_count: Mapped[int] = mapped_column(Integer, default=0)
     artifacts_count: Mapped[int] = mapped_column(Integer, default=0)
-    tags: Mapped[list | None] = mapped_column(JSONB)
+    tags: Mapped[list[str] | None] = mapped_column(JSONB)
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now, onupdate=utc_now
@@ -930,7 +930,7 @@ class AtlasNode(Base):
     content: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str | None] = mapped_column(String(32))
     outcome: Mapped[str | None] = mapped_column(String(32))
-    tags: Mapped[list | None] = mapped_column(JSONB)
+    tags: Mapped[list[str] | None] = mapped_column(JSONB)
     decision_rationale: Mapped[str | None] = mapped_column(Text)
     commit_sha: Mapped[str | None] = mapped_column(String(40))
     is_committed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1001,7 +1001,7 @@ class AtlasEdge(Base):
         nullable=False,
     )
     edge_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    edge_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    edge_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
@@ -1032,7 +1032,7 @@ class AtlasArtifact(Base):
     name: Mapped[str | None] = mapped_column(Text)
     preview: Mapped[str | None] = mapped_column(Text)
     uri: Mapped[str | None] = mapped_column(Text)
-    artifact_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    artifact_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
@@ -1063,7 +1063,7 @@ class AtlasExecution(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
-    inputs: Mapped[dict | None] = mapped_column(JSONB)
+    inputs: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     output_summary: Mapped[str | None] = mapped_column(Text)
     error: Mapped[str | None] = mapped_column(Text)
 
@@ -1088,9 +1088,9 @@ class AtlasToolContract(Base):
     description: Mapped[str | None] = mapped_column(Text)
     when_to_use: Mapped[str | None] = mapped_column(Text)
     avoid_when: Mapped[str | None] = mapped_column(Text)
-    signature: Mapped[dict | None] = mapped_column(JSONB)
-    examples: Mapped[list | None] = mapped_column(JSONB)
-    tags: Mapped[list | None] = mapped_column(JSONB)
+    signature: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    examples: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    tags: Mapped[list[str] | None] = mapped_column(JSONB)
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
 
@@ -1148,7 +1148,7 @@ class IndexingJob(Base):
     # Legacy repository jobs continue to use repo_url/branch directly.
     source_url: Mapped[str | None] = mapped_column(Text)
     display_name: Mapped[str | None] = mapped_column(Text)
-    options: Mapped[dict | None] = mapped_column(JSONB)
+    options: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     priority: Mapped[int] = mapped_column(Integer, default=0)
@@ -1184,7 +1184,7 @@ class IndexingJob(Base):
         DateTime, default=utc_now, onupdate=utc_now
     )
     
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Convert job to dictionary for API responses."""
         return {
             "job_id": self.job_id,
@@ -1237,7 +1237,7 @@ class ContextBlob(Base):
     )
     user_id: Mapped[str] = mapped_column(String(36), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=utc_now, onupdate=utc_now
@@ -1259,7 +1259,7 @@ class ContextBlob(Base):
 # ==============================================================================
 
 
-def get_vector_column_type(dimension: int = 768):
+def get_vector_column_type(dimension: int = 768) -> Any | None:
     """Get the appropriate vector column type based on available backend."""
     if PGVECTOR_AVAILABLE and Vector is not None:
         return Vector(dimension)

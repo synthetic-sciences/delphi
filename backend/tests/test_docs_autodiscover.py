@@ -99,6 +99,37 @@ def test_discover_docs_url_falls_back_to_readme(monkeypatch):
     assert out == "https://docs.example.com/"
 
 
+def test_discover_docs_url_continues_after_homepage_lookup_failure(monkeypatch):
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fail_homepage(*args):
+        raise RuntimeError("GitHub API unavailable")
+
+    monkeypatch.setattr(docs_autodiscover.httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        docs_autodiscover,
+        "_from_github_homepage",
+        fail_homepage,
+    )
+    monkeypatch.setattr(
+        docs_autodiscover,
+        "_from_readme",
+        lambda *args: "https://docs.example.com/",
+    )
+
+    out = docs_autodiscover.discover_docs_url("https://github.com/x/y")
+
+    assert out == "https://docs.example.com/"
+
+
 def test_discover_docs_url_uses_non_docs_homepage_as_last_fallback(monkeypatch):
     class FakeResp:
         status_code = 404

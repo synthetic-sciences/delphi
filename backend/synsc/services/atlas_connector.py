@@ -264,7 +264,7 @@ def ingest_edge(
     source_external_id: str,
     target_external_id: str,
     edge_type: str,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create an edge (parent/child/blocks/derives_from/etc.). Idempotent
     on (source, target, edge_type)."""
@@ -322,7 +322,7 @@ def ingest_artifact(
     name: str | None = None,
     preview: str | None = None,
     uri: str | None = None,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
     external_id: str | None = None,
 ) -> dict[str, Any]:
     """Attach an artifact (table/plot/log/diff/metric/model) to a node."""
@@ -379,7 +379,7 @@ def ingest_execution(
     started_at: str | None = None,
     ended_at: str | None = None,
     duration_ms: int | None = None,
-    inputs: dict | None = None,
+    inputs: dict[str, Any] | None = None,
     output_summary: str | None = None,
     error: str | None = None,
     external_id: str | None = None,
@@ -433,8 +433,8 @@ def ingest_tool_contract(
     description: str | None = None,
     when_to_use: str | None = None,
     avoid_when: str | None = None,
-    signature: dict | None = None,
-    examples: list | None = None,
+    signature: dict[str, Any] | None = None,
+    examples: list[Any] | None = None,
     tags: list[str] | None = None,
 ) -> dict[str, Any]:
     """Register a tool-contract document so agents can ``retrieve_tool_contract``."""
@@ -894,17 +894,20 @@ def find_what_was_tried(
             params,
         ).mappings().all()
 
-    by_node: dict[str, dict] = {n["node_id"]: {**n, "executions": [], "artifacts": []} for n in nodes}
+    by_node: dict[str, dict[str, Any]] = {n["node_id"]: {**n, "executions": [], "artifacts": []} for n in nodes}
     for e in execs:
         nid = str(e["node_id"])
         if nid in by_node:
             by_node[nid]["executions"].append({**dict(e), "node_id": nid,
                                               "execution_id": str(e["execution_id"])})
     for a in artifacts:
-        nid = str(a["node_id"]) if a["node_id"] else None
-        if nid and nid in by_node:
-            by_node[nid]["artifacts"].append({**dict(a), "node_id": nid,
-                                             "artifact_id": str(a["artifact_id"])})
+        artifact_node_id = str(a["node_id"]) if a["node_id"] else None
+        if artifact_node_id and artifact_node_id in by_node:
+            by_node[artifact_node_id]["artifacts"].append({
+                **dict(a),
+                "node_id": artifact_node_id,
+                "artifact_id": str(a["artifact_id"]),
+            })
 
     return {
         "question": question,
@@ -967,7 +970,7 @@ def build_atlas_context(
     matched_nodes = search_atlas_nodes(
         query=question, user_id=user_id, workspace_ids=workspace_ids, top_k=8,
     )
-    relations: list[dict] = []
+    relations: list[dict[str, Any]] = []
     if node_id:
         relations = find_related_nodes(
             user_id=user_id, node_id=node_id, max_depth=2, top_k=20,
@@ -1001,7 +1004,7 @@ def build_atlas_context(
         used += c
         return True
 
-    pruned_nodes: list[dict] = []
+    pruned_nodes: list[dict[str, Any]] = []
     for n in matched_nodes:
         body = (n.get("title") or "") + (n.get("summary") or "") + (n.get("content") or "")
         if _fits(body):

@@ -127,7 +127,7 @@ class PackSnippet:
     # Stable reference: commit SHA at the moment of indexing.
     commit_sha: str | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "role": self.role,
             "chunk_id": self.chunk_id,
@@ -153,9 +153,9 @@ class ContextPack:
     query: str
     quality_mode: str
     snippets: list[PackSnippet] = field(default_factory=list)
-    architecture_summary: dict | None = None
-    symbols: list[dict] = field(default_factory=list)
-    rationale: dict = field(default_factory=dict)
+    architecture_summary: dict[str, Any] | None = None
+    symbols: list[dict[str, Any]] = field(default_factory=list)
+    rationale: dict[str, Any] = field(default_factory=dict[str, Any])
     used_tokens_estimate: int = 0
     token_budget: int = 0
     # If the planner issued follow-up searches, list the queries here so the
@@ -165,8 +165,9 @@ class ContextPack:
     # mentioning the symbol, no examples, etc.), we record it so the agent
     # knows the absence is real, not a missing fetch.
     coverage_gaps: list[str] = field(default_factory=list)
+    elapsed_ms: int = 0
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "query": self.query,
             "quality_mode": self.quality_mode,
@@ -178,6 +179,7 @@ class ContextPack:
             "token_budget": self.token_budget,
             "requeries": self.requeries,
             "coverage_gaps": self.coverage_gaps,
+            "elapsed_ms": self.elapsed_ms,
         }
 
 
@@ -444,7 +446,7 @@ class ContextPackBuilder:
     # ── Snippet helpers ───────────────────────────────────────────────────
 
     def _snippet_from_result(
-        self, r: dict, role: str, why: str
+        self, r: dict[str, Any], role: str, why: str
     ) -> PackSnippet:
         return PackSnippet(
             role=role,
@@ -484,17 +486,22 @@ class ContextPackBuilder:
     def _parse_symbols(self, raw: Any) -> list[str] | None:
         if raw is None:
             return None
-        if isinstance(raw, list):
+        if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
             return raw
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
+            if isinstance(parsed, list) and all(
+                isinstance(item, str) for item in parsed
+            ):
+                return parsed
+            return None
         except (TypeError, ValueError):
             return None
 
     # ── Expansion queries ─────────────────────────────────────────────────
 
     def _add_enclosing_symbol_bodies(
-        self, session: Session, pack: ContextPack, primary: list[dict]
+        self, session: Session, pack: ContextPack, primary: list[dict[str, Any]]
     ) -> None:
         """For each primary hit, fetch the tightest enclosing function/class
         body. The chunk often shows just a slice; the full body shows
@@ -502,7 +509,7 @@ class ContextPackBuilder:
         """
         if not primary:
             return
-        chunks_by_file: dict[str, list[dict]] = {}
+        chunks_by_file: dict[str, list[dict[str, Any]]] = {}
         for r in primary:
             fid = r.get("file_id")
             if fid:
@@ -582,7 +589,7 @@ class ContextPackBuilder:
             )
 
     def _add_adjacent_chunks(
-        self, session: Session, pack: ContextPack, primary: list[dict]
+        self, session: Session, pack: ContextPack, primary: list[dict[str, Any]]
     ) -> None:
         """Fetch chunk N-1 and N+1 for each primary chunk so the agent sees
         what came before/after the matched slice.
@@ -628,7 +635,7 @@ class ContextPackBuilder:
                 )
 
     def _add_same_class_siblings(
-        self, session: Session, pack: ContextPack, primary: list[dict]
+        self, session: Session, pack: ContextPack, primary: list[dict[str, Any]]
     ) -> None:
         """Use chunk_relationships.same_class to surface sibling methods of
         the same class — agents often need them to understand the API surface.
@@ -673,7 +680,7 @@ class ContextPackBuilder:
             )
 
     def _add_imports(
-        self, session: Session, pack: ContextPack, primary: list[dict]
+        self, session: Session, pack: ContextPack, primary: list[dict[str, Any]]
     ) -> None:
         """Fetch the import block (chunk_type='import') of each primary file."""
         file_ids = list({r.get("file_id") for r in primary if r.get("file_id")})
@@ -720,7 +727,7 @@ class ContextPackBuilder:
 
     # ── Symbol-mention queries ────────────────────────────────────────────
 
-    def _collect_symbol_names(self, primary: list[dict]) -> list[str]:
+    def _collect_symbol_names(self, primary: list[dict[str, Any]]) -> list[str]:
         seen: dict[str, None] = {}
         for r in primary:
             raw = r.get("symbol_names")
@@ -740,7 +747,7 @@ class ContextPackBuilder:
         session: Session,
         names: list[str],
         repo_ids: list[str] | None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         if not names:
             return []
         params: dict[str, Any] = {"user_id": self.user_id}
@@ -888,7 +895,7 @@ class ContextPackBuilder:
 
     def _build_architecture_summary(
         self, session: Session, repo_ids: list[str]
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Pull a directory-level overview of the in-scope repos so broad
         queries get a navigable map.
         """
@@ -944,7 +951,7 @@ class ContextPackBuilder:
     # ── Re-query planner ──────────────────────────────────────────────────
 
     def _plan_requeries(
-        self, pack: ContextPack, primary: list[dict], query: str
+        self, pack: ContextPack, primary: list[dict[str, Any]], query: str
     ) -> list[str]:
         """Decide whether to issue follow-up searches.
 
@@ -994,7 +1001,7 @@ def build_context_pack(
     include_docs: bool = True,
     include_examples: bool = True,
     include_configs: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     builder = ContextPackBuilder(
         user_id=user_id,
         token_budget=token_budget,
@@ -1018,7 +1025,7 @@ def get_chunk_context(
     radius: int = 1,
     include_enclosing: bool = True,
     include_same_class: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     """Fetch a chunk plus its surrounding context.
 
     Returns the chunk itself, ``radius`` chunks above and below (in the

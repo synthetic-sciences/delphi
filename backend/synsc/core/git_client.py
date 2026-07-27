@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import requests as _requests
 import structlog
 from dulwich import porcelain
+from dulwich.refs import HEADREF, Ref
 from dulwich.repo import Repo
 
 from synsc.config import get_config
@@ -100,8 +101,9 @@ class GitClient:
                 timeout=5,
             )
             if resp.status_code == 200:
-                branch = resp.json().get("default_branch")
-                if branch:
+                payload = resp.json()
+                branch = payload.get("default_branch") if isinstance(payload, dict) else None
+                if isinstance(branch, str) and branch:
                     logger.debug("Auto-detected default branch", owner=owner, name=name, branch=branch)
                     return branch
         except Exception:
@@ -209,15 +211,15 @@ class GitClient:
                         repo, refresh_url, depth=1, force=True,
                     )
 
-                remote_ref = f"refs/remotes/origin/{branch}".encode()
+                remote_ref = Ref(f"refs/remotes/origin/{branch}".encode())
                 refs = repo.get_refs()
                 remote_sha_bytes = refs.get(remote_ref)
 
                 if remote_sha_bytes:
                     # Fast-forward HEAD to the remote tip so list_files reads
                     # the latest content.
-                    repo.refs[b"HEAD"] = remote_sha_bytes
-                    branch_ref = f"refs/heads/{branch}".encode()
+                    repo.refs[HEADREF] = remote_sha_bytes
+                    branch_ref = Ref(f"refs/heads/{branch}".encode())
                     repo.refs[branch_ref] = remote_sha_bytes
                     commit_sha = remote_sha_bytes.decode()
                     logger.info(
@@ -319,7 +321,7 @@ class GitClient:
         repo_path: Path,
         include_content: bool = False,
         max_workers: int = 8,
-    ) -> list[dict]:
+    ) -> list[dict[str, str | int]]:
         """List all indexable files in a repository.
 
         Uses parallel I/O for faster file reading when include_content=True.
@@ -337,7 +339,7 @@ class GitClient:
             with a counter of skip reasons for the most recent call.
         """
         # Phase 1: Collect file paths (fast, single-threaded)
-        file_paths = []
+        file_paths: list[tuple[Path, Path, str, int]] = []
         skip_reasons: dict[str, int] = {}
         total_seen = 0
 
@@ -391,6 +393,7 @@ class GitClient:
         self.last_total_seen = total_seen
         
         # Phase 2: Read file contents in parallel (if requested)
+        files: list[dict[str, str | int]]
         if not include_content:
             # No content needed, just return metadata
             files = [
@@ -401,7 +404,9 @@ class GitClient:
             return files
         
         # Parallel file reading for content
-        def read_file_content(args):
+        def read_file_content(
+            args: tuple[Path, Path, str, int],
+        ) -> dict[str, str | int] | None:
             """Read a single file's content."""
             file_path, rel_path, filename, size = args
             try:

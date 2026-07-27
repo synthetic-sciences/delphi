@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-import fitz  # PyMuPDF
+import fitz  # type: ignore[import-untyped]  # PyMuPDF does not publish typing metadata.
 
 
 class PDFProcessingError(Exception):
@@ -53,7 +53,7 @@ class PDFSection:
 class ExtractedPaper:
     """Represents extracted content from a research paper PDF."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.title: str | None = None
         self.authors: list[str] = []
         self.abstract: str | None = None
@@ -185,9 +185,9 @@ def extract_abstract_from_text(text: str) -> str | None:
     return None
 
 
-def detect_sections(text: str) -> list[dict]:
+def detect_sections(text: str) -> list[dict[str, Any]]:
     """Detect section structure in paper text."""
-    sections = []
+    sections: list[dict[str, Any]] = []
     
     # Common section heading patterns
     patterns = [
@@ -387,7 +387,7 @@ def process_pdf(
             else:
                 # Split by paragraphs into sections
                 paragraphs = normalized_text.split("\n\n")
-                current_content = []
+                current_content: list[str] = []
                 current_length = 0
                 section_num = 1
                 

@@ -58,7 +58,13 @@ class SlackConnectorStub:
     def can_handle(self, url: str) -> bool:  # noqa: D401
         return "slack.com" in (url or "").lower()
 
-    def index(self, url, user_id, options=None, display_name=None):  # noqa: ANN001
+    def index(
+        self,
+        url: str,
+        user_id: str,
+        options: dict[str, Any] | None = None,
+        display_name: str | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError(
             "slack connector not implemented — pending SLACK_BOT_TOKEN wiring"
         )
@@ -72,7 +78,13 @@ class GoogleDriveConnectorStub:
             url or ""
         ).lower()
 
-    def index(self, url, user_id, options=None, display_name=None):  # noqa: ANN001
+    def index(
+        self,
+        url: str,
+        user_id: str,
+        options: dict[str, Any] | None = None,
+        display_name: str | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError(
             "gdrive connector not implemented — pending Google OAuth wiring"
         )
@@ -85,7 +97,13 @@ class SpreadsheetConnectorStub:
         u = (url or "").lower()
         return u.endswith((".csv", ".xlsx", ".xls", ".tsv"))
 
-    def index(self, url, user_id, options=None, display_name=None):  # noqa: ANN001
+    def index(
+        self,
+        url: str,
+        user_id: str,
+        options: dict[str, Any] | None = None,
+        display_name: str | None = None,
+    ) -> dict[str, Any]:
         raise NotImplementedError(
             "spreadsheet connector not implemented — pending pandas/csv ingestion"
         )

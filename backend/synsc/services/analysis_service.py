@@ -13,6 +13,7 @@ import json
 import re
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -635,7 +636,7 @@ class AnalysisService:
         self.config = get_config()
         self.user_id = user_id
 
-    def analyze_repository(self, repo_id: str, user_id: str | None = None) -> dict:
+    def analyze_repository(self, repo_id: str, user_id: str | None = None) -> dict[str, Any]:
         """Perform comprehensive analysis of a repository.
         
         Args:
@@ -680,7 +681,7 @@ class AnalysisService:
             is_cloud_mode = not repo.local_path or not Path(repo.local_path).exists()
             
             # Build analysis
-            analysis = {
+            analysis: dict[str, Any] = {
                 "success": True,
                 "repo_id": repo_id,
                 "repo_name": f"{repo.owner}/{repo.name}",
@@ -724,7 +725,7 @@ class AnalysisService:
         max_depth: int = 4,
         annotate: bool = True,
         user_id: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Get annotated directory structure of a repository.
         
         Args:
@@ -784,7 +785,7 @@ class AnalysisService:
         repo_id: str,
         path: str = "/",
         user_id: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Flat single-level listing of files + directories at ``path``.
 
         Complement to ``get_directory_structure`` (recursive tree view).
@@ -820,7 +821,7 @@ class AnalysisService:
 
             prefix = (norm_path + "/") if norm_path else ""
             dirs: dict[str, str] = {}
-            out_files: list[dict] = []
+            out_files: list[dict[str, Any]] = []
 
             for f in files:
                 fp = f.file_path
@@ -851,10 +852,10 @@ class AnalysisService:
                 "files": out_files,
             }
 
-    def _analyze_structure(self, file_paths: list[str]) -> dict:
+    def _analyze_structure(self, file_paths: list[str]) -> dict[str, Any]:
         """Analyze the directory structure."""
         # Count files per top-level directory
-        top_level_counts: Counter = Counter()
+        top_level_counts: Counter[str] = Counter[str]()
         root_files: list[str] = []
         depths: list[int] = []
         
@@ -959,9 +960,9 @@ class AnalysisService:
         self,
         repo: Repository,
         files: list[RepositoryFile],
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Detect entry points in the repository."""
-        entry_points = {
+        entry_points: dict[str, list[dict[str, Any]]] = {
             "main_files": [],
             "cli_entry_points": [],
             "api_entry_points": [],
@@ -1043,9 +1044,9 @@ class AnalysisService:
         
         return entry_points
 
-    def _parse_dependencies(self, repo: Repository) -> dict:
+    def _parse_dependencies(self, repo: Repository) -> dict[str, Any]:
         """Parse dependencies from manifest files."""
-        dependencies = {
+        dependencies: dict[str, list[Any]] = {
             "production": [],
             "development": [],
             "manifest_files": [],
@@ -1326,9 +1327,12 @@ class AnalysisService:
         
         return dependencies
 
-    def _parse_python_deps(self, content: str) -> dict:
+    def _parse_python_deps(self, content: str) -> dict[str, Any]:
         """Parse Python dependencies from pyproject.toml content."""
-        deps = {"production": [], "development": []}
+        deps: dict[str, list[dict[str, str]]] = {
+            "production": [],
+            "development": [],
+        }
         
         # Simple regex-based parsing for dependencies array
         # This handles the common format: dependencies = ["pkg1", "pkg2>=1.0"]
@@ -1361,9 +1365,9 @@ class AnalysisService:
         
         return deps
 
-    def _parse_toml_section(self, content: str, section: str) -> dict:
+    def _parse_toml_section(self, content: str, section: str) -> dict[str, Any]:
         """Parse a TOML section into a dictionary (simple parser)."""
-        result = {}
+        result: dict[str, str] = {}
         
         # Find section start
         section_start = content.find(section)
@@ -1390,7 +1394,7 @@ class AnalysisService:
         
         return result
 
-    def _parse_gemfile(self, content: str, dependencies: dict) -> None:
+    def _parse_gemfile(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Ruby Gemfile."""
         # Match: gem 'name', 'version' or gem "name", "version"
         gem_pattern = r"gem\s+['\"]([^'\"]+)['\"](?:\s*,\s*['\"]([^'\"]+)['\"])?"
@@ -1416,7 +1420,7 @@ class AnalysisService:
                 else:
                     dependencies["production"].append(dep)
 
-    def _parse_pom_xml(self, content: str, dependencies: dict) -> None:
+    def _parse_pom_xml(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Maven pom.xml."""
         # Simple regex-based parsing for dependencies
         dep_pattern = r'<dependency>\s*<groupId>([^<]+)</groupId>\s*<artifactId>([^<]+)</artifactId>(?:\s*<version>([^<]+)</version>)?(?:\s*<scope>([^<]+)</scope>)?'
@@ -1437,7 +1441,7 @@ class AnalysisService:
             else:
                 dependencies["production"].append(dep)
 
-    def _parse_gradle(self, content: str, dependencies: dict) -> None:
+    def _parse_gradle(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Gradle build file (build.gradle or build.gradle.kts)."""
         # Match: implementation 'group:artifact:version'
         # Or: testImplementation "group:artifact:version"
@@ -1473,7 +1477,7 @@ class AnalysisService:
                         "version": parts[2] if len(parts) > 2 else "*",
                     })
 
-    def _parse_csproj(self, content: str, dependencies: dict) -> None:
+    def _parse_csproj(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse C# .csproj file."""
         # Match: <PackageReference Include="Name" Version="1.0" />
         pattern = r'<PackageReference\s+Include="([^"]+)"(?:\s+Version="([^"]+)")?'
@@ -1487,7 +1491,7 @@ class AnalysisService:
                 "version": version,
             })
 
-    def _parse_swift_package(self, content: str, dependencies: dict) -> None:
+    def _parse_swift_package(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Swift Package.swift."""
         # Match: .package(url: "https://github.com/...", from: "1.0.0")
         url_pattern = r'\.package\s*\(\s*url:\s*"([^"]+)"'
@@ -1501,7 +1505,7 @@ class AnalysisService:
                 "url": url,
             })
 
-    def _parse_pubspec(self, content: str, dependencies: dict) -> None:
+    def _parse_pubspec(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Dart/Flutter pubspec.yaml."""
         # Simple YAML parsing for dependencies section
         in_deps = False
@@ -1538,7 +1542,7 @@ class AnalysisService:
                     else:
                         dependencies["production"].append(dep)
 
-    def _parse_mix_exs(self, content: str, dependencies: dict) -> None:
+    def _parse_mix_exs(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Elixir mix.exs."""
         # Match: {:name, "~> 1.0"}
         dep_pattern = r'\{:([a-zA-Z0-9_]+),\s*"([^"]+)"\}'
@@ -1552,7 +1556,7 @@ class AnalysisService:
                 "version": version,
             })
 
-    def _parse_sbt(self, content: str, dependencies: dict) -> None:
+    def _parse_sbt(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Scala build.sbt."""
         # Match: "org" %% "artifact" % "version"
         # Or: "org" % "artifact" % "version"
@@ -1568,7 +1572,7 @@ class AnalysisService:
                 "version": version,
             })
 
-    def _parse_deps_edn(self, content: str, dependencies: dict) -> None:
+    def _parse_deps_edn(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Clojure deps.edn."""
         # Match: org/artifact {:mvn/version "1.0"}
         dep_pattern = r'([a-zA-Z0-9_./-]+)\s*\{:mvn/version\s*"([^"]+)"\}'
@@ -1582,7 +1586,7 @@ class AnalysisService:
                 "version": version,
             })
 
-    def _parse_project_clj(self, content: str, dependencies: dict) -> None:
+    def _parse_project_clj(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Clojure project.clj."""
         # Match: [org/artifact "version"]
         dep_pattern = r'\[([a-zA-Z0-9_./-]+)\s+"([^"]+)"\]'
@@ -1596,7 +1600,7 @@ class AnalysisService:
                 "version": version,
             })
 
-    def _parse_haskell_yaml(self, content: str, dependencies: dict) -> None:
+    def _parse_haskell_yaml(self, content: str, dependencies: dict[str, Any]) -> None:
         """Parse Haskell package.yaml or stack.yaml."""
         # Look for dependencies section
         in_deps = False
@@ -1625,9 +1629,9 @@ class AnalysisService:
         self,
         repo: Repository,
         files: list[RepositoryFile],
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Detect frameworks and libraries used in the repository."""
-        detected = []
+        detected: list[dict[str, Any]] = []
         file_names = {Path(f.file_path).name for f in files}
         file_paths = {f.file_path for f in files}
         
@@ -1749,9 +1753,9 @@ class AnalysisService:
         
         return detected
 
-    def _get_all_parsed_deps(self, repo: Repository) -> dict:
+    def _get_all_parsed_deps(self, repo: Repository) -> dict[str, Any]:
         """Get all parsed dependencies from various manifest files."""
-        deps = {}
+        deps: dict[str, set[str]] = {}
         
         if not repo.local_path:
             return deps
@@ -1835,7 +1839,7 @@ class AnalysisService:
         if cargo_path.exists():
             try:
                 content = cargo_path.read_text()
-                cargo_deps = set()
+                cargo_deps: set[str] = set()
                 if "[dependencies]" in content:
                     section = self._parse_toml_section(content, "[dependencies]")
                     cargo_deps.update(section.keys())
@@ -1853,9 +1857,9 @@ class AnalysisService:
                 content = go_mod_path.read_text()
                 go_deps = set()
                 for line in content.split("\n"):
-                    match = re.match(r'\s*([^\s]+)\s+v', line)
-                    if match:
-                        go_deps.add(match.group(1))
+                    go_match = re.match(r'\s*([^\s]+)\s+v', line)
+                    if go_match:
+                        go_deps.add(go_match.group(1))
                 deps["go"] = go_deps
             except Exception:
                 pass
@@ -1890,9 +1894,9 @@ class AnalysisService:
                     elif line and not line.startswith(" ") and not line.startswith("#"):
                         in_deps = False
                     if in_deps:
-                        match = re.match(r'^\s+([a-zA-Z0-9_]+):', line)
-                        if match:
-                            dart_deps.add(match.group(1))
+                        dart_match = re.match(r'^\s+([a-zA-Z0-9_]+):', line)
+                        if dart_match:
+                            dart_deps.add(dart_match.group(1))
                 deps["dart"] = dart_deps
             except Exception:
                 pass
@@ -1911,7 +1915,7 @@ class AnalysisService:
         
         return deps
 
-    def _detect_architecture(self, file_paths: list[str]) -> dict:
+    def _detect_architecture(self, file_paths: list[str]) -> dict[str, Any]:
         """Detect architectural patterns from directory structure."""
         # Get all directories
         directories = set()
@@ -1922,7 +1926,7 @@ class AnalysisService:
         
         top_level_dirs = {Path(p).parts[0].lower() for p in file_paths if Path(p).parts}
         
-        detected_patterns = []
+        detected_patterns: list[dict[str, Any]] = []
         
         for pattern_id, pattern_info in ARCHITECTURE_PATTERNS.items():
             if not pattern_info["indicators"]:
@@ -1971,9 +1975,9 @@ class AnalysisService:
             "directory_count": len(directories),
         }
 
-    def _find_key_files(self, files: list[RepositoryFile]) -> dict:
+    def _find_key_files(self, files: list[RepositoryFile]) -> dict[str, Any]:
         """Find key files in the repository."""
-        key_files = {
+        key_files: dict[str, list[dict[str, Any]]] = {
             "documentation": [],
             "configuration": [],
             "build": [],
@@ -2050,9 +2054,9 @@ class AnalysisService:
         self,
         repo: Repository,
         files: list[RepositoryFile],
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Analyze coding conventions in the repository."""
-        conventions = {
+        conventions: dict[str, Any] = {
             "file_naming": {},
             "directory_naming": {},
             "detected_style": None,
@@ -2080,7 +2084,7 @@ class AnalysisService:
                 conventions["detected_style"] = max_style[0]
         
         # Check for linter configs
-        linter_configs = []
+        linter_configs: list[str] = []
         if repo.local_path:
             local_path = Path(repo.local_path)
             
@@ -2103,7 +2107,7 @@ class AnalysisService:
         
         return conventions
 
-    def _generate_summary(self, analysis: dict) -> str:
+    def _generate_summary(self, analysis: dict[str, Any]) -> str:
         """Generate a human-readable summary of the analysis."""
         parts = []
         
@@ -2162,16 +2166,20 @@ class AnalysisService:
         self,
         file_paths: list[str],
         max_depth: int,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Build a nested directory tree structure."""
-        tree = {"name": ".", "type": "directory", "children": {}}
+        tree: dict[str, Any] = {
+            "name": ".",
+            "type": "directory",
+            "children": {},
+        }
         
         for path in sorted(file_paths):
             parts = Path(path).parts
             if len(parts) > max_depth:
                 parts = parts[:max_depth]
             
-            current = tree["children"]
+            current: dict[str, Any] = tree["children"]
             for i, part in enumerate(parts):
                 is_file = (i == len(parts) - 1 and i == len(Path(path).parts) - 1)
                 
@@ -2183,11 +2191,13 @@ class AnalysisService:
                     }
                 
                 if not is_file:
-                    current = current[part]["children"]
+                    children = current[part]["children"]
+                    if isinstance(children, dict):
+                        current = children
         
         return tree
 
-    def _annotate_tree(self, tree: dict) -> dict:
+    def _annotate_tree(self, tree: dict[str, Any]) -> dict[str, Any]:
         """Add annotations to directory tree."""
         if tree.get("type") == "directory" and tree.get("children"):
             for name, child in tree["children"].items():
@@ -2196,7 +2206,7 @@ class AnalysisService:
                     self._annotate_tree(child)
         return tree
 
-    def _count_directories(self, tree: dict) -> int:
+    def _count_directories(self, tree: dict[str, Any]) -> int:
         """Count directories in tree."""
         count = 0
         if tree.get("type") == "directory":
