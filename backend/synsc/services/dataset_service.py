@@ -18,9 +18,10 @@ import uuid
 from typing import Any
 
 import structlog
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from synsc.database.connection import get_session
+from synsc.providers.contracts import CancellationToken
 
 logger = structlog.get_logger(__name__)
 
@@ -463,15 +464,49 @@ class DatasetService:
         self,
         query: str,
         top_k: int = 10,
+        dataset_ids: list[str] | None = None,
+        timeout_ms: int = 120_000,
+        cancellation: CancellationToken | None = None,
     ) -> dict[str, Any]:
         """Search datasets using sentence-transformers embeddings + pgvector."""
         try:
             start = time.time()
+            token = cancellation or CancellationToken()
+            if not 1 <= timeout_ms <= 300_000:
+                raise ValueError("timeout_ms must be between 1 and 300000")
+            deadline_monotonic = time.monotonic() + timeout_ms / 1000
+
+            def remaining_timeout_ms() -> int:
+                return max(
+                    1,
+                    int(
+                        (deadline_monotonic - time.monotonic()) * 1000
+                    ),
+                )
+
+            def stopped() -> bool:
+                return (
+                    token.cancelled
+                    or time.monotonic() >= deadline_monotonic
+                )
+
+            if stopped():
+                return {
+                    "success": False,
+                    "error": "Search cancelled",
+                    "results": [],
+                }
 
             # Generate query embedding using sentence-transformers
             from synsc.embeddings.generator import get_paper_embedding_generator
             embedding_gen = get_paper_embedding_generator()
             query_embedding = embedding_gen.generate_single(query)
+            if stopped():
+                return {
+                    "success": False,
+                    "error": "Search cancelled",
+                    "results": [],
+                }
 
             # Format as pgvector string
             embedding_list = (
@@ -481,31 +516,54 @@ class DatasetService:
             )
             embedding_str = "[" + ",".join(str(x) for x in embedding_list) + "]"
 
+            dataset_clause = (
+                "AND d.dataset_id IN :dataset_ids"
+                if dataset_ids
+                else ""
+            )
+            statement = text(
+                f"""
+                    SELECT
+                        dc.chunk_id,
+                        dc.dataset_id,
+                        d.name AS dataset_name,
+                        d.hf_id,
+                        dc.content,
+                        dc.section_title,
+                        dc.chunk_type,
+                        1 - (dce.embedding <=> CAST(:embedding AS vector)) AS similarity
+                    FROM dataset_chunk_embeddings dce
+                    JOIN dataset_chunks dc ON dc.chunk_id = dce.chunk_id
+                    JOIN datasets d ON d.dataset_id = dc.dataset_id
+                    JOIN user_datasets ud ON ud.dataset_id = d.dataset_id
+                    WHERE ud.user_id = :user_id
+                    {dataset_clause}
+                    ORDER BY dce.embedding <=> CAST(:embedding AS vector)
+                    LIMIT :top_k
+                """
+            )
+            params: dict[str, Any] = {
+                "embedding": embedding_str,
+                "user_id": self.user_id,
+                "top_k": top_k,
+            }
+            if dataset_ids:
+                statement = statement.bindparams(
+                    bindparam("dataset_ids", expanding=True)
+                )
+                params["dataset_ids"] = dataset_ids
+
             with get_session() as session:
+                session.execute(
+                    text(
+                        "SELECT set_config("
+                        "'statement_timeout', :timeout, true)"
+                    ),
+                    {"timeout": f"{remaining_timeout_ms()}ms"},
+                )
                 results = session.execute(
-                    text("""
-                        SELECT
-                            dc.chunk_id,
-                            dc.dataset_id,
-                            d.name AS dataset_name,
-                            d.hf_id,
-                            dc.content,
-                            dc.section_title,
-                            dc.chunk_type,
-                            1 - (dce.embedding <=> CAST(:embedding AS vector)) AS similarity
-                        FROM dataset_chunk_embeddings dce
-                        JOIN dataset_chunks dc ON dc.chunk_id = dce.chunk_id
-                        JOIN datasets d ON d.dataset_id = dc.dataset_id
-                        JOIN user_datasets ud ON ud.dataset_id = d.dataset_id
-                        WHERE ud.user_id = :user_id
-                        ORDER BY dce.embedding <=> CAST(:embedding AS vector)
-                        LIMIT :top_k
-                    """),
-                    {
-                        "embedding": embedding_str,
-                        "user_id": self.user_id,
-                        "top_k": top_k,
-                    },
+                    statement,
+                    params,
                 ).fetchall()
 
             results_list = [
@@ -523,7 +581,11 @@ class DatasetService:
             ]
 
             # Cross-encoder rerank — same path as code/paper search. Best-effort.
-            if len(results_list) > 1:
+            if (
+                len(results_list) > 1
+                and not stopped()
+                and deadline_monotonic - time.monotonic() >= 0.25
+            ):
                 try:
                     from synsc.services.reranker import get_reranker
                     reranker = get_reranker()
@@ -534,6 +596,12 @@ class DatasetService:
                     )
                 except Exception as e:
                     logger.warning("dataset rerank failed", error=str(e))
+            if stopped():
+                return {
+                    "success": False,
+                    "error": "Search cancelled or timed out",
+                    "results": [],
+                }
 
             elapsed = (time.time() - start) * 1000
 

@@ -33,6 +33,7 @@ from synsc.database.models import (
 )
 from synsc.embeddings.generator import EmbeddingProvider, get_embedding_generator
 from synsc.indexing.vector_store import VectorStore, get_vector_store
+from synsc.providers.contracts import CancellationToken
 
 logger = structlog.get_logger(__name__)
 
@@ -440,6 +441,8 @@ class SearchService:
         top_k: int = 10,
         user_id: str | None = None,
         quality_mode: str | None = None,
+        timeout_ms: int = 120_000,
+        cancellation: CancellationToken | None = None,
     ) -> dict[str, Any]:
         """Search code using semantic + hybrid retrieval.
 
@@ -467,6 +470,24 @@ class SearchService:
         """
         start_time = time.time()
         effective_user_id = user_id or self.user_id
+        token = cancellation or CancellationToken()
+        if not 1 <= timeout_ms <= 300_000:
+            raise ValueError("timeout_ms must be between 1 and 300000")
+        deadline_monotonic = time.monotonic() + timeout_ms / 1000
+
+        def remaining_timeout_ms() -> int:
+            return max(
+                1,
+                int(
+                    (deadline_monotonic - time.monotonic()) * 1000
+                ),
+            )
+
+        def stopped() -> bool:
+            return (
+                token.cancelled
+                or time.monotonic() >= deadline_monotonic
+            )
 
         # Require user_id
         if not effective_user_id:
@@ -475,6 +496,13 @@ class SearchService:
                 "query": query,
                 "error": "Authentication required",
                 "message": "You must be authenticated to search",
+            }
+        if stopped():
+            return {
+                "success": False,
+                "query": query,
+                "error": "Search cancelled",
+                "results": [],
             }
 
         # Resolve effective quality mode for this call.
@@ -492,6 +520,13 @@ class SearchService:
             t_embed = time.time()
             query_embedding = self.embedding_generator.generate_single(query)
             embed_ms = (time.time() - t_embed) * 1000
+            if stopped():
+                return {
+                    "success": False,
+                    "query": query,
+                    "error": "Search cancelled",
+                    "results": [],
+                }
 
             # Over-fetch for post-retrieval quality pipeline. Hybrid mode pulls
             # the wider window per branch so rerank has room to work.
@@ -508,11 +543,23 @@ class SearchService:
 
                 t_db = time.time()
                 with get_session() as hsess:
+                    hsess.execute(
+                        text(
+                            "SELECT set_config("
+                            "'statement_timeout', :timeout, true)"
+                        ),
+                        {"timeout": f"{remaining_timeout_ms()}ms"},
+                    )
                     fused = hybrid_retrieve(
                         session=hsess,
                         query=query,
                         query_embedding=query_embedding,
-                        vector_search_fn=self.vector_store.search,
+                        vector_search_fn=lambda **kwargs: (
+                            self.vector_store.search(
+                                **kwargs,
+                                timeout_ms=remaining_timeout_ms(),
+                            )
+                        ),
                         user_id=effective_user_id,
                         repo_ids=repo_ids,
                         language=language,
@@ -540,6 +587,7 @@ class SearchService:
                     repo_ids=repo_ids,
                     language=language,
                     top_k=fetch_k,
+                    timeout_ms=remaining_timeout_ms(),
                 )
                 db_ms = (time.time() - t_db) * 1000
 
@@ -552,6 +600,13 @@ class SearchService:
                     ]
 
             # --- Quality pipeline ---
+            if stopped():
+                return {
+                    "success": False,
+                    "query": query,
+                    "error": "Search cancelled",
+                    "results": [],
+                }
 
             # 1. Symbol-aware score boosting
             query_symbols = _extract_query_symbols(query)
@@ -567,7 +622,12 @@ class SearchService:
             # 3. Cross-encoder reranking (blended with fused/vector similarity)
             #    Always on in agent mode, otherwise gated by SYNSC_ENABLE_RERANKER.
             #    Limit to hybrid_rerank_k candidates to bound latency.
-            if len(raw_results) > 1 and use_rerank:
+            if (
+                len(raw_results) > 1
+                and use_rerank
+                and not stopped()
+                and deadline_monotonic - time.monotonic() >= 0.25
+            ):
                 try:
                     from synsc.services.reranker import get_reranker
                     reranker = get_reranker()
@@ -585,6 +645,13 @@ class SearchService:
                         "Reranker unavailable, falling back to fused similarity",
                         error=str(e),
                     )
+            if stopped():
+                return {
+                    "success": False,
+                    "query": query,
+                    "error": "Search cancelled or timed out",
+                    "results": [],
+                }
 
             # 4. Dynamic similarity threshold
             raw_results = _apply_dynamic_threshold(

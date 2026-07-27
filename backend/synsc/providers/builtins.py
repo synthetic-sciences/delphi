@@ -46,6 +46,12 @@ def _huggingface_embeddings(**_: Any) -> object:
     return HuggingFaceEmbeddingProvider()
 
 
+def _local_index_search(**kwargs: Any) -> object:
+    from synsc.planner.providers import LocalIndexSearchProvider
+
+    return LocalIndexSearchProvider(user_id=kwargs.get("user_id"))
+
+
 def _gemini_research(**kwargs: Any) -> object:
     from synsc.services.research_providers.gemini import GeminiResearchProvider
 
@@ -71,6 +77,7 @@ def _descriptor(
     *,
     health: ProviderHealth = ProviderHealth.READY,
     extra_capabilities: frozenset[ProviderCapability] = frozenset(),
+    supports_cancellation: bool = False,
 ) -> ProviderDescriptor:
     return ProviderDescriptor(
         name=name,
@@ -79,12 +86,23 @@ def _descriptor(
         execution=execution,
         accepted_classifications=_ALL_CLASSIFICATIONS,
         health=health,
+        supports_cancellation=supports_cancellation,
     )
 
 
 def register_builtin_providers(registry: ProviderRegistry) -> None:
     """Register metadata and factories without constructing any provider."""
 
+    registry.register(
+        _descriptor(
+            "local-index",
+            ProviderCapability.SEARCH,
+            ExecutionLocation.LOCAL,
+            supports_cancellation=True,
+        ),
+        _local_index_search,
+        priority=5,
+    )
     registry.register(
         _descriptor(
             "local-embeddings",

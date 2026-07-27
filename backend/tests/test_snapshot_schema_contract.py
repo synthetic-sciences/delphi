@@ -23,6 +23,7 @@ from synsc.database.models import (
 BACKEND_ROOT = Path(__file__).parent.parent
 PROJECT_ROOT = BACKEND_ROOT.parent
 MIGRATION = BACKEND_ROOT / "alembic" / "versions" / "014_source_snapshots.py"
+SEARCH_MIGRATION = BACKEND_ROOT / "alembic" / "versions" / "015_snapshot_search.py"
 SETUP_SQL = PROJECT_ROOT / "database" / "supabase" / "setup_local.sql"
 
 
@@ -46,16 +47,25 @@ def test_snapshot_models_use_distinct_tables() -> None:
     assert "embedding_model" in DocumentationSource.__table__.columns
 
 
-def test_snapshot_migration_is_current_head() -> None:
+def test_snapshot_search_migration_is_current_head() -> None:
     migration = _load_migration(MIGRATION, "source_snapshot_migration")
+    search_migration = _load_migration(
+        SEARCH_MIGRATION,
+        "source_snapshot_search_migration",
+    )
 
     assert migration.revision == "014_source_snapshots"
     assert migration.down_revision == "013_visibility_contracts"
-    assert migration.revision == EXPECTED_ALEMBIC_REVISION
+    assert search_migration.revision == "015_snapshot_search"
+    assert search_migration.down_revision == migration.revision
+    assert search_migration.revision == EXPECTED_ALEMBIC_REVISION
 
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_current_head() == migration.revision
+    assert (
+        ScriptDirectory.from_config(config).get_current_head()
+        == search_migration.revision
+    )
 
 
 def test_snapshot_migration_builds_append_only_schema(
@@ -99,6 +109,29 @@ def test_bootstrap_sql_contains_snapshot_schema() -> None:
     assert "prevent_source_snapshot_update" in sql
     assert "prevent_sealed_snapshot_item_change" in sql
     assert "sealed_at" in sql
+    assert "idx_source_snapshot_items_content_fts" in sql
+
+
+def test_snapshot_search_migration_builds_matching_fts_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = _load_migration(
+        SEARCH_MIGRATION,
+        "source_snapshot_search_migration_sql",
+    )
+    statements: list[str] = []
+    monkeypatch.setattr(migration.op, "execute", statements.append)
+
+    migration.upgrade()
+
+    sql = " ".join("\n".join(statements).split())
+    bootstrap_sql = " ".join(SETUP_SQL.read_text().split())
+    definition = (
+        "CREATE INDEX IF NOT EXISTS idx_source_snapshot_items_content_fts "
+        "ON source_snapshot_items USING GIN (to_tsvector('simple', content))"
+    )
+    assert definition in sql
+    assert definition in bootstrap_sql
 
 
 def test_snapshot_identity_constraint_matches_bootstrap() -> None:

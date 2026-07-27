@@ -73,6 +73,7 @@ def hybrid_search_papers(
     query_embedding: np.ndarray,
     top_k: int = 10,
     paper_ids: list[str] | None = None,
+    timeout_ms: int = 120_000,
 ) -> list[dict[str, Any]]:
     """Hybrid paper retrieval: vector + BM25 + section/citation-aware boost."""
     if not query.strip():
@@ -131,6 +132,13 @@ def hybrid_search_papers(
     )
     try:
         with get_session() as session:
+            session.execute(
+                text(
+                    "SELECT set_config("
+                    "'statement_timeout', :timeout, true)"
+                ),
+                {"timeout": f"{timeout_ms}ms"},
+            )
             rows = session.execute(sql, params).mappings().all()
     except Exception as e:
         logger.warning("hybrid paper search failed", error=str(e))

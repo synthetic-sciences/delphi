@@ -36,7 +36,7 @@ def test_unified_retrieve_applies_trust_boost(monkeypatch):
 
     monkeypatch.setattr(source_service, "_get_search_service", lambda uid: FakeSearchService(uid))
 
-    def fake_attach(hits):
+    def fake_attach(hits, **_kwargs):
         for h in hits:
             if h["source_id"] == "r-high-trust":
                 h["trust_score"] = 0.9
@@ -79,7 +79,7 @@ def test_unified_retrieve_relevance_beats_trust(monkeypatch):
 
     monkeypatch.setattr(source_service, "_get_search_service", lambda uid: FakeSearchService(uid))
 
-    def fake_attach(hits):
+    def fake_attach(hits, **_kwargs):
         for h in hits:
             h["trust_score"] = 1.0 if h["source_id"] == "r-high-trust" else 0.0
         return hits

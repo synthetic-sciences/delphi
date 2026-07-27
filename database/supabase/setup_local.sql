@@ -1134,6 +1134,9 @@ CREATE INDEX IF NOT EXISTS idx_source_snapshot_items_snapshot
     ON source_snapshot_items(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_source_snapshot_items_origin
     ON source_snapshot_items(origin_item_id);
+CREATE INDEX IF NOT EXISTS idx_source_snapshot_items_content_fts
+    ON source_snapshot_items
+    USING GIN (to_tsvector('simple', content));
 
 CREATE TABLE IF NOT EXISTS source_snapshot_item_embeddings (
     embedding_id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,

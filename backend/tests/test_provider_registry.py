@@ -183,6 +183,52 @@ def test_unavailable_provider_is_not_selected() -> None:
         registry.select(ProviderCapability.EMBEDDING, NetworkPolicy.ONLINE)
 
 
+def test_candidate_listing_filters_without_constructing_and_sorts_priority() -> None:
+    ready = MagicMock(return_value=object())
+    unavailable = MagicMock(return_value=object())
+    registry = ProviderRegistry()
+    registry.register(
+        _descriptor(
+            "ready-b",
+            ExecutionLocation.REMOTE,
+            capability=ProviderCapability.SEARCH,
+        ),
+        ready,
+        priority=20,
+    )
+    registry.register(
+        _descriptor(
+            "ready-a",
+            ExecutionLocation.REMOTE,
+            capability=ProviderCapability.SEARCH,
+        ),
+        ready,
+        priority=10,
+    )
+    registry.register(
+        _descriptor(
+            "down",
+            ExecutionLocation.REMOTE,
+            capability=ProviderCapability.SEARCH,
+            health=ProviderHealth.UNAVAILABLE,
+        ),
+        unavailable,
+        priority=1,
+    )
+
+    registrations = registry.list_registrations(
+        capability=ProviderCapability.SEARCH,
+        execution=ExecutionLocation.REMOTE,
+    )
+
+    assert [item.descriptor.name for item in registrations] == [
+        "ready-a",
+        "ready-b",
+    ]
+    ready.assert_not_called()
+    unavailable.assert_not_called()
+
+
 def test_create_constructs_only_the_named_provider() -> None:
     selected_factory = MagicMock(return_value="selected")
     other_factory = MagicMock(return_value="other")

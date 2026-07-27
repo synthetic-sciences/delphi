@@ -85,6 +85,33 @@ class ProviderRegistry:
             for _, registration in sorted(self._registrations.items())
         ]
 
+    def list_registrations(
+        self,
+        *,
+        capability: ProviderCapability | None = None,
+        execution: ExecutionLocation | None = None,
+        include_unavailable: bool = False,
+    ) -> list[ProviderRegistration]:
+        """Return deterministic candidates without constructing providers."""
+
+        registrations = [
+            registration
+            for registration in self._registrations.values()
+            if (capability is None or capability in registration.descriptor.capabilities)
+            and (execution is None or registration.descriptor.execution is execution)
+            and (
+                include_unavailable
+                or registration.descriptor.health is not ProviderHealth.UNAVAILABLE
+            )
+        ]
+        registrations.sort(
+            key=lambda registration: (
+                registration.priority,
+                registration.descriptor.name,
+            )
+        )
+        return registrations
+
     @staticmethod
     def _network_allows(
         registration: ProviderRegistration,

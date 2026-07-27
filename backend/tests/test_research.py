@@ -287,6 +287,153 @@ def test_unified_retrieve_skips_paper_dataset_branches_without_user_id(monkeypat
     assert not dataset_called.called
 
 
+def test_unified_retrieve_preserves_exact_typed_source_bindings(monkeypatch):
+    from synsc.services import docs_service as docs_service_module
+    from synsc.services import source_service
+
+    calls: dict[str, dict[str, object]] = {}
+
+    class CodeService:
+        def search_code(self, **kwargs):
+            calls["repo"] = kwargs
+            return {"results": []}
+
+    class PaperService:
+        def search_papers(self, **kwargs):
+            calls["paper"] = kwargs
+            return {"results": []}
+
+    class DatasetService:
+        def search_datasets(self, **kwargs):
+            calls["dataset"] = kwargs
+            return {"results": []}
+
+    class DocsService:
+        def search_docs(self, **kwargs):
+            calls["docs"] = kwargs
+            return {"results": []}
+
+    monkeypatch.setattr(
+        source_service,
+        "_get_search_service",
+        lambda _user_id: CodeService(),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_get_paper_service",
+        lambda _user_id: PaperService(),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_get_dataset_service",
+        lambda _user_id: DatasetService(),
+    )
+    monkeypatch.setattr(
+        docs_service_module,
+        "get_docs_service",
+        lambda user_id=None: DocsService(),
+    )
+
+    source_service.unified_retrieve(
+        query="bounded",
+        source_bindings=[
+            ("repo", "00000000-0000-0000-0000-000000000001"),
+            ("paper", "paper-1"),
+            ("dataset", "dataset-1"),
+            ("docs", "docs-1"),
+        ],
+        source_types=["repo", "paper", "dataset", "docs"],
+        k=5,
+        user_id="u1",
+        timeout_ms=900,
+    )
+
+    assert calls["repo"]["repo_ids"] == [
+        "00000000-0000-0000-0000-000000000001"
+    ]
+    assert calls["paper"]["paper_ids"] == ["paper-1"]
+    assert calls["dataset"]["dataset_ids"] == ["dataset-1"]
+    assert calls["docs"]["docs_ids"] == ["docs-1"]
+    assert all(
+        1 <= int(call["timeout_ms"]) <= 900
+        for call in calls.values()
+    )
+
+
+def test_unified_retrieve_skips_postprocessing_after_cancellation(
+    monkeypatch,
+) -> None:
+    from synsc.providers.contracts import CancellationToken
+    from synsc.services import source_service
+
+    token = CancellationToken()
+
+    class CancellingSearchService:
+        def search_code(self, **_kwargs):
+            token.cancel()
+            return {
+                "results": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "repo_id": "repo-1",
+                        "content": "bounded result",
+                        "relevance_score": 0.8,
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(
+        source_service,
+        "_get_search_service",
+        lambda _user_id: CancellingSearchService(),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_attach_trust_scores",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("trust lookup must not run after cancellation")
+        ),
+    )
+    monkeypatch.setattr(
+        source_service,
+        "_maybe_cross_source_rerank",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("rerank must not run after cancellation")
+        ),
+    )
+
+    hits = source_service.unified_retrieve(
+        query="bounded",
+        source_types=["repo"],
+        k=5,
+        user_id="u1",
+        timeout_ms=1000,
+        cancellation=token,
+    )
+
+    assert [hit["source_id"] for hit in hits] == ["repo-1"]
+
+
+def test_unified_retrieve_preserves_explicitly_empty_source_types(
+    monkeypatch,
+) -> None:
+    from synsc.services import source_service
+
+    monkeypatch.setattr(
+        source_service,
+        "_get_search_service",
+        lambda _user_id: (_ for _ in ()).throw(
+            AssertionError("no source branch should run")
+        ),
+    )
+
+    assert source_service.unified_retrieve(
+        query="no local sources",
+        source_types=[],
+        user_id="u1",
+    ) == []
+
+
 def test_post_v1_research_quick_returns_answer_and_citations(client, monkeypatch):
     """POST /v1/research returns the synthesized answer + citations."""
     from synsc.config import get_config

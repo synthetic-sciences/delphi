@@ -68,6 +68,7 @@ class VectorStore:
         repo_ids: list[str] | None = None,
         language: str | None = None,
         top_k: int = 10,
+        timeout_ms: int = 120_000,
     ) -> list[dict[str, Any]]:
         """Search pgvector for similar code.
         
@@ -90,6 +91,7 @@ class VectorStore:
             repo_ids=repo_ids,
             language=language,
             top_k=top_k,
+            timeout_ms=timeout_ms,
         )
     
     def delete_by_repo(self, repo_id: str, session: Session | None = None) -> int:
