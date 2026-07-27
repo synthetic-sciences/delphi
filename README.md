@@ -165,6 +165,15 @@ adapters remain optional. Local-folder access is denied until the operator sets
 `SYNSC_LOCAL_CONNECTOR_ALLOWED_ROOTS`. See
 [`docs/connectors.md`](docs/connectors.md).
 
+### Reproducible context sessions
+
+Context sessions keep task state, pinned snapshot references, accepted and
+rejected evidence, decisions, unresolved questions, and deterministic
+token-budget manifests in append-only revisions. Parent/child handoffs preserve
+the exact revision they continue from. Reads and exports re-check current source
+authorization, so a later permission revocation does not leak content through a
+saved context. See [`docs/context-sessions.md`](docs/context-sessions.md).
+
 ---
 
 ## MCP Tools

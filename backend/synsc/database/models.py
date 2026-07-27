@@ -1667,6 +1667,133 @@ class ConnectorSyncJob(Base):
         }
 
 
+class ContextSession(Base):
+    """Stable owner-scoped identity for immutable context revisions."""
+
+    __tablename__ = "context_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "name",
+            name="unique_user_context_session_name",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'completed', 'archived')",
+            name="ck_context_sessions_status",
+        ),
+        CheckConstraint(
+            "sharing_policy IN ('private', 'shared')",
+            name="ck_context_sessions_sharing_policy",
+        ),
+        CheckConstraint(
+            "current_revision >= 0",
+            name="ck_context_sessions_current_revision",
+        ),
+        Index("idx_context_sessions_user", "user_id", "updated_at"),
+        Index("idx_context_sessions_parent", "parent_session_id"),
+    )
+
+    session_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active"
+    )
+    sharing_policy: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="private"
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    parent_session_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("context_sessions.session_id", ondelete="SET NULL"),
+    )
+    parent_revision_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("context_revisions.revision_id", ondelete="SET NULL"),
+    )
+    handoff_note: Mapped[str | None] = mapped_column(Text)
+    current_revision_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("context_revisions.revision_id", ondelete="SET NULL"),
+    )
+    current_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
+class ContextRevision(Base):
+    """Append-only context state and deterministic selection manifest."""
+
+    __tablename__ = "context_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "revision_number",
+            name="unique_context_session_revision",
+        ),
+        CheckConstraint(
+            "revision_number >= 1",
+            name="ck_context_revisions_number",
+        ),
+        CheckConstraint(
+            "token_budget BETWEEN 1 AND 200000",
+            name="ck_context_revisions_token_budget",
+        ),
+        CheckConstraint(
+            "tokens_used >= 0 AND tokens_used <= token_budget",
+            name="ck_context_revisions_tokens_used",
+        ),
+        Index(
+            "idx_context_revisions_session",
+            "session_id",
+            "revision_number",
+        ),
+    )
+
+    revision_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("context_sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_revision_id: Mapped[str | None] = mapped_column(
+        String(36),
+    )
+    token_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    tokens_used: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    pinned_snapshots: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False
+    )
+    context_manifest: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary_model: Mapped[str | None] = mapped_column(String(200))
+    summary_version: Mapped[str | None] = mapped_column(String(200))
+    created_by: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
 class ContextBlob(Base):
     """Named context blob — portable agent context across IDEs.
 

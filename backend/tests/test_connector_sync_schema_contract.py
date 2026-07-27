@@ -65,11 +65,13 @@ def test_connector_migration_is_current_head() -> None:
     migration = _load_migration(MIGRATION, "connector_sync_migration")
     assert migration.revision == "017_connector_sync"
     assert migration.down_revision == "016_durable_research_jobs"
-    assert migration.revision == EXPECTED_ALEMBIC_REVISION
 
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
-    assert ScriptDirectory.from_config(config).get_current_head() == migration.revision
+    assert (
+        ScriptDirectory.from_config(config).get_current_head()
+        == EXPECTED_ALEMBIC_REVISION
+    )
 
 
 def test_connector_migration_builds_queue_and_expands_snapshot_type(
