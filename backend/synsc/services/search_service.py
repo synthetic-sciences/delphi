@@ -42,6 +42,241 @@ logger = structlog.get_logger(__name__)
 # Post-retrieval quality functions
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+_DIAGNOSTIC_SIGNAL_PATTERN = re.compile(
+    r"(?:"
+    r"\bfail(?:ed|ure)?\b|"
+    r"\berror\b|"
+    r"\bexception\b|"
+    r"\bpanic\b|"
+    r"\bundefined\b|"
+    r"\bcannot\b|"
+    r"\bassert(?:ion)?\b|"
+    r"\bexpected\b|"
+    r"\bactual\b|"
+    r"\bgot\b|"
+    r"\bwant\b|"
+    r"\btraceback\b|"
+    r"\bsegmentation fault\b|"
+    r"\btimeout\b"
+    r")",
+    re.IGNORECASE,
+)
+
+_DIAGNOSTIC_LOCATION_PATTERN = re.compile(
+    r"(?:^|[\s(/])"
+    r"[\w.@+~-]+(?:/[\w.@+~-]+)*"
+    r"\.(?:c|cc|cpp|cs|go|java|js|jsx|php|py|rb|rs|swift|ts|tsx)"
+    r":\d+(?::\d+)?\b",
+    re.IGNORECASE,
+)
+
+_DIAGNOSTIC_NOISE_PATTERN = re.compile(
+    r"^(?:"
+    r"go:\s+downloading\b|"
+    r"downloading\b|"
+    r"compiling\b|"
+    r"collected\s+\d+\s+items?\b|"
+    r"fail(?:\s+\S+\s+\[build failed\])?$|"
+    r"\[notice\]|"
+    r"test\s+\S+\s+\.\.\.\s+ok$"
+    r")",
+    re.IGNORECASE,
+)
+
+_DIAGNOSTIC_IDENTIFIER_STOPWORDS = {
+    "actual",
+    "assertionerror",
+    "diff",
+    "disconnected",
+    "empty",
+    "err",
+    "error",
+    "expected",
+    "fail",
+    "failed",
+    "false",
+    "for",
+    "none",
+    "not",
+    "strings",
+    "test",
+    "the",
+    "trace",
+    "true",
+    "typeerror",
+}
+
+_DIAGNOSTIC_SNAKE_STOPWORDS = {
+    "after",
+    "all",
+    "and",
+    "be",
+    "before",
+    "correctly",
+    "is",
+    "of",
+    "should",
+    "when",
+    "with",
+}
+
+
+def _diagnostic_identifier_query(text: str, limit: int = 16) -> str:
+    """Extract a short API/symbol query from diagnostic context."""
+    text = re.sub(
+        r"(?:(?:[A-Za-z]:)?/|~/)(?:[^\s:]+/)*[^\s:]*",
+        " ",
+        text,
+    )
+    identifiers: list[str] = []
+    seen: set[str] = set()
+    for raw_token in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", text):
+        token = raw_token.strip(".")
+        if len(token) == 1:
+            continue
+        lowered = token.lower()
+        from_test_name = False
+        if lowered.startswith("test_"):
+            from_test_name = True
+            token = token[5:]
+            lowered = token.lower()
+        if token.startswith("Test") and len(token) > 4 and token[4].isupper():
+            from_test_name = True
+            token = token[4:]
+            lowered = token.lower()
+        if re.search(
+            r"\.(?:c|cc|cpp|cs|go|java|js|json|jsx|php|py|rb|rs|swift|"
+            r"toml|ts|tsx|xml|yaml|yml)$",
+            token,
+            re.IGNORECASE,
+        ):
+            continue
+        if (
+            lowered in _DIAGNOSTIC_IDENTIFIER_STOPWORDS
+            or lowered.startswith(("pytest.", "result.", "runner.", "testing."))
+            or re.fullmatch(
+                r"(?:[a-z0-9-]+\.)+(?:com|dev|io|net|org)",
+                lowered,
+            )
+        ):
+            continue
+        identifier_like = (
+            "_" in token
+            or "." in token
+            or token[0].isupper()
+            or any(character.isupper() for character in token[1:])
+        )
+        if not identifier_like or lowered in seen:
+            continue
+        expanded = [token]
+        if token.count("_") >= 2 and not token.isupper():
+            parts = [
+                part
+                for part in token.split("_")
+                if part and part.lower() not in _DIAGNOSTIC_SNAKE_STOPWORDS
+            ]
+            expanded = []
+            if len(parts) >= 2:
+                expanded.append(f"{parts[0]}_{parts[1]}")
+                expanded.extend(parts[2:])
+            else:
+                expanded.extend(parts)
+        elif from_test_name:
+            expanded = re.findall(
+                r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+",
+                token,
+            )
+        for candidate in expanded:
+            candidate_lowered = candidate.lower()
+            if candidate_lowered in seen:
+                continue
+            seen.add(candidate_lowered)
+            identifiers.append(candidate)
+            if len(identifiers) >= limit:
+                return " ".join(identifiers)
+    return " ".join(identifiers)
+
+
+def _prepare_search_query(query: str, max_chars: int = 4000) -> str:
+    """Compact structured build/test failures into high-signal retrieval text.
+
+    Agent traces often arrive as JSON with a short command and a very long
+    ``failure_excerpt``. Embedding the serialized object verbatim lets package
+    downloads, successful tests, and compiler progress consume the model's
+    useful input window. Preserve diagnostic lines and the tail fallback while
+    leaving ordinary natural-language queries untouched.
+    """
+    try:
+        payload = json.loads(query)
+    except (json.JSONDecodeError, TypeError):
+        return query
+    if not isinstance(payload, dict):
+        return query
+
+    failure_excerpt = payload.get("failure_excerpt")
+    if not isinstance(failure_excerpt, str) or not failure_excerpt.strip():
+        return query
+    command = payload.get("command")
+    command_text = command.strip() if isinstance(command, str) else ""
+
+    excerpt_lines = failure_excerpt.splitlines()
+    signal_indices = {
+        index
+        for index, raw_line in enumerate(excerpt_lines)
+        for line in [raw_line.strip()]
+        if line
+        and not _DIAGNOSTIC_NOISE_PATTERN.search(line)
+        and (
+            _DIAGNOSTIC_SIGNAL_PATTERN.search(line)
+            or _DIAGNOSTIC_LOCATION_PATTERN.search(line)
+        )
+    }
+    selected_indices = {
+        nearby
+        for index in signal_indices
+        for nearby in range(max(0, index - 10), min(len(excerpt_lines), index + 2))
+    }
+
+    selected_lines: list[str] = []
+    seen: set[str] = set()
+    ordered_indices = sorted(signal_indices) + sorted(selected_indices - signal_indices)
+    for index in ordered_indices:
+        line = excerpt_lines[index].strip()
+        if not line or _DIAGNOSTIC_NOISE_PATTERN.search(line):
+            continue
+        if line not in seen:
+            seen.add(line)
+            selected_lines.append(line)
+
+    diagnostic_text = (
+        " ".join(selected_lines) if selected_lines else failure_excerpt.strip()
+    )
+    focused_query = _diagnostic_identifier_query(diagnostic_text)
+    if focused_query:
+        prepared = focused_query
+    else:
+        parts = [part for part in (command_text, diagnostic_text) if part]
+        prepared = " ".join(parts)
+    if len(prepared) <= max_chars:
+        return prepared
+
+    if focused_query:
+        return focused_query[:max_chars]
+    if command_text:
+        remaining = max(0, max_chars - len(command_text) - 1)
+        if len(diagnostic_text) <= remaining:
+            return f"{command_text} {diagnostic_text}"[:max_chars]
+        head_size = max(0, (remaining * 2) // 3 - 3)
+        tail_size = max(0, remaining - head_size - 3)
+        compacted = (
+            f"{diagnostic_text[:head_size]}..."
+            f"{diagnostic_text[-tail_size:] if tail_size else ''}"
+        )
+        return f"{command_text} {compacted}"[:max_chars]
+    head_size = max_chars * 2 // 3 - 3
+    tail_size = max_chars - head_size - 3
+    return f"{prepared[:head_size]}...{prepared[-tail_size:]}"
+
 
 def _extract_query_symbols(query: str) -> set[str]:
     """Extract likely symbol names from a search query.
@@ -516,9 +751,12 @@ class SearchService:
         )
 
         try:
+            retrieval_query = _prepare_search_query(query)
             # Generate query embedding
             t_embed = time.time()
-            query_embedding = self.embedding_generator.generate_single(query)
+            query_embedding = self.embedding_generator.generate_single(
+                retrieval_query
+            )
             embed_ms = (time.time() - t_embed) * 1000
             if stopped():
                 return {
@@ -552,7 +790,7 @@ class SearchService:
                     )
                     fused = hybrid_retrieve(
                         session=hsess,
-                        query=query,
+                        query=retrieval_query,
                         query_embedding=query_embedding,
                         vector_search_fn=lambda **kwargs: (
                             self.vector_store.search(
@@ -609,7 +847,7 @@ class SearchService:
                 }
 
             # 1. Symbol-aware score boosting
-            query_symbols = _extract_query_symbols(query)
+            query_symbols = _extract_query_symbols(retrieval_query)
             if query_symbols:
                 _apply_symbol_boost(raw_results, query_symbols)
 
@@ -635,7 +873,7 @@ class SearchService:
                     head = raw_results[:rerank_window]
                     tail = raw_results[rerank_window:]
                     head = reranker.rerank(
-                        query=query,
+                        query=retrieval_query,
                         results=head,
                         blend_alpha=self.config.search.reranker_blend_alpha,
                     )
@@ -705,7 +943,7 @@ class SearchService:
                 from synsc.services.observability import log_search_telemetry
                 log_search_telemetry(
                     user_id=effective_user_id,
-                    query=query,
+                    query=retrieval_query,
                     quality_mode=effective_mode,
                     hybrid_meta=hybrid_meta,
                     top_results=results,
@@ -717,6 +955,8 @@ class SearchService:
             return {
                 "success": True,
                 "query": query,
+                "retrieval_query": retrieval_query,
+                "query_compacted": retrieval_query != query,
                 "results": results,
                 "count": len(results),
                 "search_time_ms": elapsed_time,
