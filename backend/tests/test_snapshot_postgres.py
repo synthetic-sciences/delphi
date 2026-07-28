@@ -45,6 +45,113 @@ def _alternate_vector() -> str:
     return "[" + ",".join(["0.0", "1.0", *(["0.0"] * 766)]) + "]"
 
 
+def test_documentation_snapshot_accepts_uuid_user_from_async_job() -> None:
+    from synsc.database.connection import get_session
+    from synsc.snapshots.contracts import SnapshotSourceType
+    from synsc.snapshots.service import SnapshotService
+
+    docs_id = str(uuid.uuid4())
+    chunk_id = str(uuid.uuid4())
+    embedding_id = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+    url = f"https://example.invalid/docs/{docs_id}"
+    snapshot_id: str | None = None
+
+    try:
+        with get_session() as session:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documentation_sources (
+                        docs_id, url, display_name, version, indexed_by,
+                        is_public, visibility, embedding_model,
+                        pages_count, chunks_count
+                    ) VALUES (
+                        :docs_id, :url, 'Async docs', 'v1', :user_id,
+                        FALSE, 'private', 'local-model', 1, 1
+                    )
+                    """
+                ),
+                {"docs_id": docs_id, "url": url, "user_id": user_id},
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO user_documentation_sources (user_id, docs_id)
+                    VALUES (:user_id, :docs_id)
+                    """
+                ),
+                {"user_id": user_id, "docs_id": docs_id},
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documentation_chunks (
+                        chunk_id, docs_id, chunk_index, page_url,
+                        heading, content, token_count
+                    ) VALUES (
+                        :chunk_id, :docs_id, 0, :url,
+                        'Example', 'documentation content', 2
+                    )
+                    """
+                ),
+                {"chunk_id": chunk_id, "docs_id": docs_id, "url": url},
+            )
+            session.execute(
+                text(
+                    """
+                    INSERT INTO documentation_chunk_embeddings (
+                        embedding_id, docs_id, chunk_id, embedding
+                    ) VALUES (
+                        :embedding_id, :docs_id, :chunk_id, :embedding
+                    )
+                    """
+                ),
+                {
+                    "embedding_id": embedding_id,
+                    "docs_id": docs_id,
+                    "chunk_id": chunk_id,
+                    "embedding": _vector(),
+                },
+            )
+
+        snapshot = SnapshotService().publish(
+            SnapshotSourceType.DOCUMENTATION,
+            docs_id,
+            user_id=uuid.UUID(user_id),
+        )
+        snapshot_id = snapshot.snapshot_id
+        assert snapshot.item_count == 1
+        assert snapshot.vector_count == 1
+    finally:
+        with get_session() as session:
+            session.execute(
+                text(
+                    """
+                    DELETE FROM source_snapshot_heads
+                    WHERE source_type = 'docs' AND source_id = :source_id
+                    """
+                ),
+                {"source_id": docs_id},
+            )
+            if snapshot_id is not None:
+                session.execute(
+                    text(
+                        """
+                        DELETE FROM source_snapshots
+                        WHERE snapshot_id = :snapshot_id
+                        """
+                    ),
+                    {"snapshot_id": snapshot_id},
+                )
+            session.execute(
+                text(
+                    "DELETE FROM documentation_sources WHERE docs_id = :docs_id"
+                ),
+                {"docs_id": docs_id},
+            )
+
+
 def test_repository_snapshots_preserve_old_content_and_vectors() -> None:
     from synsc.database.connection import get_session
     from synsc.snapshots.contracts import SnapshotSourceType

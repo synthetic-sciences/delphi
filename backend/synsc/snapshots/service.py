@@ -687,9 +687,10 @@ class PostgresSnapshotStore:
         source_id: str,
         user_id: str | None,
     ) -> SnapshotMaterial:
+        normalized_user_id = str(user_id) if user_id is not None else None
         row = session.execute(
             text(self._METADATA_QUERIES[source_type]),
-            {"source_id": source_id, "user_id": user_id},
+            {"source_id": source_id, "user_id": normalized_user_id},
         ).mappings().first()
         if row is None:
             raise SnapshotSourceNotFoundError("Source not found.")
@@ -702,8 +703,11 @@ class PostgresSnapshotStore:
         if not (
             is_public
             or (
-                user_id is not None
-                and (created_by == user_id or bool(row.get("has_link")))
+                normalized_user_id is not None
+                and (
+                    created_by == normalized_user_id
+                    or bool(row.get("has_link"))
+                )
             )
         ):
             raise SnapshotAccessDeniedError("Source not found.")
