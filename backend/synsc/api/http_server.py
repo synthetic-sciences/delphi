@@ -196,8 +196,8 @@ class IndexRepositoryRequest(BaseModel):
     branch: str | None = Field(
         default=None,
         description=(
-            "Branch to index. None means auto-detect the repo's default branch "
-            "(no longer hard-coded to 'main')."
+            "Branch, tag, or full commit SHA to index. None means auto-detect "
+            "the repo's default branch (no longer hard-coded to 'main')."
         ),
     )
     deep_index: bool = Field(

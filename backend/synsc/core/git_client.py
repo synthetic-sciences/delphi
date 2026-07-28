@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shutil
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlparse
@@ -13,12 +14,16 @@ from urllib.parse import urlparse
 import requests as _requests
 import structlog
 from dulwich import porcelain
+from dulwich.client import get_transport_and_path
+from dulwich.objects import ObjectID
 from dulwich.refs import HEADREF, Ref
 from dulwich.repo import Repo
 
 from synsc.config import get_config
 
 logger = structlog.get_logger(__name__)
+
+_FULL_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class GitClient:
@@ -165,7 +170,7 @@ class GitClient:
 
         Args:
             url: GitHub URL or shorthand
-            branch: Branch to clone (default: main)
+            branch: Branch, tag, or full commit SHA to clone (default: remote default)
             github_token: GitHub PAT for authenticated cloning of private repos.
                           If provided, injected as x-access-token in the clone URL.
                           NEVER logged or persisted — used only for this clone operation.
@@ -180,12 +185,23 @@ class GitClient:
             branch = self._get_default_branch(owner, name, github_token)
 
         repo_dir = self.get_repo_dir(owner, name, branch)
+        is_commit = bool(_FULL_COMMIT_RE.fullmatch(branch))
 
         # If already cloned, refresh against the remote before returning the
         # cached SHA. The previous behavior trusted the on-disk HEAD, so
         # re-indexes silently used stale code when the remote moved forward.
         # We now fetch the remote tip and only fast-forward; if anything
         # diverges (force-pushed, branch deleted) we wipe and re-clone.
+        if repo_dir.exists() and is_commit:
+            try:
+                repo = Repo(str(repo_dir))
+                commit_sha = repo.head().decode()
+                if commit_sha.lower() == branch.lower():
+                    return repo_dir, owner, name, commit_sha
+            except Exception:
+                pass
+            shutil.rmtree(repo_dir)
+
         if repo_dir.exists():
             logger.info(
                 "Repository already exists, refreshing against remote",
@@ -266,13 +282,36 @@ class GitClient:
         )
 
         try:
-            # Clone with dulwich
-            repo = porcelain.clone(
-                clone_url,
-                str(repo_dir),
-                branch=branch.encode() if branch else None,
-                depth=1,  # Shallow clone for speed
-            )
+            if is_commit:
+                repo = Repo.init(str(repo_dir), mkdir=True)
+                client, path = get_transport_and_path(clone_url)
+                commit_bytes = ObjectID(branch.lower().encode())
+
+                def want_commit(
+                    refs: Mapping[Ref, ObjectID],
+                    depth: int | None = None,
+                ) -> list[ObjectID]:
+                    del refs, depth
+                    return [commit_bytes]
+
+                client.fetch(
+                    path,
+                    repo,
+                    determine_wants=want_commit,
+                    depth=1,
+                )
+                if commit_bytes not in repo.object_store:
+                    raise ValueError(f"Commit {branch} was not returned by the remote")
+                repo.refs[HEADREF] = commit_bytes
+                porcelain.reset(repo, mode="hard", treeish=commit_bytes)
+            else:
+                # Clone with dulwich
+                repo = porcelain.clone(
+                    clone_url,
+                    str(repo_dir),
+                    branch=branch.encode() if branch else None,
+                    depth=1,  # Shallow clone for speed
+                )
 
             commit_sha = repo.head().decode()
 
