@@ -1,7 +1,8 @@
 """Documentation site indexing.
 
 Pipeline:
-  1. Fetch sitemap.xml (or sitemap_index.xml recursively)
+  1. Fetch sitemap.xml (or sitemap_index.xml recursively), falling back to
+     a bounded same-origin crawl when an auto-discovered sitemap is absent
   2. For each page URL: fetch HTML → strip nav/sidebar/footer →
      markdownify → strip permalink-anchors → heading-aware chunk
   3. Generate embeddings via the shared paper embedder (768-dim,
@@ -29,6 +30,7 @@ import re
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from collections import deque
 from collections.abc import Iterator, Sequence
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -168,6 +170,139 @@ class DocsService:
                     return
                 seen += 1
                 yield loc
+
+    def _iter_crawl_pages(
+        self,
+        client: httpx.Client,
+        start_url: str,
+        max_pages: int,
+    ) -> Iterator[tuple[str, bytes]]:
+        """Yield a bounded, same-origin documentation crawl with page bodies."""
+
+        parsed_start = urlparse(start_url)
+        scope_path = parsed_start.path
+        if not scope_path.endswith("/"):
+            scope_path = scope_path.rsplit("/", 1)[0] + "/"
+
+        canonical_start = parsed_start._replace(
+            query="",
+            fragment="",
+        ).geturl()
+        queue = deque([canonical_start])
+        queued = {canonical_start}
+        skipped_suffixes = (
+            ".css",
+            ".gif",
+            ".gz",
+            ".ico",
+            ".jpeg",
+            ".jpg",
+            ".js",
+            ".json",
+            ".pdf",
+            ".png",
+            ".svg",
+            ".tar",
+            ".tgz",
+            ".webp",
+            ".woff",
+            ".woff2",
+            ".xml",
+            ".zip",
+        )
+        yielded = 0
+
+        while queue and yielded < max_pages:
+            page_url = queue.popleft()
+            try:
+                body = self._fetch(client, page_url)
+            except Exception as exc:
+                logger.warning(
+                    "docs: skip crawl page",
+                    url=page_url,
+                    error=str(exc),
+                )
+                continue
+
+            yielded += 1
+            yield page_url, body
+
+            try:
+                from bs4 import BeautifulSoup
+
+                soup = BeautifulSoup(body, "html.parser")
+                hrefs = (
+                    str(anchor.get("href") or "")
+                    for anchor in soup.find_all("a")
+                )
+            except Exception:
+                decoded = body.decode("utf-8", errors="ignore")
+                hrefs = (
+                    match.group(1)
+                    for match in re.finditer(
+                        r"""href=["']([^"'#]+)["']""",
+                        decoded,
+                        flags=re.IGNORECASE,
+                    )
+                )
+
+            for href in hrefs:
+                if not href or href.startswith(("#", "mailto:", "javascript:")):
+                    continue
+                parsed = urlparse(urljoin(page_url, href))
+                if (
+                    parsed.scheme != parsed_start.scheme
+                    or parsed.netloc != parsed_start.netloc
+                    or not parsed.path.startswith(scope_path)
+                    or parsed.path.lower().endswith(skipped_suffixes)
+                ):
+                    continue
+                candidate = parsed._replace(query="", fragment="").geturl()
+                if candidate not in queued:
+                    queued.add(candidate)
+                    queue.append(candidate)
+
+    def _resolve_pages(
+        self,
+        client: httpx.Client,
+        url: str,
+        *,
+        sitemap_url: str | None,
+        max_pages: int,
+    ) -> list[tuple[str, bytes | None]]:
+        """Resolve sitemap pages or safely fall back to a scoped crawl."""
+
+        explicit_sitemap = sitemap_url is not None or url.lower().endswith(
+            (".xml", ".xml.gz")
+        )
+        sitemap = sitemap_url or self._discover_sitemap(url)
+        try:
+            sitemap_pages = list(
+                self._iter_sitemap_urls(client, sitemap, max_pages)
+            )
+        except Exception:
+            if explicit_sitemap:
+                raise
+            logger.info(
+                "docs: auto-discovered sitemap unavailable; "
+                "falling back to scoped crawl",
+                sitemap=sitemap,
+                url=url,
+            )
+        else:
+            if sitemap_pages or explicit_sitemap:
+                return [(page_url, None) for page_url in sitemap_pages]
+            logger.info(
+                "docs: auto-discovered sitemap empty; "
+                "falling back to scoped crawl",
+                sitemap=sitemap,
+                url=url,
+            )
+
+        crawled = list(self._iter_crawl_pages(client, url, max_pages))
+        if not crawled:
+            raise ValueError("No documentation pages could be discovered")
+        return [(page_url, body) for page_url, body in crawled]
 
     # ------------------------------------------------------------------
     # Page extraction + chunking
@@ -449,28 +584,35 @@ class DocsService:
             transport=_PublicHTTPTransport(),
         ) as client:
             try:
-                page_urls = list(
-                    self._iter_sitemap_urls(client, sitemap, max_pages)
+                pages = self._resolve_pages(
+                    client,
+                    url,
+                    sitemap_url=sitemap_url,
+                    max_pages=max_pages,
                 )
             except Exception as exc:
                 logger.error(
-                    "docs: failed to read sitemap",
-                    sitemap=sitemap,
+                    "docs: failed to discover pages",
+                    url=url,
+                    sitemap=sitemap_url,
                     error=str(exc),
                 )
                 return {
                     "success": False,
-                    "error": f"sitemap fetch failed: {exc}",
+                    "error": f"documentation discovery failed: {exc}",
                 }
 
-            for page_url in page_urls:
-                try:
-                    html = self._fetch(client, page_url)
-                except Exception as exc:
-                    logger.warning(
-                        "docs: skip page", url=page_url, error=str(exc)
-                    )
-                    continue
+            for page_url, crawled_html in pages:
+                if crawled_html is None:
+                    try:
+                        html = self._fetch(client, page_url)
+                    except Exception as exc:
+                        logger.warning(
+                            "docs: skip page", url=page_url, error=str(exc)
+                        )
+                        continue
+                else:
+                    html = crawled_html
 
                 md, page_heading = self._html_to_markdown(html)
                 for chunk_path, chunk_text in self._chunk_markdown(

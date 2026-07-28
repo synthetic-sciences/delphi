@@ -27,6 +27,93 @@ def test_discover_sitemap_falls_back_to_origin_root():
     )
 
 
+def test_crawl_pages_stays_within_documentation_subtree(monkeypatch):
+    from synsc.services.docs_service import DocsService
+
+    pages = {
+        "https://docs.example.com/stable/": b"""
+            <a href="guide.html">Guide</a>
+            <a href="/stable/api.html#method">API</a>
+            <a href="/other/private.html">Other subtree</a>
+            <a href="https://outside.example/docs.html">External</a>
+            <a href="asset.css">Asset</a>
+        """,
+        "https://docs.example.com/stable/guide.html": (
+            b'<a href="api.html">API duplicate</a>'
+        ),
+        "https://docs.example.com/stable/api.html": b"<p>API</p>",
+    }
+    monkeypatch.setattr(
+        DocsService,
+        "_fetch",
+        lambda self, client, url: pages[url],
+    )
+
+    crawled = list(
+        DocsService(user_id="u1")._iter_crawl_pages(
+            object(),
+            "https://docs.example.com/stable/",
+            max_pages=5,
+        )
+    )
+
+    assert [url for url, _body in crawled] == [
+        "https://docs.example.com/stable/",
+        "https://docs.example.com/stable/guide.html",
+        "https://docs.example.com/stable/api.html",
+    ]
+
+
+def test_auto_discovered_sitemap_failure_falls_back_to_bounded_crawl(
+    monkeypatch,
+):
+    from synsc.services.docs_service import DocsService
+
+    service = DocsService(user_id="u1")
+    monkeypatch.setattr(
+        service,
+        "_iter_sitemap_urls",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("404 sitemap")),
+    )
+    monkeypatch.setattr(
+        service,
+        "_iter_crawl_pages",
+        lambda *args, **kwargs: iter(
+            [("https://docs.example.com/stable/", b"<h1>Docs</h1>")]
+        ),
+    )
+
+    pages = service._resolve_pages(
+        object(),
+        "https://docs.example.com/stable/",
+        sitemap_url=None,
+        max_pages=3,
+    )
+
+    assert pages == [
+        ("https://docs.example.com/stable/", b"<h1>Docs</h1>")
+    ]
+
+
+def test_explicit_sitemap_failure_does_not_silently_change_scope(monkeypatch):
+    from synsc.services.docs_service import DocsService
+
+    service = DocsService(user_id="u1")
+    monkeypatch.setattr(
+        service,
+        "_iter_sitemap_urls",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("404 sitemap")),
+    )
+
+    with pytest.raises(RuntimeError, match="404 sitemap"):
+        service._resolve_pages(
+            object(),
+            "https://docs.example.com/stable/",
+            sitemap_url="https://docs.example.com/custom-sitemap.xml",
+            max_pages=3,
+        )
+
+
 def test_docs_url_validation_rejects_loopback_and_private_addresses():
     from synsc.services.docs_service import _validate_public_url
 
