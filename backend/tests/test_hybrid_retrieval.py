@@ -13,7 +13,9 @@ from __future__ import annotations
 from synsc.services.hybrid_retrieval import (
     DEFAULT_WEIGHTS,
     Candidate,
+    _symbol_search_needles,
     bm25_search,
+    exact_symbol_search,
     extract_identifiers,
     fuse_candidates,
     vector_to_candidates,
@@ -43,6 +45,58 @@ def test_extract_identifiers_unique_order_preserved():
     assert ids.index("FooBar") < ids.index("fooBar")
     assert ids.count("FooBar") == 1
     assert ids.count("baz_qux") == 1
+
+
+def test_symbol_needles_prioritize_dotted_api_leaves():
+    needles = _symbol_search_needles(
+        "setup.cfg show_default ctx_value "
+        "click.Context click.Command click.Option opt.get_help",
+    )
+
+    assert needles == [
+        "Context",
+        "click.Context",
+        "Command",
+        "click.Command",
+        "Option",
+        "click.Option",
+        "get_help",
+        "opt.get_help",
+    ]
+    assert "cfg" not in needles
+
+
+def test_exact_symbol_search_uses_every_selected_needle():
+    class EmptyRows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class RecordingSession:
+        statement = ""
+        params = None
+
+        def execute(self, statement, params):
+            self.statement = str(statement)
+            self.params = params
+            return EmptyRows()
+
+    query = "click.Context click.Option ctx.forward forwarded_params"
+    expected = _symbol_search_needles(query)
+    session = RecordingSession()
+
+    assert exact_symbol_search(session, query, "user-id") == []
+    for index, needle in enumerate(expected):
+        assert session.params[f"nl_{index}"] == needle.lower()
+        assert f":nl_{index}" in session.statement
+    assert session.statement.index(
+        "s.qualified_name IN (:n_",
+    ) < session.statement.index("s.name IN (:n_")
+    assert session.statement.index("ORDER BY sym_score DESC") < (
+        session.statement.index("LIMIT :top_k")
+    )
 
 
 def test_bm25_search_uses_websearch_or_syntax_for_multiple_terms():
