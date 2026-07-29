@@ -268,8 +268,9 @@ Provides deep context to AI agents through:
 
         Quality mode (default 'agent' for MCP):
           - 'agent': index everything useful (tests, docs, examples, configs,
-            manifests, dotfiles), AST chunking on, hybrid retrieval, rerank top
-            50, lower min-chunk threshold so small but meaningful files are kept.
+            manifests, dotfiles), AST chunking on, high-recall hybrid retrieval,
+            stable file diversity, and a lower min-chunk threshold so small but
+            meaningful files are kept.
           - 'balanced': skip nothing structural, AST chunking on, no rerank.
           - 'fast': legacy behavior — skip tests/docs/examples, turbo chunking.
 
@@ -528,8 +529,9 @@ Provides deep context to AI agents through:
 
         Runs five retrieval branches and fuses them: vector embedding
         (semantic), BM25 / full-text (keyword), exact symbol lookup,
-        exact path/glob match, and trigram fallback. The cross-encoder
-        reranker re-orders the top fused window.
+        exact path/glob match, and trigram fallback. Agent mode preserves
+        high-recall fused ranking with stable file-level diversity. A
+        cross-encoder can still be enabled explicitly by deployment config.
 
         Each result carries ``candidate_sources`` showing which branches
         contributed — vital for debugging "why did Delphi miss this?".
@@ -2050,8 +2052,8 @@ Provides deep context to AI agents through:
 
         For repos, MCP gets agent-quality indexing by default (tests, docs,
         examples, configs, manifests, dotfiles all included; AST chunking;
-        rerank). Pass ``options={'quality_mode': 'fast'}`` for the legacy
-        fast-skip behavior.
+        high-recall hybrid search). Pass ``options={'quality_mode': 'fast'}``
+        for the legacy fast-skip behavior.
 
         Args:
             source_type: 'repo', 'paper', 'dataset', or 'docs' (docs lands later).
