@@ -186,10 +186,18 @@ def _trigram_search_needles(query: str, *, limit: int = 1) -> list[str]:
         return []
 
     ranked: list[tuple[float, int, str]] = []
+    noisy_fallbacks: list[tuple[float, int, str]] = []
     for order, identifier in enumerate(extract_identifiers(query)):
-        if identifier.isupper() and identifier.count("_") >= 2:
+        is_environment_noise = (
+            len(identifier) >= 24
+            and identifier.isupper()
+            and identifier.count("_") >= 2
+        )
+        if is_environment_noise:
             # Build environments and test runners often prepend long variable
             # names that are rarer than, but unrelated to, the failing symbol.
+            specificity = min(len(identifier), 24) / 24
+            noisy_fallbacks.append((2.0 + specificity, order, identifier))
             continue
         values = [identifier]
         if "." in identifier:
@@ -209,6 +217,12 @@ def _trigram_search_needles(query: str, *, limit: int = 1) -> list[str]:
             )
             specificity = min(len(value), 24) / 24
             ranked.append((code_shape + specificity, order, value))
+
+    # A query that consists only of an uppercase constant still deserves fuzzy
+    # retrieval; suppress long environment-shaped terms only when a better
+    # code-shaped candidate is present.
+    if not ranked:
+        ranked = noisy_fallbacks
 
     selected: list[str] = []
     seen: set[str] = set()
@@ -368,7 +382,7 @@ def trigram_search(
         INNER JOIN repository_files rf ON cc.file_id = rf.file_id
         WHERE :needle <% cc.symbol_names
         {extra}
-        ORDER BY score DESC, rf.file_path, cc.chunk_index
+        ORDER BY score DESC, rf.file_path, cc.chunk_index, cc.repo_id, cc.chunk_id
         LIMIT :top_k
         """
     )

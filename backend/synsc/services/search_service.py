@@ -898,6 +898,77 @@ def _select_file_diverse_results(
     return selected
 
 
+def _select_source_diverse_results(
+    results: list[dict[str, Any]],
+    *,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Combine file diversity with coverage of successful retrieval branches.
+
+    Weighted fusion can otherwise crowd a strong lexical-only recovery out
+    with a full page of vector hits before reranking or agent selection. Start
+    with ranked file diversity, then replace only a lowest-ranked result whose
+    branch signals are already represented elsewhere. The final candidates
+    retain their original relative order.
+    """
+    if top_k <= 0 or not results:
+        return []
+    if len(results) <= top_k:
+        return list(results)
+
+    selected = _select_file_diverse_results(results, top_k=top_k)
+
+    original_rank = {id(result): index for index, result in enumerate(results)}
+    selected_ids = {id(result) for result in selected}
+    for source in ("vector", "bm25", "symbol", "path", "trigram"):
+        if any(
+            source in (result.get("candidate_sources") or {})
+            for result in selected
+        ):
+            continue
+
+        candidate = next(
+            (
+                result
+                for result in results
+                if source in (result.get("candidate_sources") or {})
+                and id(result) not in selected_ids
+            ),
+            None,
+        )
+        if candidate is None:
+            continue
+
+        source_counts: dict[str, int] = {}
+        for result in selected:
+            for result_source in (result.get("candidate_sources") or {}):
+                source_counts[result_source] = (
+                    source_counts.get(result_source, 0) + 1
+                )
+        replacement_index = next(
+            (
+                index
+                for index in range(len(selected) - 1, -1, -1)
+                if all(
+                    source_counts.get(result_source, 0) > 1
+                    for result_source in (
+                        selected[index].get("candidate_sources") or {}
+                    )
+                )
+            ),
+            None,
+        )
+        if replacement_index is None:
+            continue
+
+        selected_ids.remove(id(selected[replacement_index]))
+        selected[replacement_index] = candidate
+        selected_ids.add(id(candidate))
+
+    selected.sort(key=lambda result: original_rank[id(result)])
+    return selected
+
+
 def _enrich_results_with_context(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Enrich search results with enclosing symbol docstrings/signatures and adjacent context.
 
@@ -1249,8 +1320,20 @@ class SearchService:
                     from synsc.services.reranker import get_reranker
                     reranker = get_reranker()
                     rerank_window = self.config.search.hybrid_rerank_k
-                    head = raw_results[:rerank_window]
-                    tail = raw_results[rerank_window:]
+                    if agent_mode:
+                        head = _select_source_diverse_results(
+                            raw_results,
+                            top_k=rerank_window,
+                        )
+                        head_ids = {id(result) for result in head}
+                        tail = [
+                            result
+                            for result in raw_results
+                            if id(result) not in head_ids
+                        ]
+                    else:
+                        head = raw_results[:rerank_window]
+                        tail = raw_results[rerank_window:]
                     head = reranker.rerank(
                         query=retrieval_query,
                         results=head,
@@ -1274,7 +1357,7 @@ class SearchService:
                 # Keep high-recall branch candidates and avoid returning many
                 # chunks from a single file without lossy thresholding or
                 # quadratic content-MMR.
-                raw_results = _select_file_diverse_results(
+                raw_results = _select_source_diverse_results(
                     raw_results,
                     top_k=top_k,
                 )
