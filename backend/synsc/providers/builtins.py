@@ -93,6 +93,7 @@ def _descriptor(
     health: ProviderHealth = ProviderHealth.READY,
     extra_capabilities: frozenset[ProviderCapability] = frozenset(),
     supports_cancellation: bool = False,
+    supports_retry: bool = False,
 ) -> ProviderDescriptor:
     return ProviderDescriptor(
         name=name,
@@ -102,6 +103,7 @@ def _descriptor(
         accepted_classifications=_ALL_CLASSIFICATIONS,
         health=health,
         supports_cancellation=supports_cancellation,
+        supports_retry=supports_retry,
     )
 
 
@@ -141,6 +143,7 @@ def register_builtin_providers(registry: ProviderRegistry) -> None:
             "gemini-embeddings",
             ProviderCapability.EMBEDDING,
             ExecutionLocation.REMOTE,
+            supports_retry=True,
         ),
         _gemini_embeddings,
         priority=100,
@@ -150,6 +153,7 @@ def register_builtin_providers(registry: ProviderRegistry) -> None:
             "openai-embeddings",
             ProviderCapability.EMBEDDING,
             ExecutionLocation.REMOTE,
+            supports_retry=True,
         ),
         _openai_embeddings,
         priority=110,
@@ -159,6 +163,7 @@ def register_builtin_providers(registry: ProviderRegistry) -> None:
             "huggingface-embeddings",
             ProviderCapability.EMBEDDING,
             ExecutionLocation.REMOTE,
+            supports_retry=True,
         ),
         _huggingface_embeddings,
         priority=120,

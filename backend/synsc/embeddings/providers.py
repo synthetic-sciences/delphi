@@ -14,7 +14,9 @@ import logging
 import math
 import os
 import re
+import time
 from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 import requests
@@ -22,6 +24,14 @@ import requests
 logger = logging.getLogger(__name__)
 
 DEFAULT_DIM = 768
+_TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+_TRANSIENT_REQUEST_EXCEPTIONS = (
+    requests.ConnectionError,
+    requests.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.ContentDecodingError,
+)
+_MAX_RETRY_DELAY_SECONDS = 60.0
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SUBWORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
@@ -70,6 +80,71 @@ class _HttpEmbeddingProvider:
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         raise NotImplementedError
+
+    def _post_json(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: Any,
+        timeout: float,
+    ) -> requests.Response:
+        """POST JSON, retrying transient provider and transport failures."""
+        configured_attempts = os.getenv("EMBEDDING_HTTP_MAX_ATTEMPTS", "5")
+        try:
+            max_attempts = int(configured_attempts)
+        except ValueError:
+            max_attempts = 5
+        max_attempts = min(max(max_attempts, 1), 10)
+
+        for attempt in range(max_attempts):
+            try:
+                response = requests.post(
+                    url,
+                    headers=headers,
+                    json=json,
+                    timeout=timeout,
+                )
+            except _TRANSIENT_REQUEST_EXCEPTIONS:
+                if attempt + 1 == max_attempts:
+                    raise
+                delay = min(2.0**attempt, _MAX_RETRY_DELAY_SECONDS)
+                logger.warning(
+                    "%s embeddings request failed; retrying in %.2fs "
+                    "(attempt %d/%d)",
+                    self.name,
+                    delay,
+                    attempt + 2,
+                    max_attempts,
+                )
+                time.sleep(delay)
+                continue
+
+            if (
+                response.status_code not in _TRANSIENT_HTTP_STATUSES
+                or attempt + 1 == max_attempts
+            ):
+                return response
+
+            retry_after = response.headers.get("Retry-After", "")
+            try:
+                delay = float(retry_after)
+                if delay < 0 or not math.isfinite(delay):
+                    raise ValueError("invalid Retry-After delta-seconds")
+            except (ValueError, OverflowError):
+                delay = 2.0**attempt
+            delay = min(max(delay, 0.0), _MAX_RETRY_DELAY_SECONDS)
+            logger.warning(
+                "%s embeddings HTTP %d; retrying in %.2fs (attempt %d/%d)",
+                self.name,
+                response.status_code,
+                delay,
+                attempt + 2,
+                max_attempts,
+            )
+            time.sleep(delay)
+
+        raise RuntimeError("embedding retry loop exited without a response")
 
     # ------------------------------------------------------------------
     # Public surface — matches EmbeddingGenerator
@@ -211,7 +286,7 @@ class GeminiEmbeddingProvider(_HttpEmbeddingProvider):
                 for t in texts
             ]
         }
-        resp = requests.post(
+        resp = self._post_json(
             f"{self._endpoint}?key={self.api_key}",
             headers={"Content-Type": "application/json"},
             json=body,
@@ -253,7 +328,7 @@ class OpenAIEmbeddingProvider(_HttpEmbeddingProvider):
             "dimensions": self.dimension,
             "encoding_format": "float",
         }
-        resp = requests.post(
+        resp = self._post_json(
             self._endpoint,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -319,7 +394,7 @@ class HuggingFaceEmbeddingProvider(_HttpEmbeddingProvider):
         )
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        resp = requests.post(
+        resp = self._post_json(
             self._endpoint,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
