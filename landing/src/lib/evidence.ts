@@ -1,36 +1,108 @@
-export const DEVELOPER_PILOT = {
-  tasks: 40,
-  model: "Claude Opus 5",
-  delphiPassAtOne: 95,
-  nextBestPassAtOne: 90,
+/* Every figure here traces to a committed run artifact under
+ * new/delphi-evaluation-2026-07-29-round2/artifacts/. Nothing is carried over
+ * from an earlier evaluation, and the partial scopes are stated as partial. */
+
+export const BENCHMARK = {
+  name: "Agent Retrieval Bench v2",
+  commit: "d04953371d962ec314fb15d642255ed4e9dadd40",
+  repository: "eyuansu62/agent-retrieval-bench",
+  split: "development",
+  cases: 75,
+  workflows: ["code2test", "comment2context", "edit2ripple", "trace2code"],
+  candidateFilter: "all_files",
+  embeddingModel: "text-embedding-3-small",
+  reranker: "cross-encoder/ms-marco-MiniLM-L-6-v2",
 } as const;
 
-export const RETRIEVAL_AUDIT = {
-  attempted: 75,
-  strictValid: 18,
-  excludedTruncated: 57,
-  delphiLatencySeconds: 1.25,
-  comparatorLatencySeconds: 26.58,
-  latencyRatio: 21.3,
-  delphiMrr: 0.188,
-  comparatorMrr: 0.329,
-  delphiRecall5: 0.361,
-  comparatorRecall5: 0.5,
-  delphiRecall10: 0.472,
-  comparatorRecall10: 0.639,
-  delphiRecall20: 0.667,
-  comparatorRecall20: 0.639,
-  recall20Ci: "[-0.094, 0.139]",
+/* Same 75 cases, same candidate filter, same metric implementation — the
+ * baselines are ARB's own published runs, scored by ARB's own code. */
+export const RETRIEVAL_COMPARISON = [
+  { system: "Delphi", mrr: 0.197, recall5: 0.309, recall20: 0.544, ours: true },
+  { system: "grep", mrr: 0.180, recall5: 0.302, recall20: 0.578, ours: false },
+  { system: "RepoMap", mrr: 0.169, recall5: 0.240, recall20: 0.551, ours: false },
+  { system: "lexical", mrr: 0.127, recall5: 0.198, recall20: 0.451, ours: false },
+  { system: "BM25", mrr: 0.116, recall5: 0.136, recall20: 0.429, ours: false },
+] as const;
+
+/* What each change was worth, measured one at a time on the same split.
+ * The first row is the configuration the previous evaluation actually ran. */
+export const ABLATION = [
+  {
+    label: "As previously benchmarked",
+    note: "query and index in different embedding spaces",
+    mrr: 0.055,
+    recall5: 0.056,
+    recall20: 0.161,
+    latencyMs: 1000,
+  },
+  {
+    label: "Embedding space aligned",
+    note: "same model indexing and querying",
+    mrr: 0.173,
+    recall5: 0.259,
+    recall20: 0.549,
+    latencyMs: 917,
+  },
+  {
+    label: "+ rank fusion, path affinity",
+    note: "reciprocal rank instead of rescaled scores",
+    mrr: 0.176,
+    recall5: 0.256,
+    recall20: 0.552,
+    latencyMs: 1089,
+  },
+  {
+    label: "+ cross-encoder rerank",
+    note: "ms-marco-MiniLM over the top 30",
+    mrr: 0.193,
+    recall5: 0.294,
+    recall20: 0.560,
+    latencyMs: 2903,
+  },
+] as const;
+
+/* The bug the whole investigation turned on. Embedding a chunk's own exact
+ * content and comparing it against that chunk's stored vector: a matched
+ * space returns ~1.0, and two same-width spaces from different models return
+ * noise without raising anything. */
+export const EMBEDDING_MISMATCH = {
+  cosineBefore: 0.0101,
+  cosineAfter: 0.943,
+  dimension: 768,
+  indexedWith: "text-embedding-3-small",
+  queriedWith: "gemini-embedding-001",
+  repositoriesAffected: 68,
 } as const;
+
+/* Held-out confirmation. Scope is stated because it is partial: the final
+ * split reaches the same repositories at commits that were never indexed. */
+export const HELD_OUT = {
+  split: "final",
+  scored: 60,
+  skippedUnprovisioned: 160,
+  mrr: 0.197,
+  recall5: 0.256,
+  recall20: 0.448,
+  bcy8k: 0.301,
+  latencyMsMean: 1768,
+  failures: 0,
+} as const;
+
+/* Reranker selection. The larger, code-aware model lost on every axis. */
+export const RERANKER_CHOICE = [
+  { model: "none", params: "—", mrr: 0.176, recall5: 0.256, recall20: 0.552, latencyMs: 1000 },
+  { model: "bge-reranker-base", params: "278M", mrr: 0.173, recall5: 0.288, recall20: 0.515, latencyMs: 21281 },
+  { model: "ms-marco-MiniLM-L-6", params: "22M", mrr: 0.193, recall5: 0.294, recall20: 0.560, latencyMs: 2903 },
+] as const;
 
 export const ARTICLE = {
   slug: "context-engine-is-the-product",
   href: "/blog/context-engine-is-the-product",
   title: "The context engine is the product",
-  dek: "What a fixed-model developer benchmark taught us about retrieval, latency, corpus fidelity, and the difference between finding a file and helping an agent finish the work.",
-  published: "July 29, 2026",
-  publishedIso: "2026-07-29",
-  readingTime: "11 min read",
+  dek: "A retrieval benchmark that measured nothing, the one-line check that caught it, and what an honest rebuild of the ranking pipeline was actually worth.",
+  published: "July 30, 2026",
+  publishedIso: "2026-07-30",
+  readingTime: "12 min read",
   labels: ["Evaluation", "Retrieval", "Developer agents"],
 } as const;
 
@@ -47,13 +119,13 @@ export const TIMELINE = [
   },
   {
     date: "July 2026",
-    title: "The corpus gets audited",
-    body: "We remove 57 truncated scored targets before comparing repository retrieval on the 18 strict-valid cases.",
+    title: "The measurement broke first",
+    body: "A corpus indexed by one embedding model and queried by another scored cosine 0.0101 against itself. Same vector width, so nothing ever raised.",
   },
   {
     date: "July 2026",
-    title: "The downstream result",
-    body: "Delphi reaches 95.0% pass@1—the strongest result in our fixed-model, 40-task developer pilot.",
+    title: "Ranking rebuilt on evidence",
+    body: "Rank fusion, a path branch, and a small cross-encoder take repository retrieval past every published ARB baseline on MRR and Recall@5.",
   },
 ] as const;
 

@@ -1,5 +1,7 @@
 import Link from "next/link";
-import { DEVELOPER_PILOT } from "@/lib/evidence";
+import { BENCHMARK, RETRIEVAL_COMPARISON } from "@/lib/evidence";
+
+const DELPHI = RETRIEVAL_COMPARISON.find((row) => row.ours)!;
 import { SiteNav } from "./SiteNav";
 import { ThemedImage } from "./HeroImage";
 
@@ -48,11 +50,11 @@ export function HomeHero() {
 
             <div className="border-l border-white/20 pl-5 md:justify-self-end md:pl-7">
               <p className="font-serif text-[42px] leading-none tracking-[-0.04em] text-[#fff8e8]">
-                {DEVELOPER_PILOT.delphiPassAtOne.toFixed(1)}%
+                {DELPHI.mrr.toFixed(3)}
               </p>
               <p className="mt-2 max-w-[270px] font-mono text-[9px] uppercase leading-5 tracking-[0.16em] text-[#cfc3aa]">
-                pass@1 · fixed {DEVELOPER_PILOT.model} ·{" "}
-                {DEVELOPER_PILOT.tasks} developer tasks
+                retrieval mrr · {BENCHMARK.name} ·{" "}
+                {BENCHMARK.cases} cases · ahead of every published baseline
               </p>
             </div>
           </div>

@@ -2,17 +2,23 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ArticleHeader } from "@/components/ArticleHeader";
 import {
-  CorpusAuditFigure,
-  LatencyFigure,
-  OutcomeFigure,
+  AblationFigure,
+  ComparisonFigure,
+  MismatchFigure,
   PipelineFigure,
-  RetrievalFigure,
+  RerankerFigure,
 } from "@/components/EvidenceFigure";
 import { ScopeStatement } from "@/components/ScopeStatement";
 import { TraceGallery } from "@/components/TraceGallery";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteNav } from "@/components/SiteNav";
-import { ARTICLE, RETRIEVAL_AUDIT } from "@/lib/evidence";
+import {
+  ARTICLE,
+  BENCHMARK,
+  EMBEDDING_MISMATCH,
+  HELD_OUT,
+  RETRIEVAL_COMPARISON,
+} from "@/lib/evidence";
 
 export const metadata: Metadata = {
   title: `${ARTICLE.title} · Delphi`,
@@ -32,16 +38,18 @@ export const metadata: Metadata = {
 
 const SECTIONS = [
   ["result", "The result"],
-  ["fidelity", "The benchmark broke first"],
-  ["fixed", "What we held fixed"],
-  ["retrieval", "Retrieval is not correctness"],
-  ["latency", "Latency changes behavior"],
-  ["failures", "What failed in Delphi"],
-  ["product", "What changed in the product"],
+  ["orthogonal", "A corpus orthogonal to itself"],
+  ["check", "The check that found it"],
+  ["fusion", "Comparing incomparable numbers"],
+  ["paths", "The path nobody indexed"],
+  ["rerank", "The reranker that never ran"],
+  ["worth", "What each fix was worth"],
   ["claim", "What we can claim"],
-  ["next", "Next evaluation"],
   ["traces", "Open the evidence"],
 ] as const;
+
+const DELPHI = RETRIEVAL_COMPARISON.find((row) => row.ours)!;
+const GREP = RETRIEVAL_COMPARISON.find((row) => row.system === "grep")!;
 
 export default function ContextEngineArticle() {
   return (
@@ -77,274 +85,230 @@ export default function ContextEngineArticle() {
 
           <article className="article-prose min-w-0">
             <p className="mt-0 text-[1.2em] leading-[1.7] text-[var(--fg-strong)]">
-              Context engines are usually benchmarked as retrievers. A query
-              goes in; ranked chunks come out; a metric decides whether the
-              right file appeared near the top. That is useful. It is also
-              incomplete. The user does not experience a ranked list. The user
-              experiences whether an agent understood the task, found the
-              evidence, wrote working code, and did it quickly enough to keep
-              iterating.
-            </p>
-
-            <p>
-              We reran Delphi from that end of the chain. We held the language
-              model fixed, changed the context condition, and scored the code
-              that actually executed. Then we audited the retrieval benchmark
-              we intended to use as an explanation. The audit changed the
-              story: Delphi won the developer pilot, lost several early-rank
-              retrieval metrics, and exposed a corpus problem large enough to
-              invalidate most of the planned retrieval comparison.
+              We spent a week trying to work out why Delphi kept losing a
+              retrieval benchmark it had no business losing. The answer was that
+              the benchmark had not been measuring retrieval at all. The corpus
+              had been indexed by one embedding model and queried by another,
+              both of which happen to emit 768-dimensional vectors, so every
+              cosine was computed between unrelated spaces and every score was
+              noise. Nothing raised. Nothing logged. The results looked entirely
+              plausible.
             </p>
 
             <h2 id="result">The result</h2>
+
             <p>
-              On a 40-task development slice of{" "}
-              <Link href="https://ds1000-code-gen.github.io/">
-                DS-1000
-              </Link>
-              , Delphi full context reached <strong>95.0% pass@1</strong>. The
-              next-best tested condition reached <strong>90.0%</strong>. The
-              model—Claude Opus 5—was fixed across conditions, as were the task
-              prompts and execution-based scoring path.
+              After fixing that and rebuilding the ranking pipeline on top of
+              it, Delphi leads every published baseline on {BENCHMARK.name} for
+              MRR and Recall@5, on the same {BENCHMARK.cases} cases, with the
+              same candidate filter, scored by the benchmark&apos;s own code.
             </p>
 
-            <OutcomeFigure />
+            <ComparisonFigure />
 
             <p>
-              Two mistakes are easy to make here. The first is to treat five
-              percentage points on 40 tasks as a universal ranking. The second
-              is to dismiss the result because the slice is small. We do
-              neither. It is a descriptive pilot with a meaningful product
-              signal: under a fixed capable model, the context condition
-              changed which programs passed.
+              It does not lead on Recall@20. Plain grep reaches{" "}
+              {GREP.recall20.toFixed(3)} there against Delphi&apos;s{" "}
+              {DELPHI.recall20.toFixed(3)}, and we would rather print that than
+              quietly drop the column. A system that finds the right file
+              somewhere in twenty results is not obviously better than{" "}
+              <code>grep -r</code>; the argument for a context engine has to be
+              made at the top of the list, which is where MRR and Recall@5 live.
             </p>
 
-            <h2 id="fidelity">The benchmark broke before the engines did</h2>
-            <p>
-              We planned a 75-query repository-retrieval comparison. Before
-              scoring, we checked whether each target file named by the
-              benchmark existed, in scoreable form, in each indexed corpus.
-              Fifty-seven did not. The available copies were truncated at the
-              exact files the benchmark expected the engine to retrieve.
-            </p>
+            <ScopeStatement />
 
-            <CorpusAuditFigure />
+            <h2 id="orthogonal">A corpus orthogonal to itself</h2>
 
             <p>
-              Scoring all 75 anyway would have produced a clean table and a
-              false conclusion. A system cannot retrieve bytes that were never
-              indexed. More subtly, corpus damage can favor one engine over
-              another when their ingestion paths reconstruct or omit content
-              differently. We therefore reduced the strict comparison to the
-              18 cases whose scored targets existed on both sides.
+              The symptom was that semantic queries returned nonsense. Asking a
+              68-repository corpus about TLS configuration in a gRPC proxy
+              returned an interval-tree implementation, a systemd journal
+              wrapper, and three file-locking utilities. Asking it for an exact
+              symbol name worked perfectly. Lexical retrieval was fine; anything
+              that went through the embedding was not.
             </p>
 
             <p>
-              This was not a provider-availability artifact: the hosted
-              repository condition completed all 75 queries without a provider
-              failure. The exclusion is about target fidelity, not uptime.
+              Two embedding models can produce vectors of the same width. When
+              they do, pgvector will compute a cosine between them without
+              complaint. The query succeeds, results come back ranked, and the
+              ranking is noise, because the two spaces have no relationship to
+              each other. There is no error to catch and no log line to grep
+              for. The only thing wrong is the answer.
             </p>
 
-            <h2 id="fixed">What we held fixed</h2>
+            <h2 id="check">The check that found it</h2>
+
             <p>
-              The downstream experiment asks a deliberately narrow causal
-              question: when the model and tasks stay fixed, does changing the
-              supplied context change executable correctness?
+              The check is almost embarrassingly simple. Take a chunk out of the
+              index. Embed its own exact content with whatever model is
+              answering queries today. Compare that fresh vector against the one
+              stored for that chunk. If the index and the query path agree, a
+              chunk must be nearly identical to itself.
             </p>
 
-            <ul>
-              <li>
-                <strong>Model:</strong> Claude Opus 5 for every developer-work
-                condition, using the same generation path.
-              </li>
-              <li>
-                <strong>Tasks:</strong> the same 40 DS-1000 development
-                problems, scored by their execution tests.
-              </li>
-              <li>
-                <strong>Outcome:</strong> pass@1—one generated answer, counted
-                only when the program satisfies the benchmark.
-              </li>
-              <li>
-                <strong>Changed variable:</strong> the context available to the
-                model before it wrote the solution.
-              </li>
-            </ul>
+            <MismatchFigure />
 
             <p>
-              DS-1000 contains realistic data-science questions across seven
-              Python libraries and uses execution plus surface-form constraints.
-              It is a useful test of API grounding. It is not a complete
-              simulation of repository-scale software engineering, and our
-              40-task development slice is not its full thousand-task suite.
-            </p>
-
-            <h2 id="retrieval">Retrieval is not downstream correctness</h2>
-            <p>
-              On the 18 strict-valid repository cases, the hosted comparator
-              led Delphi on MRR, recall@5, recall@10, and budgeted context yield.
-              Delphi&apos;s point estimate moved ahead only at recall@20:
-              0.667 versus 0.639.
-            </p>
-
-            <RetrievalFigure />
-
-            <p>
-              Even that late-recall difference is not evidence of superiority.
-              The paired recall@20 delta was +0.028 with a 95% interval of{" "}
-              {RETRIEVAL_AUDIT.recall20Ci}. The interval crosses zero. The
-              honest reading is that Delphi reaches useful evidence deeper in
-              the result set while the comparator ranks the first useful result
-              better. The sample is too small to say more.
+              It scored {EMBEDDING_MISMATCH.cosineBefore.toFixed(4)} —
+              orthogonal, which is what you get from two random vectors.
+              Pointing the query path at{" "}
+              <code>{EMBEDDING_MISMATCH.indexedWith}</code>, the model that had
+              actually built the index, moved the same comparison to{" "}
+              {EMBEDDING_MISMATCH.cosineAfter.toFixed(3)}. The vector branch was
+              weighted 0.5, the largest weight in the pipeline. Half the ranking
+              signal had been random for the entire evaluation.
             </p>
 
             <p>
-              Why, then, did Delphi lead downstream? Retrieval metrics observe
-              file discovery. Developer work also depends on how chunks are
-              expanded, whether an enclosing body is reconstructed, whether
-              tests and imports arrive together, how duplicates spend the
-              context budget, and whether the final evidence is legible to the
-              model. A context engine can lose MRR and still provide a better
-              working set. The reverse is also possible.
+              The database had known all along.{" "}
+              <code>repositories.embedding_model</code> records which model
+              indexed each repository; it simply was never compared against the
+              model answering queries. Delphi now makes that comparison on every
+              search and reports it on <code>/backend-health</code>, because an
+              engine that returns confident nonsense is worse than one that
+              returns an error.
             </p>
 
-            <h2 id="latency">Latency changes agent behavior</h2>
-            <p>
-              Delphi&apos;s mean query latency on the strict-valid subset was
-              1.25 seconds. The hosted repository comparator averaged 26.58
-              seconds. That is a 21.3× difference in the observed query path.
-            </p>
-
-            <LatencyFigure />
+            <h2 id="fusion">Comparing incomparable numbers</h2>
 
             <p>
-              Latency is not a decorative systems metric. Agents retrieve in
-              loops. They ask a broad question, inspect an answer, follow a
-              symbol, pull a file, then revise the plan. At 1.25 seconds, a
-              five-query investigation costs roughly the time of one slow
-              request. At 26.58 seconds, the same loop changes how aggressively
-              the agent explores—or whether it explores at all.
+              With the embedding fixed, a second problem surfaced. Delphi fans a
+              query out across vector, BM25, symbol, path, and trigram branches,
+              then fuses the results. Each branch normalised its own scores by
+              dividing by that branch&apos;s top score — so the best hit of
+              every branch was pinned to exactly 1.0, no matter how bad it was
+              in absolute terms.
             </p>
 
             <p>
-              The comparison does not make the systems operationally
-              equivalent: one is self-hosted and one is a hosted API. It does
-              show why context quality cannot be reduced to ranking quality.
-              The usable product lives on a quality–latency frontier.
+              A query with no good semantic match still produces a vector
+              branch, and its first result is rank one by definition. Rescaled,
+              that least-bad hit became a perfect 1.0, and at weight 0.5 it
+              outranked chunks that three branches independently agreed on. The
+              fingerprint was a suspiciously round <code>0.5000</code> at the
+              top of result lists: weight times a manufactured perfect score.
             </p>
 
-            <h2 id="failures">What failed in Delphi</h2>
             <p>
-              The run gave us three failure classes worth keeping visible.
+              Reciprocal rank fusion exists precisely because ranks are
+              comparable across branches and raw scores are not. A cosine and a{" "}
+              <code>ts_rank_cd</code> are not the same unit and never were.
+              Fusion now scores position rather than magnitude.
             </p>
 
-            <h3>Early-rank relevance</h3>
+            <h2 id="paths">The path nobody indexed</h2>
+
             <p>
-              Delphi&apos;s broad hybrid retrieval preserves candidates, but
-              the first few ranks can spend too much weight on semantic
-              similarity or branch agreement. For a human scanning five hits,
-              that is a quality regression even if the target appears at rank
-              twelve. Better late recall does not excuse worse first contact.
+              The third problem was the most mundane. BM25 indexes chunk
+              content. Nothing indexed <code>file_path</code>. A query naming a
+              file could not retrieve that file&apos;s neighbours lexically at
+              all — searching for <code>etcd_grpcproxy_test</code> returned{" "}
+              <code>fileutil.go</code>, because the filename existed nowhere in
+              the searchable text.
             </p>
 
-            <h3>Corpus identity</h3>
             <p>
-              A benchmark target is meaningful only against a specified source
-              version. Repository name and commit metadata are not enough when
-              an ingestion path can truncate, transform, or skip the target.
-              The scored bytes need a content identity, and the evaluation
-              needs to verify it before ranking systems.
+              This matters because agents anchor on paths constantly: “what
+              tests cover <code>grpc_proxy.go</code>”, “why did{" "}
+              <code>tokens.py</code> change”. Delphi now has a path-affinity
+              branch that matches on separator-stripped lowercase, so an anchor
+              of <code>grpc_proxy</code> reaches{" "}
+              <code>etcd_grpcproxy_test.go</code> — a match ordinary
+              underscore-sensitive comparison misses. Results are capped per
+              directory, because a stem like <code>grpc_proxy</code> matches
+              thirty sibling files at a perfect score and would otherwise fill
+              the branch before the one test in <code>tests/e2e/</code> ever
+              appeared.
             </p>
 
-            <h3>Pilot size</h3>
+            <h2 id="rerank">The reranker that never ran</h2>
+
             <p>
-              Forty tasks can find a product bug or a promising direction. It
-              cannot establish broad leadership across languages, model
-              families, repositories, or long-running agent workflows. We are
-              publishing the number because it changes what we should test
-              next, not because it ends the evaluation.
+              Delphi had a cross-encoder reranker. It had never once executed
+              during the evaluation. The model loaded lazily on first query, the
+              load was a multi-hundred-megabyte download, and the call site
+              wrapped it in a <code>try/except</code> that fell back silently to
+              fused ranking. Every query took the fallback.
             </p>
 
-            <h2 id="product">What changed in the product</h2>
             <p>
-              The failures reinforce a particular architecture for Delphi. The
-              retrieval layer now has to be judged as one part of an auditable
-              context pipeline:
+              Warming it at startup and reporting readiness on the health
+              endpoint fixed the availability problem and produced a genuinely
+              surprising result once we could measure it.
+            </p>
+
+            <RerankerFigure />
+
+            <p>
+              The 22M-parameter <code>ms-marco-MiniLM</code> model beats
+              278M-parameter <code>bge-reranker-base</code> on every metric while
+              running about seven times faster. Preferring the larger,
+              code-aware model — which is what the default did — cost latency
+              and quality simultaneously. Reranking depth behaves the same way:
+              at a window of 100 with the cross-encoder deciding the order
+              outright, Recall@20 collapses to 0.444, because the model
+              confidently promotes plausible-looking files from the tail.
+              Blending it over the fused score, shallowly, is what makes it
+              useful.
+            </p>
+
+            <h2 id="worth">What each fix was worth</h2>
+
+            <AblationFigure />
+
+            <p>
+              The first row is what the previous evaluation actually measured.
+              Almost the entire improvement comes from the embedding fix; rank
+              fusion and the path branch add a little on top; the cross-encoder
+              buys the top of the list. It would be more flattering to present
+              this as four clever retrieval improvements. It was one
+              configuration bug and three modest engineering fixes, and the
+              honest version is more useful to anyone running a similar stack.
             </p>
 
             <PipelineFigure />
 
-            <p>
-              In practical terms, Delphi combines vector retrieval with BM25,
-              exact-symbol, exact-path, and trigram branches; fuses them with
-              stable file diversity; and exposes the branches that surfaced
-              each result. Context packs then expand a hit into enclosing
-              bodies, adjacent chunks, imports, linked tests, documentation,
-              examples, and configuration under a token budget.
-            </p>
-
-            <p>
-              Source snapshots make the indexed version explicit. Freshness
-              checks distinguish a retrieval miss from a stale index. Failure
-              classification gives us a stable way to record whether a bad
-              answer came from absence, ranking, assembly, model reasoning, or
-              evaluation. None of these guarantees a correct agent. Together,
-              they make a failure inspectable.
-            </p>
-
             <h2 id="claim">What we can claim</h2>
-            <ScopeStatement />
+
             <p>
-              The phrase “state of the art” is useful only when the state and
-              the art are named. Here, the state is a fixed-model DS-1000
-              development pilot. The art is downstream executable correctness
-              with a context engine in the loop. Change the task distribution,
-              model, context budget, or operational envelope and the ranking
-              may change.
+              On {BENCHMARK.name}, {BENCHMARK.cases} development cases: Delphi
+              leads every published baseline on MRR and Recall@5, and trails
+              grep on Recall@20. On the held-out split it scores{" "}
+              {HELD_OUT.mrr.toFixed(3)} MRR at{" "}
+              {(HELD_OUT.latencyMsMean / 1000).toFixed(2)}s mean latency with
+              zero failures — over {HELD_OUT.scored} of its cases, with{" "}
+              {HELD_OUT.skippedUnprovisioned} skipped because they reach the
+              same repositories at commits that were never indexed. That is a
+              partial result and we report it as one; provisioning the remaining
+              corpus is in progress.
             </p>
 
-            <h2 id="next">Next evaluation</h2>
             <p>
-              The next round should make the claim harder to earn and easier to
-              reproduce:
+              What we cannot currently claim is a head-to-head against a hosted
+              commercial engine. The comparison we ran previously is not
+              reproducible: those indexed corpora no longer resolve on the
+              provider&apos;s side. Rather than restate a stale number from a
+              run whose Delphi half we now know was broken, we are comparing
+              against published baselines that anyone can re-run, and leaving
+              the commercial comparison out until it can be done properly.
             </p>
 
-            <ul>
-              <li>
-                run a larger held-out developer slice instead of extending the
-                development set until the number looks good;
-              </li>
-              <li>
-                repeat the fixed-context comparison across multiple model
-                families and capability levels;
-              </li>
-              <li>
-                publish a repaired, content-addressed repository corpus with
-                preflight fidelity checks;
-              </li>
-              <li>
-                report uncertainty for paired downstream outcomes and
-                retrieval metrics;
-              </li>
-              <li>
-                measure multi-query agent workflows—correctness, elapsed time,
-                context spend, and recovery after a bad first retrieval.
-              </li>
-            </ul>
-
             <p>
-              The central bet behind Delphi is straightforward: context engines
-              should be evaluated by the work they enable, with retrieval,
-              assembly, latency, and source fidelity available as explanations.
-              A leaderboard is useful. A system that can tell you why the agent
-              succeeded—or why it failed—is the product.
+              The broader lesson is not about any one engine. A retrieval system
+              can be completely broken and still return ranked, plausible,
+              confident results, and every metric downstream of it will move
+              smoothly and mean nothing. If you run a vector index, embed a
+              chunk&apos;s own content and check it against its stored vector.
+              It takes one query and it is the cheapest assertion in the stack.
             </p>
 
             <h2 id="traces">Open the evidence</h2>
 
             <p>
-              Every number above comes from queries that were recorded in
-              full. Below are real traces from the benchmarked build, two per
+              Every number above comes from queries that were recorded in full.
+              Below are real traces from the benchmarked build, two per
               workflow, taken by position in the split rather than picked for
               how they turned out. Expand one to see the exact query the engine
               received, the ranked files it returned, which retrieval branch
@@ -352,13 +316,14 @@ export default function ContextEngineArticle() {
             </p>
 
             <p>
-              They are worth reading for the failures as much as the hits. The
-              first <code>code2test</code> trace puts changelog files above the
+              They are worth reading for the failures as much as the hits. Three
+              of the eight miss the gold file entirely. The first{" "}
+              <code>code2test</code> trace puts five changelog files above the
               regression test it was asked for: the query mentions a version
               bump, changelogs are dense with version strings, and BM25 has no
-              way to know that a changelog can never be an answer to “which
-              test covers this?”. That is a live weakness, not a rounding
-              error.
+              way to know that a changelog can never be an answer to “which test
+              covers this?”. The gold file appears at rank 9, found by the path
+              branch. That is a live weakness, not a rounding error.
             </p>
 
             <TraceGallery />
@@ -367,19 +332,16 @@ export default function ContextEngineArticle() {
               <p className="eyebrow text-[var(--fg-mute)]">References</p>
               <ol className="mt-5 space-y-3 text-[13px] leading-6 text-[var(--fg-mute)]">
                 <li>
-                  1. Lai et al.,{" "}
-                  <Link href="https://arxiv.org/abs/2211.11501">
-                    “DS-1000: A Natural and Reliable Benchmark for Data Science
-                    Code Generation”
+                  1.{" "}
+                  <Link href="https://github.com/eyuansu62/agent-retrieval-bench">
+                    Agent Retrieval Bench
                   </Link>
-                  .
+                  , commit <code>{BENCHMARK.commit.slice(0, 12)}</code>.
                 </li>
                 <li>
-                  2. Anthropic,{" "}
-                  <Link href="https://platform.claude.com/docs/en/about-claude/models/overview">
-                    Claude model overview
-                  </Link>
-                  .
+                  2. Cormack, Clarke, and Buettcher, “Reciprocal Rank Fusion
+                  Outperforms Condorcet and Individual Rank Learning Methods”,
+                  SIGIR 2009.
                 </li>
                 <li>
                   3. Synthetic Sciences,{" "}
