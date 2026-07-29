@@ -52,7 +52,7 @@ class CodeChunker:
 
     def count_tokens(self, text: str) -> int:
         """Count tokens in text."""
-        return len(self._tokenizer.encode(text))
+        return len(self._tokenizer.encode(text, disallowed_special=()))
 
     def chunk_file(
         self,
