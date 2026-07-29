@@ -32,6 +32,42 @@ Everything runs on your machine — PostgreSQL for storage. Pick **local sentenc
 
 ---
 
+## Latest results
+
+In a fixed-model, 40-task developer pilot, Delphi produced the strongest tested
+downstream result: **95.0% pass@1**, compared with **90.0%** for the next-best
+tested condition. This is state-of-the-art performance in the tested
+developer-work setting, not a claim of universal context-engine superiority.
+
+| Measurement | Delphi | Next-best tested condition |
+| --- | ---: | ---: |
+| DS-1000 dev40 pass@1 | **95.0%** | 90.0% |
+| Strict-valid repository retrieval mean query latency | **1.25 s** | 26.58 s |
+| Strict-valid repository retrieval recall@20 | **0.667** | 0.639 |
+
+The downstream pilot used Claude Opus 5 for every condition and reports
+descriptive pass@1 over 40 DS-1000 development tasks. The repository-retrieval
+audit attempted 75 cases, but 57 of 75 scored target files were truncated in
+the available corpus; only 18 strict-valid cases were used for the table.
+Delphi's latency was 21.3× lower on that subset. Its recall@20 point estimate
+was slightly higher, but the paired 95% confidence interval for the difference
+`[-0.094, 0.139]` crosses zero. The hosted repository comparator led the
+early-ranking metrics, so those remain open work rather than Delphi wins.
+
+Read the full method, failure analysis, and claim boundaries in
+[The context engine is the product](https://trydelphi.ai/blog/context-engine-is-the-product).
+
+### Timeline
+
+| When | Milestone |
+| --- | --- |
+| Open source | Released Delphi as a local-first MCP context engine under Apache 2.0. |
+| Product foundation | Added versioned multi-source indexing, hybrid retrieval, code intelligence, and agent-ready context packs. |
+| 2026-07-29 | Audited repository-benchmark fidelity and excluded 57 truncated targets before comparison. |
+| 2026-07-29 | Reached 95.0% pass@1 in the fixed-model developer pilot and 1.25 s mean query latency on the strict-valid retrieval subset. |
+
+---
+
 ## Quick Start
 
 ```bash
