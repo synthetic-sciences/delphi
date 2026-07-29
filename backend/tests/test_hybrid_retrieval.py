@@ -286,3 +286,67 @@ def test_candidate_to_dict_round_trip_fields():
     assert d["file_path"] == "src/x.py"
     assert d["similarity"] == 0.65
     assert d["candidate_sources"] == {"vector": 0.7, "bm25": 0.5}
+
+
+# ── Path affinity ────────────────────────────────────────────────────────────
+
+
+def test_path_stems_extracts_named_file():
+    from synsc.services.hybrid_retrieval import path_stems_from_query
+
+    stems = path_stems_from_query(
+        "what tests cover server/etcdmain/grpc_proxy.go"
+    )
+    # Separators are stripped so the stem matches etcd_grpcproxy_test.go,
+    # which underscore-sensitive comparison would miss.
+    assert "grpcproxy" in stems
+
+
+def test_path_stems_handles_multiple_extensions():
+    from synsc.services.hybrid_retrieval import path_stems_from_query
+
+    stems = path_stems_from_query("auth/tokens.py and frontend/api_client.js")
+    assert "tokens" in stems
+    assert "apiclient" in stems
+
+
+def test_path_stems_ignores_prose_without_paths():
+    from synsc.services.hybrid_retrieval import path_stems_from_query
+
+    assert path_stems_from_query("how does authentication work") == []
+
+
+def test_path_stems_drops_two_character_stems():
+    from synsc.services.hybrid_retrieval import path_stems_from_query
+
+    # 'io.go' is too short a stem to anchor anything useful.
+    assert path_stems_from_query("see io.go for details") == []
+
+
+def test_path_stems_are_bounded():
+    from synsc.services.hybrid_retrieval import path_stems_from_query
+
+    query = " ".join(f"pkg/module_{i}.py" for i in range(20))
+    assert len(path_stems_from_query(query, limit=4)) == 4
+
+
+def test_path_affinity_returns_empty_without_a_named_file():
+    from synsc.services.hybrid_retrieval import path_affinity_search
+
+    class _Session:
+        def execute(self, *a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError("should not query without a path stem")
+
+    assert path_affinity_search(_Session(), "how does auth work", "u") == []
+
+
+def test_path_stems_ignores_filenames_inside_urls():
+    """A CONTRIBUTING.md link in a PR template is not a retrieval anchor."""
+    from synsc.services.hybrid_retrieval import path_stems_from_query
+
+    stems = path_stems_from_query(
+        "fix server/etcdmain/grpc_proxy.go -- see "
+        "https://github.com/etcd-io/etcd/blob/main/CONTRIBUTING.md"
+    )
+    assert "grpcproxy" in stems
+    assert "contributing" not in stems

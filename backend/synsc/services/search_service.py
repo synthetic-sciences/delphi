@@ -1510,7 +1510,32 @@ class SearchService:
             except Exception:
                 pass
 
-            return {
+            # An index built by a different embedding model returns plausible
+            # results with meaningless scores, and stays invisible unless it is
+            # reported. Surface it on the response rather than only in logs.
+            warnings: list[dict[str, str]] = []
+            try:
+                from synsc.services.embedding_consistency import (
+                    active_embedding_model,
+                    find_embedding_mismatches,
+                )
+
+                with get_session() as csess:
+                    mismatches = find_embedding_mismatches(
+                        csess, active_embedding_model(), repo_ids
+                    )
+                for mismatch in mismatches:
+                    logger.error(
+                        "embedding model mismatch — vector scores are not meaningful",
+                        **mismatch.as_dict(),
+                    )
+                    warnings.append(
+                        {"code": "embedding_model_mismatch", **mismatch.as_dict()}
+                    )
+            except Exception:
+                pass
+
+            payload = {
                 "success": True,
                 "query": query,
                 "retrieval_query": retrieval_query,
@@ -1526,6 +1551,9 @@ class SearchService:
                     "pipeline_ms": round(elapsed_time - embed_ms - db_ms, 1),
                 },
             }
+            if warnings:
+                payload["warnings"] = warnings
+            return payload
             
         except Exception as e:
             logger.error("Search failed", error=str(e), user_id=effective_user_id)

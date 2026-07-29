@@ -1040,6 +1040,30 @@ def create_app() -> FastAPI:
         except Exception as e:
             checks["reranker"] = {"ok": False, "error": str(e)[:200]}
 
+        # 2c. Embedding-space consistency. A repository indexed by a different
+        # model than the one answering queries still returns results, still
+        # returns scores, and is wrong — the two vector spaces are unrelated.
+        # Same-width vectors mean nothing raises, so this has to be asserted.
+        try:
+            from synsc.services.embedding_consistency import (
+                active_embedding_model,
+                find_embedding_mismatches,
+            )
+
+            active = active_embedding_model()
+            with get_session() as session:
+                mismatches = find_embedding_mismatches(session, active)
+            checks["embedding_consistency"] = {
+                "ok": not mismatches,
+                "querying_with": active,
+                "mismatched_repositories": len(mismatches),
+                "examples": [m.as_dict() for m in mismatches[:3]],
+            }
+            if mismatches:
+                ok = False
+        except Exception as e:
+            checks["embedding_consistency"] = {"ok": False, "error": str(e)[:200]}
+
         # 3. MCP streamable-HTTP session manager — set by the lifespan
         # startup hook. If the api answered /health but never finished
         # lifespan startup (rare), this stays False and the /mcp route

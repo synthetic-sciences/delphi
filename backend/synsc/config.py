@@ -487,6 +487,16 @@ class SynscConfig(BaseModel):
             config.search.reranker_model = reranker_model
         if blend_alpha := os.getenv("RERANKER_BLEND_ALPHA"):
             config.search.reranker_blend_alpha = float(blend_alpha)
+        # The code-aware reranker is ~12x the parameters of the text one, which
+        # is a real latency decision on CPU rather than a free quality win.
+        if use_code_reranker := os.getenv("SYNSC_USE_CODE_RERANKER"):
+            config.search.use_code_reranker = use_code_reranker.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        if rerank_k := os.getenv("SYNSC_HYBRID_RERANK_K"):
+            config.search.hybrid_rerank_k = int(rerank_k)
 
         # Quality mode + indexing overrides — agents can override per-process
         # without a code change. Useful for benchmarks and ad-hoc reindexing.
