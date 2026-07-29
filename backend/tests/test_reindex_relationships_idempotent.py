@@ -6,9 +6,10 @@ those preserved edges and trip the `unique_chunk_relationship` constraint,
 rolling back the entire batch and silently losing relationships for
 new/modified chunks.
 
-Fix: insert via ``pg_insert(...).on_conflict_do_nothing(constraint=...)``
-keyed on the existing UNIQUE constraint, so duplicates are quietly skipped
-server-side without aborting the batch.
+Fix: insert via ``pg_insert(...).on_conflict_do_nothing(index_elements=...)``
+keyed on the relationship columns, so PostgreSQL can infer either the named
+SQLAlchemy constraint or the anonymous constraint created by setup_local.sql.
+Duplicates are quietly skipped server-side without aborting the batch.
 
 These tests assert at the SQL-build boundary rather than against a real
 database (the project's test infra mocks the DB layer per
@@ -54,9 +55,9 @@ def _wire_query(session: MagicMock, chunks: list, class_symbols: list):
     session.query.return_value = query_result
 
 
-def test_insert_uses_on_conflict_do_nothing_with_named_constraint():
-    """The bulk insert must be a Postgres ON CONFLICT DO NOTHING keyed on
-    the existing ``unique_chunk_relationship`` constraint."""
+def test_insert_uses_on_conflict_do_nothing_with_column_inference():
+    """The conflict target must work with setup_local.sql's anonymous unique
+    constraint as well as SQLAlchemy's named constraint."""
     session = MagicMock()
 
     chunks = [
@@ -81,7 +82,12 @@ def test_insert_uses_on_conflict_do_nothing_with_named_constraint():
     assert isinstance(on_conflict, OnConflictDoNothing), (
         "must be DO NOTHING, not DO UPDATE — relationship rows are immutable"
     )
-    assert on_conflict.constraint_target == "unique_chunk_relationship"
+    assert on_conflict.constraint_target is None
+    assert [str(element) for element in on_conflict.inferred_target_elements] == [
+        "source_chunk_id",
+        "target_chunk_id",
+        "relationship_type",
+    ]
 
 
 def test_no_insert_when_repo_has_no_chunks():
