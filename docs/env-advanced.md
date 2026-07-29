@@ -109,6 +109,11 @@ symbol + exact path + trigram), stable file-level diversity, AST chunking,
 and includes tests/docs/examples/configs/manifests in the index. Cross-encoder
 reranking remains an explicit deployment option.
 
+For structured developer requests, agent search can derive a bounded related-
+path probe from safe repository-relative file fields. This helps implementation
+paths retrieve sibling tests, documentation, and configuration without treating
+literal JSON or machine-local absolute paths as repository hints.
+
 | Var | Default | Description |
 |---|---|---|
 | `SYNSC_QUALITY_MODE` | `agent` | Global default for retrieval/indexing. One of `fast`, `balanced`, `agent`. |

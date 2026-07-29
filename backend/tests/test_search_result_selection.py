@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -189,6 +190,66 @@ def test_agent_search_uses_high_recall_file_selection(monkeypatch) -> None:
 
     assert result["success"] is True
     assert [row["chunk_id"] for row in result["results"]] == ["a-1", "b-1"]
+
+
+def test_agent_search_probes_related_paths_from_structured_context(
+    monkeypatch,
+) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    captured: dict[str, object] = {}
+
+    def capture_hybrid(**kwargs):
+        captured.update(kwargs)
+        return _agent_candidates()
+
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    monkeypatch.setattr(hybrid_module, "hybrid_retrieve", capture_hybrid)
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    result = service.search_code(
+        query=json.dumps(
+            {
+                "intent": "Find affected tests",
+                "implementation_files": ["src/client/core_model_loading.py"],
+            }
+        ),
+        repo_ids=["repo-id"],
+        top_k=2,
+        quality_mode="agent",
+    )
+
+    assert result["success"] is True
+    assert captured["file_pattern"] == "*model*loading*"
+
+
+def test_agent_search_preserves_explicit_file_pattern(monkeypatch) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    captured: dict[str, object] = {}
+
+    def capture_hybrid(**kwargs):
+        captured.update(kwargs)
+        return _agent_candidates()
+
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    monkeypatch.setattr(hybrid_module, "hybrid_retrieve", capture_hybrid)
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.search_code(
+        query=json.dumps(
+            {
+                "intent": "Find affected tests",
+                "implementation_files": ["src/client/core_model_loading.py"],
+            }
+        ),
+        repo_ids=["repo-id"],
+        file_pattern="tests/**",
+        top_k=2,
+        quality_mode="agent",
+    )
+
+    assert captured["file_pattern"] == "tests/**"
 
 
 def test_agent_search_honors_explicit_reranker(monkeypatch) -> None:
