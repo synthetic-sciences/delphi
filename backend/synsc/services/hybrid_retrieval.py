@@ -9,8 +9,8 @@ Candidate sources:
   1. **Vector**: cosine similarity in pgvector (existing path).
   2. **BM25 / full-text**: ``ts_rank_cd`` over the content tsvector column
      (added by migration 004). Captures keyword recall the embedding misses.
-  3. **Trigram**: ``pg_trgm.similarity`` over chunk content. Catches
-     misspellings and partial identifier matches that BM25 splits.
+  3. **Trigram**: ``pg_trgm.word_similarity`` over indexed symbol names.
+     Catches misspellings and partial identifier matches that BM25 splits.
   4. **Exact symbol**: lookup in the ``symbols`` table by name /
      qualified_name. Pinpoints function/class definitions on the first hit.
   5. **Exact path**: lookup in ``repository_files`` by path or glob.
@@ -180,6 +180,52 @@ def _symbol_search_needles(query: str, *, limit: int = 8) -> list[str]:
     return selected
 
 
+def _trigram_search_needles(query: str, *, limit: int = 1) -> list[str]:
+    """Select the most code-shaped term for indexed fuzzy content matching."""
+    if limit <= 0:
+        return []
+
+    ranked: list[tuple[float, int, str]] = []
+    for order, identifier in enumerate(extract_identifiers(query)):
+        if identifier.isupper() and identifier.count("_") >= 2:
+            # Build environments and test runners often prepend long variable
+            # names that are rarer than, but unrelated to, the failing symbol.
+            continue
+        values = [identifier]
+        if "." in identifier:
+            leaf = identifier.rsplit(".", 1)[-1]
+            if leaf.lower() in _FILE_EXTENSION_TOKENS:
+                continue
+            values.append(leaf)
+        for value in values:
+            code_shape = (
+                2.0
+                if (
+                    "." in value
+                    or "_" in value
+                    or any(character.isupper() for character in value[1:])
+                )
+                else 0.0
+            )
+            specificity = min(len(value), 24) / 24
+            ranked.append((code_shape + specificity, order, value))
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    for _, _, needle in sorted(
+        ranked,
+        key=lambda item: (-item[0], item[1]),
+    ):
+        normalized = needle.lower()
+        if len(needle) < 4 or normalized in seen:
+            continue
+        seen.add(normalized)
+        selected.append(needle)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def _user_repo_filter() -> str:
     """SQL fragment that restricts to repos the user has access to."""
     return (
@@ -280,7 +326,7 @@ def trigram_search(
     language: str | None = None,
     top_k: int = 50,
 ) -> list[Candidate]:
-    """Trigram similarity over chunk content. Catches partial identifier
+    """Trigram similarity over chunk symbol names. Catches partial identifier
     matches and misspellings that BM25 splits.
 
     pg_trgm similarity returns [0, 1]; we keep that scale.
@@ -288,17 +334,12 @@ def trigram_search(
     if not query.strip():
         return []
 
-    # Use the longest identifier as the trigram needle; pg_trgm degrades
-    # quickly on short tokens.
-    idents = extract_identifiers(query)
-    if not idents:
-        return []
-    needle = max(idents, key=len)
-    if len(needle) < 4:
+    needles = _trigram_search_needles(query)
+    if not needles:
         return []
 
     params: dict[str, Any] = {
-        "needle": needle,
+        "needle": needles[0],
         "user_id": user_id,
         "top_k": top_k,
     }
@@ -320,12 +361,14 @@ def trigram_search(
             cc.chunk_index, cc.chunk_type, cc.language, cc.symbol_names,
             rf.file_path,
             r.owner || '/' || r.name AS repo_name,
-            r.is_public
+            r.is_public,
+            word_similarity(:needle, cc.symbol_names) AS score
         FROM code_chunks cc
         {_user_repo_filter()}
         INNER JOIN repository_files rf ON cc.file_id = rf.file_id
-        WHERE cc.content ILIKE '%' || :needle || '%'
+        WHERE :needle <% cc.symbol_names
         {extra}
+        ORDER BY score DESC, rf.file_path, cc.chunk_index
         LIMIT :top_k
         """
     )
@@ -352,8 +395,7 @@ def trigram_search(
             symbol_names=r["symbol_names"],
             is_public=bool(r["is_public"]),
         )
-        # Crude scoring: token coverage. Better than nothing, refined by rerank.
-        c.sources["trigram"] = 0.7
+        c.sources["trigram"] = float(r["score"])
         out.append(c)
     return out
 

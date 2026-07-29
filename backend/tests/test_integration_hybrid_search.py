@@ -283,6 +283,28 @@ def test_qualified_symbol_outranks_same_leaf_name(user_id, seeded_repo):
     assert [result.chunk_id for result in results] == [target_chunk_id]
 
 
+def test_trigram_search_recovers_a_misspelled_identifier(
+    user_id,
+    seeded_repo,
+):
+    """A one-character identifier typo should retrieve the intended chunk."""
+    from synsc.database.connection import get_session
+    from synsc.services.hybrid_retrieval import trigram_search
+
+    repo_id, _, chunk_ids, _ = seeded_repo
+    with get_session() as session:
+        results = trigram_search(
+            session,
+            "SETUPTOOLS_SCM_PRETEND_VERSION handlAuthCallback",
+            user_id,
+            repo_ids=[repo_id],
+            top_k=5,
+        )
+
+    assert results[0].chunk_id == chunk_ids["handleAuthCallback"]
+    assert results[0].sources["trigram"] > 0.7
+
+
 def test_hybrid_meta_block_reports_branches(user_id, seeded_repo, fake_embeddings):
     """search_code with agent mode returns the per-branch source counts."""
     from synsc.services.search_service import SearchService
