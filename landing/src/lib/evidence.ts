@@ -64,4 +64,3 @@ export const PIPELINE = [
   ["04", "Assemble", "Token-bounded context with provenance"],
   ["05", "Act", "Write and verify the change"],
 ] as const;
-
