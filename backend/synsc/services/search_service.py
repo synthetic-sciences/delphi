@@ -121,6 +121,253 @@ _DIAGNOSTIC_SNAKE_STOPWORDS = {
 }
 
 
+def _structured_query_priority(key: str) -> int:
+    """Rank generic structured fields by retrieval value."""
+    normalized = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+    tokens = normalized.split("_")
+    terminal = tokens[-1] if tokens else ""
+    if set(tokens) & {
+        "goal",
+        "intent",
+        "issue",
+        "objective",
+        "query",
+        "question",
+        "request",
+        "task",
+    }:
+        return 0
+    if terminal in {"headline", "subject", "title"}:
+        return 1
+    if terminal in {
+        "directory",
+        "directories",
+        "file",
+        "filename",
+        "filenames",
+        "files",
+        "path",
+        "paths",
+    }:
+        return 2
+    if terminal in {"body", "comment", "diagnostic", "error", "message"}:
+        return 3
+    if terminal in {
+        "context",
+        "description",
+        "excerpt",
+        "log",
+        "logs",
+        "output",
+        "summary",
+        "trace",
+    }:
+        return 4
+    if terminal in {"diff", "patch"}:
+        return 5
+    return 6
+
+
+def _is_structured_developer_query(payload: dict[str, Any]) -> bool:
+    """Conservatively distinguish developer envelopes from literal JSON.
+
+    JSON itself can be the user's exact search expression, so generic keys
+    such as ``error`` and ``message`` are not enough to justify removing its
+    syntax. Developer envelopes carry stronger structural signals:
+    developer-specific field or wrapper names, an explicit intent paired with
+    a file, or multiple useful fields nested beneath a context wrapper.
+    """
+    leaf_keys: list[str] = []
+    container_keys: list[str] = []
+
+    def collect(value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        for raw_key, nested_value in value.items():
+            key = re.sub(
+                r"[^a-z0-9]+",
+                "_",
+                str(raw_key).lower(),
+            ).strip("_")
+            if isinstance(nested_value, dict):
+                container_keys.append(key)
+                collect(nested_value)
+            elif isinstance(nested_value, list):
+                if any(isinstance(item, (str, int, float)) for item in nested_value):
+                    leaf_keys.append(key)
+                for item in nested_value:
+                    collect(item)
+            elif isinstance(nested_value, (str, int, float)):
+                leaf_keys.append(key)
+
+    collect(payload)
+    priorities = {
+        _structured_query_priority(key)
+        for key in leaf_keys
+        if _structured_query_priority(key) < 6
+    }
+    if len(priorities) < 2:
+        return False
+
+    tokenized_keys = [set(key.split("_")) for key in leaf_keys]
+    tokenized_containers = [set(key.split("_")) for key in container_keys]
+    developer_tokens = {
+        "anchor",
+        "changed",
+        "code",
+        "commit",
+        "developer",
+        "implementation",
+        "pr",
+        "pull",
+        "target",
+        "test",
+    }
+    if any(
+        tokens & developer_tokens
+        for tokens in (*tokenized_keys, *tokenized_containers)
+    ):
+        return True
+
+    has_explicit_intent = any(
+        tokens & {"goal", "intent", "objective", "request", "task"}
+        for tokens in tokenized_keys
+    )
+    has_file = 2 in priorities
+    if has_explicit_intent and has_file:
+        return True
+
+    context_wrappers = {"context", "developer_context", "request_context"}
+    return bool(set(container_keys) & context_wrappers and priorities & {1, 2})
+
+
+def _compact_structured_query(
+    payload: dict[str, Any],
+    *,
+    max_chars: int,
+) -> str:
+    """Flatten a JSON developer payload into bounded retrieval text."""
+    components: list[tuple[int, int, str]] = []
+    order = 0
+
+    def collect(key: str, value: Any) -> None:
+        nonlocal order
+        if isinstance(value, str):
+            text_value = " ".join(value.split())
+            if text_value:
+                components.append(
+                    (_structured_query_priority(key), order, text_value)
+                )
+                order += 1
+            return
+        if isinstance(value, list):
+            for item in value:
+                collect(key, item)
+            return
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                collect(str(nested_key), nested_value)
+
+    for field, field_value in payload.items():
+        collect(str(field), field_value)
+
+    if not components:
+        return ""
+    components.sort(key=lambda item: (item[0], item[1]))
+    unique_components: list[tuple[int, int, str]] = []
+    seen_text: set[str] = set()
+    for component in components:
+        if component[2] in seen_text:
+            continue
+        seen_text.add(component[2])
+        unique_components.append(component)
+
+    if max_chars <= 0:
+        return ""
+    full_text = " ".join(item[2] for item in unique_components)
+    if len(full_text) <= max_chars:
+        return full_text
+
+    intent_components = [item[2] for item in unique_components if item[0] == 0]
+    title_components = [item[2] for item in unique_components if item[0] == 1]
+    path_components = [item[2] for item in unique_components if item[0] == 2]
+    supplemental = [item[2] for item in unique_components if item[0] > 2]
+    if not (intent_components or title_components or path_components):
+        return full_text[:max_chars].rstrip()
+
+    def take_components(
+        values: list[str],
+        *,
+        budget: int,
+        whole_only: bool = False,
+    ) -> str:
+        selected: list[str] = []
+        used = 0
+        for value in values:
+            separator = 1 if selected else 0
+            available = budget - used - separator
+            if available <= 0:
+                break
+            if len(value) <= available:
+                selected.append(value)
+                used += separator + len(value)
+                continue
+            if whole_only:
+                continue
+            piece = value[:available].rstrip()
+            if piece:
+                selected.append(piece)
+            break
+        return " ".join(selected)
+
+    high_value_budget = max_chars if not (path_components or supplemental) else max(
+        1,
+        int(max_chars * 0.50),
+    )
+    if intent_components and title_components:
+        intent_budget = max(1, int(max_chars * 0.30))
+        title_budget = max(1, high_value_budget - intent_budget - 1)
+    elif intent_components:
+        intent_budget = high_value_budget
+        title_budget = 0
+    else:
+        intent_budget = 0
+        title_budget = high_value_budget
+    intent_text = take_components(intent_components, budget=intent_budget)
+    title_text = take_components(title_components, budget=title_budget)
+    compacted = " ".join(part for part in (intent_text, title_text) if part)
+
+    supplemental_reserve = int(max_chars * 0.20) if supplemental else 0
+    path_separator = 1 if compacted and path_components else 0
+    supplemental_separator = 1 if supplemental else 0
+    path_budget = max(
+        0,
+        max_chars
+        - len(compacted)
+        - path_separator
+        - supplemental_reserve
+        - supplemental_separator,
+    )
+    path_text = take_components(
+        path_components,
+        budget=path_budget,
+        whole_only=True,
+    )
+    if path_text:
+        compacted = f"{compacted} {path_text}" if compacted else path_text
+
+    for text_value in supplemental:
+        separator = 1 if compacted else 0
+        available = max_chars - len(compacted) - separator
+        if available <= 0:
+            break
+        piece = text_value[:available].rstrip()
+        if not piece:
+            continue
+        compacted = f"{compacted} {piece}" if compacted else piece
+    return compacted[:max_chars].rstrip()
+
+
 def _diagnostic_identifier_query(text: str, limit: int = 16) -> str:
     """Extract a short API/symbol query from diagnostic context."""
     text = re.sub(
@@ -215,7 +462,11 @@ def _prepare_search_query(query: str, max_chars: int = 4000) -> str:
 
     failure_excerpt = payload.get("failure_excerpt")
     if not isinstance(failure_excerpt, str) or not failure_excerpt.strip():
-        return query
+        if not _is_structured_developer_query(payload):
+            return query
+        if max_chars <= 0:
+            return ""
+        return _compact_structured_query(payload, max_chars=max_chars) or query
     command = payload.get("command")
     command_text = command.strip() if isinstance(command, str) else ""
 
