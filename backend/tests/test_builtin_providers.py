@@ -63,7 +63,9 @@ def test_builtin_catalog_loads_without_remote_credentials(monkeypatch) -> None:
     assert descriptors["gemini-research"].supports_streaming is False
     assert descriptors["gemini-research"].supports_cancellation is False
     assert descriptors["gemini-research"].supports_retry is False
-    assert descriptors["gemini-embeddings"].supports_retry is False
+    assert descriptors["gemini-embeddings"].supports_retry is True
+    assert descriptors["openai-embeddings"].supports_retry is True
+    assert descriptors["huggingface-embeddings"].supports_retry is True
     assert descriptors["firecrawl-web"].execution is ExecutionLocation.REMOTE
     assert descriptors["firecrawl-web"].capabilities == frozenset(
         {ProviderCapability.SEARCH, ProviderCapability.CRAWL}
