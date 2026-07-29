@@ -14,6 +14,8 @@
   --selection:    rgba(244, 236, 214, 0.22);
   --nav-bg:       rgba(10, 9, 8, 0.85);
   --code-bg:      #050404;
+  --gold:         #bd9555;
+  --gold-soft:    rgba(189, 149, 85, 0.18);
   color-scheme: dark;
 }
 
@@ -29,6 +31,8 @@
   --selection:    rgba(26, 23, 21, 0.18);
   --nav-bg:       rgba(250, 246, 234, 0.85);
   --code-bg:      #f3eedf;
+  --gold:         #8a6229;
+  --gold-soft:    rgba(138, 98, 41, 0.14);
   color-scheme: light;
 }
 
@@ -66,16 +70,282 @@ html, body {
 
 html { scroll-behavior: smooth; }
 section[id] { scroll-margin-top: 80px; }
+body { overflow-x: hidden; }
+a, button { -webkit-tap-highlight-color: transparent; }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   html, body { transition: none; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 .font-serif { font-family: var(--font-serif), "Tiempos Text", "Source Serif 4", Georgia, serif; font-weight: 400; }
 .font-mono { font-family: var(--font-mono), ui-monospace, "SFMono-Regular", monospace; }
 
 .prose p { text-wrap: pretty; }
+
+.display-title {
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: clamp(3.4rem, 8.5vw, 8.2rem);
+  font-weight: 400;
+  letter-spacing: -0.058em;
+  line-height: 0.92;
+  text-wrap: balance;
+}
+
+.section-title {
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: clamp(2.5rem, 5vw, 5.2rem);
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  line-height: 0.98;
+  text-wrap: balance;
+}
+
+.eyebrow {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+.measure {
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: clamp(4rem, 10vw, 8.5rem);
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: -0.06em;
+  line-height: 0.82;
+}
+
+.hero-veil {
+  background:
+    linear-gradient(180deg, rgba(4, 4, 3, 0.18) 0%, rgba(4, 4, 3, 0.06) 32%, rgba(4, 4, 3, 0.88) 88%, #070605 100%),
+    linear-gradient(90deg, rgba(4, 4, 3, 0.72) 0%, rgba(4, 4, 3, 0.08) 65%);
+}
+
+.hairline-grid {
+  background-image:
+    linear-gradient(to right, var(--line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.focus-ring {
+  border-radius: 2px;
+}
+
+.focus-ring:focus-visible,
+a:focus-visible,
+button:focus-visible {
+  outline: 1px solid var(--gold);
+  outline-offset: 5px;
+}
+
+.button-primary,
+.button-secondary {
+  display: inline-flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1.25rem;
+  border: 1px solid transparent;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.button-primary {
+  background: var(--fg-strong);
+  color: var(--bg);
+}
+
+.button-primary:hover {
+  background: var(--gold);
+  color: #080706;
+}
+
+.button-secondary {
+  border-color: var(--line-strong);
+  color: var(--fg);
+}
+
+.button-secondary:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.install-command {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.9rem;
+  border: 1px solid var(--line-strong);
+  background: var(--code-bg);
+  padding: 0.95rem 1.1rem;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.76rem;
+  color: var(--fg);
+}
+
+.install-command > span {
+  color: var(--gold);
+}
+
+.figure-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1.5rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.85rem;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  line-height: 1.5;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+
+.evidence-figure {
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  padding: 1.1rem 0;
+}
+
+.evidence-figure figcaption {
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+  font-size: 0.75rem;
+  font-style: italic;
+  line-height: 1.65;
+  color: var(--fg-mute);
+}
+
+.audit-grid {
+  display: grid;
+  grid-template-columns: repeat(15, minmax(0, 1fr));
+  gap: 0.28rem;
+  padding: 1.5rem 0;
+}
+
+.audit-cell {
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+}
+
+.audit-cell-excluded {
+  background: var(--line);
+}
+
+.audit-cell-valid {
+  border-color: var(--gold);
+  background: var(--gold);
+}
+
+.pipeline-figure {
+  display: grid;
+  padding: 1.5rem 0;
+}
+
+.pipeline-node {
+  display: grid;
+  grid-template-columns: 42px 95px 1fr;
+  gap: 1rem;
+  border-top: 1px solid var(--line);
+  padding: 1rem 0;
+}
+
+.pipeline-node:first-child {
+  border-top: 0;
+}
+
+.pipeline-node > span {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.62rem;
+  color: var(--gold);
+}
+
+.pipeline-node > strong {
+  font-weight: 400;
+  color: var(--fg-strong);
+}
+
+.pipeline-node > p {
+  font-size: 0.82rem;
+  color: var(--fg-mute);
+}
+
+.article-prose {
+  font-size: clamp(1.08rem, 1.6vw, 1.23rem);
+  line-height: 1.82;
+  color: var(--fg-dim);
+}
+
+.article-prose p {
+  margin-top: 1.4em;
+  text-wrap: pretty;
+}
+
+.article-prose h2 {
+  margin-top: 3.2em;
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: clamp(2.1rem, 4vw, 3.8rem);
+  font-weight: 400;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--fg-strong);
+}
+
+.article-prose h3 {
+  margin-top: 2.4em;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--gold);
+}
+
+.article-prose figure {
+  margin: 3rem 0;
+}
+
+.article-prose a {
+  color: var(--fg-strong);
+  text-decoration: underline;
+  text-decoration-color: var(--gold);
+  text-underline-offset: 4px;
+}
+
+.article-prose ul {
+  margin-top: 1.3em;
+  padding-left: 1.15em;
+}
+
+.article-prose li {
+  margin-top: 0.65em;
+  padding-left: 0.3em;
+}
+
+.article-prose li::marker {
+  color: var(--gold);
+}
+
+.footer-link {
+  display: block;
+  transition: color 150ms ease;
+}
+
+.footer-link:hover {
+  color: var(--gold);
+}
 
 a.quiet {
   color: inherit;
