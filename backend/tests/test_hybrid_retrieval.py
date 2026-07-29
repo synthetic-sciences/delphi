@@ -13,6 +13,7 @@ from __future__ import annotations
 from synsc.services.hybrid_retrieval import (
     DEFAULT_WEIGHTS,
     Candidate,
+    bm25_search,
     extract_identifiers,
     fuse_candidates,
     vector_to_candidates,
@@ -42,6 +43,27 @@ def test_extract_identifiers_unique_order_preserved():
     assert ids.index("FooBar") < ids.index("fooBar")
     assert ids.count("FooBar") == 1
     assert ids.count("baz_qux") == 1
+
+
+def test_bm25_search_uses_websearch_or_syntax_for_multiple_terms():
+    class EmptyRows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class RecordingSession:
+        params = None
+
+        def execute(self, _statement, params):
+            self.params = params
+            return EmptyRows()
+
+    session = RecordingSession()
+
+    assert bm25_search(session, "alpha beta", "user-id") == []
+    assert session.params["query"] == "alpha or beta"
 
 
 def test_vector_to_candidates_normalizes_against_top():

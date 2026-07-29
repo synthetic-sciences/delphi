@@ -153,7 +153,7 @@ def bm25_search(
         return []
 
     params: dict[str, Any] = {
-        "query": " | ".join(extract_identifiers(query)) or query,
+        "query": " or ".join(extract_identifiers(query)) or query,
         "user_id": user_id,
         "top_k": top_k,
     }
