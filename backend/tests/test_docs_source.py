@@ -95,6 +95,147 @@ def test_auto_discovered_sitemap_failure_falls_back_to_bounded_crawl(
     ]
 
 
+def test_auto_discovered_sitemap_outside_docs_subtree_falls_back_to_crawl(
+    monkeypatch,
+):
+    from synsc.services.docs_service import DocsService
+
+    service = DocsService(user_id="u1")
+    monkeypatch.setattr(
+        service,
+        "_iter_sitemap_urls",
+        lambda *args: iter(
+            [
+                "https://example.com/about/",
+                "https://example.com/es/news/",
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_iter_crawl_pages",
+        lambda *args, **kwargs: iter(
+            [
+                (
+                    "https://example.com/doc/stable/",
+                    b"<h1>Versioned API docs</h1>",
+                )
+            ]
+        ),
+    )
+
+    pages = service._resolve_pages(
+        object(),
+        "https://example.com/doc/stable/",
+        sitemap_url=None,
+        max_pages=3,
+    )
+
+    assert pages == [
+        (
+            "https://example.com/doc/stable/",
+            b"<h1>Versioned API docs</h1>",
+        )
+    ]
+
+
+def test_auto_discovered_sitemap_keeps_only_pages_in_requested_subtree(
+    monkeypatch,
+):
+    from synsc.services.docs_service import DocsService
+
+    service = DocsService(user_id="u1")
+    monkeypatch.setattr(
+        service,
+        "_iter_sitemap_urls",
+        lambda *args: iter(
+            [
+                "https://example.com/about/",
+                "https://example.com/doc/stable/api.html",
+                "https://other.example.com/doc/stable/private.html",
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_iter_crawl_pages",
+        lambda *args, **kwargs: pytest.fail(
+            "an in-scope sitemap page should avoid crawl fallback"
+        ),
+    )
+
+    pages = service._resolve_pages(
+        object(),
+        "https://example.com/doc/stable/",
+        sitemap_url=None,
+        max_pages=3,
+    )
+
+    assert pages == [
+        ("https://example.com/doc/stable/api.html", None),
+    ]
+
+
+def test_extensionless_docs_root_without_slash_stays_in_its_subtree(
+    monkeypatch,
+):
+    from synsc.services.docs_service import DocsService
+
+    service = DocsService(user_id="u1")
+    monkeypatch.setattr(
+        service,
+        "_iter_sitemap_urls",
+        lambda *args: iter(
+            [
+                "https://example.com/about/",
+                "https://example.com/docs",
+                "https://example.com/docs/api/client",
+                "https://example.com/docs-old/archive",
+            ]
+        ),
+    )
+
+    pages = service._resolve_pages(
+        object(),
+        "https://example.com/docs",
+        sitemap_url=None,
+        max_pages=4,
+    )
+
+    assert pages == [
+        ("https://example.com/docs", None),
+        ("https://example.com/docs/api/client", None),
+    ]
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "https://example.com/docs/%2e%2e/admin",
+        "https://example.com/docs/%252e%252e/admin",
+        "https://example.com/docs/%2E%2E%2Fadmin",
+        "https://example.com/docs/%5c..%5cadmin",
+    ],
+)
+def test_documentation_scope_rejects_encoded_traversal(candidate):
+    from synsc.services.docs_service import _in_documentation_scope
+
+    assert not _in_documentation_scope(
+        "https://example.com/docs/",
+        candidate,
+    )
+
+
+@pytest.mark.parametrize("suffix", [".md", ".rst", ".txt"])
+def test_document_entrypoint_files_scope_to_sibling_pages(suffix):
+    from synsc.services.docs_service import _in_documentation_scope
+
+    assert _in_documentation_scope(
+        f"https://example.com/docs/guide{suffix}",
+        "https://example.com/docs/reference/api.html",
+    )
+
+
 def test_explicit_sitemap_failure_does_not_silently_change_scope(monkeypatch):
     from synsc.services.docs_service import DocsService
 
