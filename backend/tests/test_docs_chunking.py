@@ -97,6 +97,29 @@ def test_chunk_markdown_oversized_section_splits_at_paragraphs():
     assert len(long_section_chunks) >= 2
 
 
+def test_chunk_markdown_bounds_each_oversized_paragraph():
+    """Every emitted chunk stays bounded, including non-final giant paragraphs."""
+    paragraph = "x" * 200
+    md = f"# Title\n\n## Long\n\n{paragraph}\n\n{paragraph}"
+
+    chunks = DocsService._chunk_markdown(md, chunk_tokens=20)
+
+    for _, chunk in chunks:
+        assert len(chunk) <= 80
+
+
+def test_chunk_markdown_includes_heading_inside_total_budget():
+    heading = "Heading " * 100
+    body = "body " * 100
+    md = f"# {heading}\n\n{body}"
+
+    chunks = DocsService._chunk_markdown(md, chunk_tokens=20)
+
+    assert chunks
+    assert all(len(chunk) <= 80 for _, chunk in chunks)
+    assert all("body" in chunk for _, chunk in chunks)
+
+
 def test_clean_markdown_removes_consecutive_blank_lines():
     md = "Line 1\n\n\n\nLine 2\n\n\n\n\nLine 3"
     out = DocsService._clean_markdown(md)

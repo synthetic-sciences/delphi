@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 import requests
+import tiktoken
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ _TRANSIENT_REQUEST_EXCEPTIONS = (
     requests.exceptions.ContentDecodingError,
 )
 _MAX_RETRY_DELAY_SECONDS = 60.0
+_OPENAI_MAX_INPUT_TOKENS = 8_191
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SUBWORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+")
@@ -320,11 +322,47 @@ class OpenAIEmbeddingProvider(_HttpEmbeddingProvider):
         super().__init__()
         # Allow overriding the model (e.g. text-embedding-3-large)
         self.model_name = os.getenv("OPENAI_EMBEDDING_MODEL", self.model_name)
+        try:
+            self._encoding = tiktoken.encoding_for_model(self.model_name)
+        except KeyError:
+            self._encoding = tiktoken.get_encoding("cl100k_base")
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        bounded_texts: list[str] = []
+        for text in texts:
+            tokens = self._encoding.encode(text, disallowed_special=())
+            if len(tokens) > _OPENAI_MAX_INPUT_TOKENS:
+                logger.warning(
+                    "Truncating OpenAI embedding input from %d to %d tokens",
+                    len(tokens),
+                    _OPENAI_MAX_INPUT_TOKENS,
+                )
+                bounded_tokens = tokens[:_OPENAI_MAX_INPUT_TOKENS]
+                while bounded_tokens:
+                    try:
+                        text = self._encoding.decode_bytes(
+                            bounded_tokens
+                        ).decode("utf-8")
+                    except UnicodeDecodeError:
+                        bounded_tokens.pop()
+                        continue
+                    if (
+                        len(
+                            self._encoding.encode(
+                                text,
+                                disallowed_special=(),
+                            )
+                        )
+                        <= _OPENAI_MAX_INPUT_TOKENS
+                    ):
+                        break
+                    bounded_tokens.pop()
+                else:
+                    text = ""
+            bounded_texts.append(text)
         body = {
             "model": self.model_name,
-            "input": texts,
+            "input": bounded_texts,
             "dimensions": self.dimension,
             "encoding_format": "float",
         }
