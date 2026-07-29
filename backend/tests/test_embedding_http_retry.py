@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 import requests
+import tiktoken
 
 from synsc.embeddings.providers import (
     GeminiEmbeddingProvider,
@@ -104,6 +105,28 @@ def test_openai_embeddings_do_not_retry_non_transient_error(
         OpenAIEmbeddingProvider().generate_single("bad request")
 
     post.assert_called_once()
+
+
+def test_openai_embeddings_bound_each_input_to_model_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_provider_keys(monkeypatch)
+    post = Mock(
+        return_value=_response(
+            200,
+            payload={"data": [{"index": 0, "embedding": _UNIT_VECTOR}]},
+        )
+    )
+    monkeypatch.setattr("synsc.embeddings.providers.requests.post", post)
+    provider = OpenAIEmbeddingProvider()
+    oversized = "token " * 9_000
+
+    provider.generate_single(oversized)
+
+    sent = post.call_args.kwargs["json"]["input"][0]
+    encoding = tiktoken.encoding_for_model(provider.model_name)
+    assert len(encoding.encode(sent, disallowed_special=())) <= 8_192
+    assert sent != oversized
 
 
 def test_openai_embeddings_retry_connection_failure(

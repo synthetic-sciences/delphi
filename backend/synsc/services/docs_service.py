@@ -492,36 +492,49 @@ class DocsService:
         # Now produce final chunks, prefixed with the heading path so the
         # embedding sees the section title.
         chunks: list[tuple[str, str]] = []
+        def append_bounded(
+            path: str,
+            prefix: str,
+            content: str,
+        ) -> None:
+            """Append content without ever exceeding the body budget."""
+            stripped = content.strip()
+            if not stripped:
+                return
+            for start in range(0, len(stripped), approx_chars):
+                piece = stripped[start : start + approx_chars].strip()
+                if piece:
+                    chunks.append((path, prefix + piece))
+
         for path, body_text in merged:
             text = body_text
             prefix = path + "\n\n" if path else ""
             if len(text) <= approx_chars:
                 chunks.append((path, prefix + text))
                 continue
-            # Oversized — split at paragraph boundaries first, then a
-            # hard character window as fallback.
+            # Oversized — pack normal paragraphs up to the character budget.
+            # Flush giant paragraphs through append_bounded immediately:
+            # waiting until the end used to let every non-final giant
+            # paragraph escape as a single unbounded embedding input.
             paragraphs = re.split(r"\n\s*\n", text)
             buf: list[str] = []
             buf_len = 0
             for p in paragraphs:
-                if buf_len + len(p) > approx_chars and buf:
-                    chunks.append((path, prefix + "\n\n".join(buf).strip()))
+                if len(p) > approx_chars:
+                    if buf:
+                        append_bounded(path, prefix, "\n\n".join(buf))
+                        buf = []
+                        buf_len = 0
+                    append_bounded(path, prefix, p)
+                elif buf_len + len(p) + (2 if buf else 0) > approx_chars:
+                    append_bounded(path, prefix, "\n\n".join(buf))
                     buf = [p]
                     buf_len = len(p)
                 else:
                     buf.append(p)
-                    buf_len += len(p) + 2
+                    buf_len += len(p) + (2 if len(buf) > 1 else 0)
             if buf:
-                rem = "\n\n".join(buf).strip()
-                # If even a single paragraph exceeds approx_chars, hard-split.
-                if len(rem) <= approx_chars:
-                    chunks.append((path, prefix + rem))
-                else:
-                    start = 0
-                    while start < len(rem):
-                        end = min(len(rem), start + approx_chars)
-                        chunks.append((path, prefix + rem[start:end].strip()))
-                        start = end
+                append_bounded(path, prefix, "\n\n".join(buf))
         return chunks
 
     # ------------------------------------------------------------------
