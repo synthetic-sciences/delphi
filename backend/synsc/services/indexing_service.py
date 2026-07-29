@@ -146,7 +146,13 @@ def _build_chunk_relationships(session: Session, repo_id: str) -> int:
             for r in relationships
         ]
         stmt = pg_insert(cast(Table, ChunkRelationship.__table__)).values(rows)
-        stmt = stmt.on_conflict_do_nothing(constraint="unique_chunk_relationship")
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[
+                "source_chunk_id",
+                "target_chunk_id",
+                "relationship_type",
+            ]
+        )
         session.execute(stmt)
         session.flush()
 
