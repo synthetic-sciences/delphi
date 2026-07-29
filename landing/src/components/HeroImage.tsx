@@ -14,7 +14,7 @@ const ALT: Record<Variant, string> = {
     "A vast Greek archive of scrolls and codices, a scribe reading by lamplight.",
 };
 
-function ThemedImage({
+export function ThemedImage({
   variant,
   priority = false,
 }: {
@@ -60,13 +60,22 @@ export function HeroImage({
 
 export function ClosingImage({
   variant = "archive",
+  children,
 }: {
   variant?: Variant;
+  children?: ReactNode;
 }) {
   return (
-    <ImageBand fadeTop border>
+    <div className="relative min-h-[72vh] overflow-hidden border-t border-[var(--line)] bg-[#070605] text-[#f7f0dc]">
       <ThemedImage variant={variant} />
-    </ImageBand>
+      <div className="absolute inset-0 bg-[rgba(4,4,3,0.58)]" />
+      <div className="absolute inset-0 bg-gradient-to-b from-[var(--bg)] via-transparent to-[#070605]" />
+      {children && (
+        <div className="relative z-10 mx-auto flex min-h-[72vh] w-full max-w-[1240px] items-end px-5 py-14 sm:px-8 md:py-20">
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 
