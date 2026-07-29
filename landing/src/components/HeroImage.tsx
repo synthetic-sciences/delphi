@@ -46,18 +46,6 @@ export function ThemedImage({
   );
 }
 
-export function HeroImage({
-  variant = "sacred-way",
-}: {
-  variant?: Variant;
-}) {
-  return (
-    <ImageBand fadeBottom>
-      <ThemedImage variant={variant} priority />
-    </ImageBand>
-  );
-}
-
 export function ClosingImage({
   variant = "archive",
   children,
@@ -75,34 +63,6 @@ export function ClosingImage({
           {children}
         </div>
       )}
-    </div>
-  );
-}
-
-function ImageBand({
-  children,
-  fadeBottom = false,
-  fadeTop = false,
-  border = false,
-}: {
-  children: ReactNode;
-  fadeBottom?: boolean;
-  fadeTop?: boolean;
-  border?: boolean;
-}) {
-  return (
-    <div
-      className={`relative w-full overflow-hidden bg-[var(--bg-deep)] ${border ? "border-t border-[var(--line)]" : ""}`}
-    >
-      <div className="relative h-[58vh] min-h-[420px] max-h-[720px] w-full">
-        {children}
-        {fadeBottom && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-40 bg-gradient-to-b from-transparent to-[var(--bg)]" />
-        )}
-        {fadeTop && (
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-t from-transparent to-[var(--bg)]" />
-        )}
-      </div>
     </div>
   );
 }
