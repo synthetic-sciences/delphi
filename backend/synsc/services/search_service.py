@@ -753,19 +753,25 @@ def _query_seeks(query: str | None) -> set[str]:
     return wanted
 
 
+# Each intent protects the path families it asked for. Test intent covers both
+# the directory layout (tests/, spec/, e2e/) and the filename convention
+# (foo_test.py, foo.spec.ts), because either alone would miss half the cases.
+_SUPPRESSION_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "test": (_TEST_PATH_PATTERN, _TEST_FILE_PATTERN),
+    "docs": (_DOCS_PATH_PATTERN,),
+    "example": (_EXAMPLE_PATH_PATTERN,),
+}
+
+
 def _demotion_is_suppressed(file_path: str, wanted: set[str]) -> bool:
     """True when this path belongs to a family the query explicitly wants."""
     if not wanted or not file_path:
         return False
-    if "test" in wanted and _TEST_PATH_PATTERN.search(file_path):
-        return True
-    if "docs" in wanted and _DOCS_PATH_PATTERN.search(file_path):
-        return True
-    if "example" in wanted and _EXAMPLE_PATH_PATTERN.search(file_path):
-        return True
-    if "test" in wanted and _TEST_FILE_PATTERN.search(file_path):
-        return True
-    return False
+    return any(
+        pattern.search(file_path)
+        for intent in wanted
+        for pattern in _SUPPRESSION_PATTERNS.get(intent, ())
+    )
 
 
 def _apply_metadata_scoring(

@@ -511,6 +511,13 @@ class SynscConfig(BaseModel):
             )
         if rerank_k := os.getenv("SYNSC_HYBRID_RERANK_K"):
             config.search.hybrid_rerank_k = int(rerank_k)
+        # Candidate depth per branch. Raising it lifts the Recall@20 ceiling
+        # at the cost of a wider fusion, which is the trade a recall-oriented
+        # deployment usually wants to make explicitly.
+        if candidates := os.getenv("SYNSC_HYBRID_CANDIDATES"):
+            config.search.hybrid_candidates = int(candidates)
+        if min_score := os.getenv("SYNSC_MIN_SIMILARITY_SCORE"):
+            config.search.min_similarity_score = float(min_score)
 
         # Quality mode + indexing overrides — agents can override per-process
         # without a code change. Useful for benchmarks and ad-hoc reindexing.
