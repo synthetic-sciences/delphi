@@ -14,6 +14,7 @@ from synsc.services.hybrid_retrieval import (
     DEFAULT_WEIGHTS,
     Candidate,
     _symbol_search_needles,
+    _trigram_search_needles,
     bm25_search,
     exact_symbol_search,
     extract_identifiers,
@@ -64,6 +65,22 @@ def test_symbol_needles_prioritize_dotted_api_leaves():
         "opt.get_help",
     ]
     assert "cfg" not in needles
+
+
+def test_trigram_needles_keep_legitimate_uppercase_constants():
+    assert _trigram_search_needles("MAX_RETRI_COUNT") == ["MAX_RETRI_COUNT"]
+
+
+def test_trigram_needles_prefer_code_symbol_over_long_environment_noise():
+    assert _trigram_search_needles(
+        "SETUPTOOLS_SCM_PRETEND_VERSION handlAuthCallback",
+    ) == ["handlAuthCallback"]
+
+
+def test_trigram_needles_keep_long_uppercase_typo_over_question_prose():
+    assert _trigram_search_needles(
+        "where is VERY_LONG_APPLICATION_SETTNG defined",
+    ) == ["VERY_LONG_APPLICATION_SETTNG"]
 
 
 def test_exact_symbol_search_uses_every_selected_needle():

@@ -283,6 +283,83 @@ def test_qualified_symbol_outranks_same_leaf_name(user_id, seeded_repo):
     assert [result.chunk_id for result in results] == [target_chunk_id]
 
 
+def test_trigram_search_recovers_a_misspelled_identifier(
+    user_id,
+    seeded_repo,
+):
+    """A one-character identifier typo should retrieve the intended chunk."""
+    from synsc.database.connection import get_session
+    from synsc.services.hybrid_retrieval import trigram_search
+
+    repo_id, _, chunk_ids, _ = seeded_repo
+    with get_session() as session:
+        results = trigram_search(
+            session,
+            "SETUPTOOLS_SCM_PRETEND_VERSION handlAuthCallback",
+            user_id,
+            repo_ids=[repo_id],
+            top_k=5,
+        )
+
+    assert results[0].chunk_id == chunk_ids["handleAuthCallback"]
+    assert results[0].sources["trigram"] > 0.7
+
+
+def test_agent_search_keeps_a_trigram_only_hit_amid_vector_decoys(
+    user_id,
+    seeded_repo,
+    fake_embeddings,
+):
+    """A fuzzy-only recovery must survive fusion and final result selection."""
+    from synsc.services.search_service import SearchService
+
+    repo_id, _, chunk_ids, _ = seeded_repo
+    vector_results = [
+        {
+            "chunk_id": str(uuid.uuid4()),
+            "repo_id": repo_id,
+            "file_id": str(uuid.uuid4()),
+            "repo_name": "test/integ",
+            "file_path": f"src/decoy_{index}.py",
+            "content": f"def unrelated_{index}(): pass",
+            "start_line": 1,
+            "end_line": 1,
+            "chunk_index": 0,
+            "chunk_type": "function",
+            "language": "python",
+            "symbol_names": [f"unrelated_{index}"],
+            "is_public": False,
+            "similarity": 1.0 - index / 1000,
+        }
+        for index in range(50)
+    ]
+
+    class DecoyVectorStore:
+        def search(self, **_kwargs):
+            return vector_results
+
+    svc = SearchService(user_id=user_id)
+    svc._vector_store = DecoyVectorStore()
+    result = svc.search_code(
+        query="SETUPTOOLS_SCM_PRETEND_VERSION handlAuthCallback",
+        repo_ids=[repo_id],
+        top_k=20,
+        user_id=user_id,
+        quality_mode="agent",
+    )
+
+    target = next(
+        (
+            row
+            for row in result["results"]
+            if row["chunk_id"] == chunk_ids["handleAuthCallback"]
+        ),
+        None,
+    )
+    assert target is not None
+    assert "trigram" in target["candidate_sources"]
+
+
 def test_hybrid_meta_block_reports_branches(user_id, seeded_repo, fake_embeddings):
     """search_code with agent mode returns the per-branch source counts."""
     from synsc.services.search_service import SearchService
