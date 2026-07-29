@@ -34,27 +34,54 @@ Everything runs on your machine — PostgreSQL for storage. Pick **local sentenc
 
 ## Latest results
 
-In a fixed-model, 40-task developer pilot, Delphi produced the strongest tested
-downstream result: **95.0% pass@1**, compared with **90.0%** for the next-best
-tested condition. This is state-of-the-art performance in the tested
-developer-work setting, not a claim of universal context-engine superiority.
+On [Agent Retrieval Bench v2](https://github.com/eyuansu62/agent-retrieval-bench)
+(commit `d04953371d96`), Delphi leads every published baseline on MRR and
+Recall@5 over the same 75 development cases, with the same `all_files`
+candidate filter, scored by the benchmark's own code.
 
-| Measurement | Delphi | Next-best tested condition |
-| --- | ---: | ---: |
-| DS-1000 dev40 pass@1 | **95.0%** | 90.0% |
-| Strict-valid repository retrieval mean query latency | **1.25 s** | 26.58 s |
-| Strict-valid repository retrieval recall@20 | **0.667** | 0.639 |
+| System | MRR | Recall@5 | Recall@20 |
+| --- | ---: | ---: | ---: |
+| **Delphi** | **0.197** | **0.309** | 0.544 |
+| grep | 0.180 | 0.302 | **0.578** |
+| RepoMap | 0.169 | 0.240 | 0.551 |
+| lexical | 0.127 | 0.198 | 0.451 |
+| BM25 | 0.116 | 0.136 | 0.429 |
 
-The downstream pilot used Claude Opus 5 for every condition and reports
-descriptive pass@1 over 40 DS-1000 development tasks. The repository-retrieval
-audit attempted 75 cases, but 57 of 75 scored target files were truncated in
-the available corpus; only 18 strict-valid cases were used for the table.
-Delphi's latency was 21.3× lower on that subset. Its recall@20 point estimate
-was slightly higher, but the paired 95% confidence interval for the difference
-`[-0.094, 0.139]` crosses zero. The hosted repository comparator led the
-early-ranking metrics, so those remain open work rather than Delphi wins.
+Delphi does not lead Recall@20 — plain grep is still ahead there, and the
+column is printed rather than dropped. Mean query latency is 1.77 s on the
+held-out split with reranking enabled and zero failures.
 
-Read the full method, failure analysis, and claim boundaries in
+### What changed, and what each change was worth
+
+The previous evaluation measured a corpus indexed with `text-embedding-3-small`
+but queried with `gemini-embedding-001`. Both emit 768-dimensional vectors, so
+pgvector computed cosines between unrelated spaces without raising anything.
+Embedding a chunk's own exact content and comparing it against that chunk's
+stored vector scored **cosine 0.0101** — orthogonal. Aligning the query-time
+model to the index moved the same comparison to **0.9430**.
+
+| Configuration | MRR | Recall@5 | Recall@20 | Latency |
+| --- | ---: | ---: | ---: | ---: |
+| As previously benchmarked | 0.055 | 0.056 | 0.161 | 1.0 s |
+| Embedding space aligned | 0.173 | 0.259 | 0.549 | 0.9 s |
+| + rank fusion, path affinity | 0.176 | 0.256 | 0.552 | 1.1 s |
+| + cross-encoder rerank | **0.193** | **0.294** | **0.560** | 2.9 s |
+
+Delphi now compares `repositories.embedding_model` against the model answering
+queries on every search and on `/backend-health`, so a silent vector-space
+mismatch is reported instead of absorbed.
+
+### Scope and limits
+
+- The held-out split is reported at partial scope: 60 of its cases are scored
+  and 160 are skipped, because they reach the same repositories at commits that
+  were never indexed. Provisioning the remaining corpus is in progress.
+- There is no current head-to-head against a hosted commercial engine. The
+  previous comparison is not reproducible — those indexed corpora no longer
+  resolve on the provider's side — and the earlier figures are withdrawn rather
+  than restated, since the Delphi half of that run is now known to be invalid.
+
+Full method, ablations, and expandable per-query retrieval traces:
 [The context engine is the product](https://trydelphi.ai/blog/context-engine-is-the-product).
 
 ### Timeline
@@ -63,8 +90,8 @@ Read the full method, failure analysis, and claim boundaries in
 | --- | --- |
 | Open source | Released Delphi as a local-first MCP context engine under Apache 2.0. |
 | Product foundation | Added versioned multi-source indexing, hybrid retrieval, code intelligence, and agent-ready context packs. |
-| 2026-07-29 | Audited repository-benchmark fidelity and excluded 57 truncated targets before comparison. |
-| 2026-07-29 | Reached 95.0% pass@1 in the fixed-model developer pilot and 1.25 s mean query latency on the strict-valid retrieval subset. |
+| 2026-07-30 | Found and fixed a silent embedding-space mismatch that had made the vector branch return random results; added a permanent check for it. |
+| 2026-07-30 | Rebuilt ranking on reciprocal-rank fusion, added a path-affinity branch, and set reranker defaults from measurement. |
 
 ---
 
