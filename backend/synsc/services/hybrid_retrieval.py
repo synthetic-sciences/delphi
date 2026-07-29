@@ -20,6 +20,7 @@ union (keyed by chunk_id), then optionally rerank the top 50.
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from collections.abc import Callable
@@ -57,9 +58,13 @@ class Candidate:
     language: str | None = None
     symbol_names: Any | None = None
     is_public: bool = True
-    # per-source contributions, normalized to [0, 1]. The fused score is a
-    # weighted sum of these.
+    # Per-source raw contributions, kept for observability and as a tiebreak.
+    # These are NOT comparable across branches — see ``fuse_candidates``.
     sources: dict[str, float] = field(default_factory=dict)
+    # Best (lowest) rank this chunk reached in each branch, 1-based. This is
+    # what fusion actually scores on, because ranks are comparable across
+    # branches and raw scores are not.
+    source_ranks: dict[str, int] = field(default_factory=dict)
     fused_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
@@ -83,6 +88,7 @@ class Candidate:
             # Why-this-matched: surface candidate sources in the result so
             # agents can reason about it (and it's invaluable for debugging).
             "candidate_sources": dict(self.sources),
+            "candidate_ranks": dict(self.source_ranks),
         }
 
 
@@ -311,9 +317,6 @@ def bm25_search(
     if not rows:
         return []
 
-    # Normalize ts_rank_cd into [0, 1]. ts_rank_cd is unbounded but in practice
-    # falls in [0, ~1.0] for common queries; we divide by the top score.
-    top_score = max((r["score"] for r in rows), default=1.0) or 1.0
     out: list[Candidate] = []
     for r in rows:
         c = Candidate(
@@ -331,7 +334,9 @@ def bm25_search(
             symbol_names=r["symbol_names"],
             is_public=bool(r["is_public"]),
         )
-        c.sources["bm25"] = float(r["score"]) / top_score
+        # Raw ts_rank_cd. Unbounded and not comparable to a cosine score, which
+        # is exactly why fusion uses rank position rather than magnitude.
+        c.sources["bm25"] = float(r["score"])
         out.append(c)
     return out
 
@@ -548,6 +553,156 @@ def exact_symbol_search(
     return out
 
 
+# File extensions worth treating as "the query named a file".
+_PATH_EXT_RE = re.compile(
+    r"[\w./-]+\.(?:py|pyi|go|rs|java|kt|swift|rb|php|cs|scala|c|cc|cpp|h|hpp|"
+    r"m|mm|js|jsx|ts|tsx|vue|svelte|sql|sh|bash|yaml|yml|toml|json|md|proto)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_path_token(value: str) -> str:
+    """Casefold and drop separators so ``grpc_proxy`` matches ``grpcproxy``."""
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+# URLs in a pasted issue body or PR description carry filenames that have
+# nothing to do with the repository under search — a CONTRIBUTING.md link in
+# a PR template would otherwise become a retrieval anchor.
+_URL_RE = re.compile(r"\b(?:https?:)?//\S+", re.IGNORECASE)
+
+
+def path_stems_from_query(query: str, *, limit: int = 4) -> list[str]:
+    """Pull the file stems a query is talking about.
+
+    Agents constantly anchor a request on a path — "what tests cover
+    ``server/etcdmain/grpc_proxy.go``", "why did ``auth/tokens.py`` change".
+    The stem of that path is a strong retrieval signal for *related* files,
+    which is not the same thing as the exact-path lookup: the file the query
+    names is usually the one file the caller already has.
+    """
+    if not query:
+        return []
+
+    stems: list[str] = []
+    for match in _PATH_EXT_RE.findall(_URL_RE.sub(" ", query)):
+        basename = match.rsplit("/", 1)[-1]
+        stem = basename.rsplit(".", 1)[0]
+        normalized = _normalize_path_token(stem)
+        # Two characters of stem is noise, not an anchor.
+        if len(normalized) >= 3 and normalized not in stems:
+            stems.append(normalized)
+        if len(stems) >= limit:
+            break
+    return stems
+
+
+def path_affinity_search(
+    session: Session,
+    query: str,
+    user_id: str,
+    repo_ids: list[str] | None = None,
+    top_k: int = 25,
+) -> list[Candidate]:
+    """Rank files whose *path* resembles a path the query named.
+
+    BM25 indexes chunk content, and nothing else indexes ``file_path``, so
+    until this branch existed a query naming a file could not retrieve that
+    file's neighbours lexically at all — the path was invisible to search.
+    Matching is done on separator-stripped lowercase so ``grpc_proxy`` finds
+    ``etcd_grpcproxy_test.go``, which underscore-sensitive matching misses.
+    """
+    stems = path_stems_from_query(query)
+    if not stems:
+        return []
+
+    params: dict[str, Any] = {"user_id": user_id, "top_k": top_k}
+    extra = ""
+    if repo_ids:
+        ph = ", ".join([f":rid_{i}" for i in range(len(repo_ids))])
+        extra += f" AND cc.repo_id IN ({ph})"
+        for i, rid in enumerate(repo_ids):
+            params[f"rid_{i}"] = rid
+
+    # Score each file by its best stem match, then keep one chunk per file so
+    # a single large file cannot crowd out the rest of the branch.
+    score_terms = []
+    for i, stem in enumerate(stems):
+        params[f"stem_{i}"] = stem
+        score_terms.append(
+            f"word_similarity(:stem_{i}, "
+            f"replace(replace(lower(rf.file_path), '_', ''), '-', ''))"
+        )
+    best_score = "GREATEST(" + ", ".join(score_terms) + ")" if len(score_terms) > 1 else score_terms[0]
+
+    # A stem like "grpc_proxy" matches every file under server/proxy/grpcproxy/
+    # at a perfect score, and thirty sibling files would fill the branch before
+    # the one test in tests/e2e/ ever appeared. Capping per directory keeps the
+    # branch spanning the places a related file could actually live.
+    sql = text(
+        f"""
+        WITH scored AS (
+            SELECT
+                cc.chunk_id, cc.repo_id, cc.file_id,
+                cc.content, cc.start_line, cc.end_line,
+                cc.chunk_index, cc.chunk_type, cc.language, cc.symbol_names,
+                rf.file_path,
+                r.owner || '/' || r.name AS repo_name,
+                r.is_public,
+                {best_score} AS score,
+                ROW_NUMBER() OVER (
+                    PARTITION BY cc.file_id ORDER BY cc.chunk_index
+                ) AS chunk_rank
+            FROM code_chunks cc
+            {_user_repo_filter()}
+            INNER JOIN repository_files rf ON cc.file_id = rf.file_id
+            WHERE {best_score} > 0.3
+            {extra}
+        ),
+        per_directory AS (
+            SELECT *,
+                ROW_NUMBER() OVER (
+                    PARTITION BY regexp_replace(file_path, '/[^/]*$', '')
+                    ORDER BY score DESC, length(file_path)
+                ) AS dir_rank
+            FROM scored
+            WHERE chunk_rank = 1
+        )
+        SELECT * FROM per_directory
+        WHERE dir_rank <= :per_dir
+        ORDER BY score DESC, length(file_path)
+        LIMIT :top_k
+        """
+    )
+    params["per_dir"] = 2
+    try:
+        rows = session.execute(sql, params).mappings().all()
+    except Exception as e:
+        logger.warning("path affinity branch failed", error=str(e))
+        return []
+
+    out: list[Candidate] = []
+    for r in rows:
+        c = Candidate(
+            chunk_id=str(r["chunk_id"]),
+            repo_id=str(r["repo_id"]),
+            file_id=str(r["file_id"]),
+            repo_name=r["repo_name"] or "",
+            file_path=r["file_path"] or "",
+            content=r["content"] or "",
+            start_line=r["start_line"],
+            end_line=r["end_line"],
+            chunk_index=r["chunk_index"],
+            chunk_type=r["chunk_type"] or "code",
+            language=r["language"],
+            symbol_names=r["symbol_names"],
+            is_public=bool(r["is_public"]),
+        )
+        c.sources["path_affinity"] = float(r["score"])
+        out.append(c)
+    return out
+
+
 def exact_path_search(
     session: Session,
     file_pattern: str,
@@ -633,7 +788,6 @@ def vector_to_candidates(raw_results: list[dict[str, Any]]) -> list[Candidate]:
     if not raw_results:
         return out
 
-    top = max((r.get("similarity", 0.0) for r in raw_results), default=1.0) or 1.0
     for r in raw_results:
         c = Candidate(
             chunk_id=str(r.get("chunk_id", "")),
@@ -650,7 +804,10 @@ def vector_to_candidates(raw_results: list[dict[str, Any]]) -> list[Candidate]:
             symbol_names=r.get("symbol_names"),
             is_public=r.get("is_public", True),
         )
-        c.sources["vector"] = float(r.get("similarity", 0.0)) / top
+        # Raw cosine similarity, deliberately not rescaled against this
+        # result set's best hit: fusion ranks these, and a rescaled score
+        # would claim a perfect match whenever nothing better existed.
+        c.sources["vector"] = float(r.get("similarity", 0.0))
         out.append(c)
     return out
 
@@ -662,49 +819,113 @@ DEFAULT_WEIGHTS = {
     "bm25": 0.25,
     "symbol": 0.20,
     "path": 0.15,
+    # Path affinity is a precise signal when it fires at all — it only fires
+    # when the query actually named a file — so it is weighted alongside the
+    # exact-path branch rather than treated as a weak fallback.
+    "path_affinity": 0.15,
     "trigram": 0.05,
 }
+
+
+# Reciprocal-rank-fusion damping constant. The standard value from Cormack
+# et al. (2009); large enough that the gap between rank 1 and rank 2 does not
+# dwarf the agreement signal from a second branch.
+RRF_K = 60
+
+
+def configured_weights() -> dict[str, float]:
+    """Fusion weights, overridable per deployment.
+
+    The right balance is corpus-dependent: an embedding that reads a codebase
+    well earns a high vector weight, and one that does not should yield to the
+    lexical and path branches. ``SYNSC_FUSION_WEIGHTS`` takes a comma-separated
+    ``branch=weight`` list so this can be measured rather than guessed.
+    """
+    raw = os.getenv("SYNSC_FUSION_WEIGHTS", "").strip()
+    if not raw:
+        return DEFAULT_WEIGHTS
+
+    weights = dict(DEFAULT_WEIGHTS)
+    for part in raw.split(","):
+        if "=" not in part:
+            continue
+        name, _, value = part.partition("=")
+        try:
+            weights[name.strip()] = float(value)
+        except ValueError:
+            logger.warning("ignoring malformed fusion weight", entry=part)
+    return weights
 
 
 def fuse_candidates(
     branches: list[list[Candidate]],
     weights: dict[str, float] | None = None,
+    rrf_k: int = RRF_K,
 ) -> list[Candidate]:
-    """Union candidates by chunk_id and produce a fused score.
+    """Union candidates by chunk_id and fuse them by weighted reciprocal rank.
 
-    Each branch contributes a normalized [0, 1] score; we sum them weighted
-    by ``weights[branch_name]``. A chunk hit by multiple branches gets a
-    higher fused score than one hit by a single branch alone — which is
-    exactly the reciprocal-rank-fusion intuition adapted to weighted scores.
+    Fusion scores **ranks, not raw scores**. Each branch previously normalized
+    its own scores by dividing by that branch's top score, which meant the best
+    hit of every branch was pinned to exactly 1.0 no matter how bad it was in
+    absolute terms. A query with no good semantic match still handed its
+    least-bad vector hit a perfect score, and at weight 0.5 that junk outranked
+    genuine multi-branch agreement.
+
+    Reciprocal rank fusion is immune to that because it never compares scores
+    across branches — only positions:
+
+        score(c) = Σ_b  weights[b] / (rrf_k + rank_b(c))
+
+    A chunk that several branches independently rank highly beats a chunk that
+    one branch happened to put first, which is the behaviour the weighted sum
+    was reaching for. Raw per-branch scores are kept on the candidate for
+    observability and as a deterministic tiebreak.
+
+    The result is rescaled to [0, 1] against the best achievable score (every
+    branch ranking the chunk first). Rescaling is a single positive linear
+    factor, so it cannot reorder anything — it just keeps ``fused_score`` in
+    the range downstream threshold and blending code already expects.
     """
-    weights = weights or DEFAULT_WEIGHTS
+    weights = weights or configured_weights()
 
     by_chunk: dict[str, Candidate] = {}
     for branch in branches:
-        for c in branch:
+        for rank, c in enumerate(branch, start=1):
             existing = by_chunk.get(c.chunk_id)
             if existing is None:
                 by_chunk[c.chunk_id] = c
-            else:
-                # Merge sources — same chunk hit by multiple branches.
-                for src, score in c.sources.items():
-                    existing.sources[src] = max(existing.sources.get(src, 0.0), score)
-                # Take the longest content (some branches don't read content).
-                if len(c.content) > len(existing.content):
-                    existing.content = c.content
+                for src in c.sources:
+                    c.source_ranks[src] = rank
+                continue
+            # Merge sources — same chunk hit by multiple branches. Keep the
+            # best score and the best (lowest) rank seen for each branch.
+            for src, score in c.sources.items():
+                existing.sources[src] = max(existing.sources.get(src, 0.0), score)
+                previous = existing.source_ranks.get(src)
+                existing.source_ranks[src] = (
+                    rank if previous is None else min(previous, rank)
+                )
+            # Take the longest content (some branches don't read content).
+            if len(c.content) > len(existing.content):
+                existing.content = c.content
+
+    # Best achievable score: every contributing branch ranks the chunk first.
+    best_possible = sum(weights.get(src, 0.0) for src in weights) / (rrf_k + 1)
 
     for c in by_chunk.values():
-        c.fused_score = sum(
-            weights.get(src, 0.0) * score for src, score in c.sources.items()
+        raw = sum(
+            weights.get(src, 0.0) / (rrf_k + rank)
+            for src, rank in c.source_ranks.items()
         )
-        # Multi-source bonus: if a chunk is hit by ≥2 branches, boost it.
-        # This is the heart of "did multiple retrievers agree?".
-        if len(c.sources) >= 2:
-            c.fused_score = min(1.0, c.fused_score * 1.15)
-        if len(c.sources) >= 3:
-            c.fused_score = min(1.0, c.fused_score * 1.10)
+        c.fused_score = raw / best_possible if best_possible > 0 else 0.0
 
-    out = sorted(by_chunk.values(), key=lambda c: c.fused_score, reverse=True)
+    # Ties on reciprocal rank fall back to the strongest raw branch score, so
+    # ordering stays deterministic instead of depending on dict insertion.
+    out = sorted(
+        by_chunk.values(),
+        key=lambda c: (c.fused_score, max(c.sources.values(), default=0.0)),
+        reverse=True,
+    )
     return out
 
 
@@ -755,6 +976,18 @@ def hybrid_retrieve(
         )
         timing["path_ms"] = (time.time() - t) * 1000
 
+    # 2b. Path affinity — fires whenever the query itself names a file, with
+    # no explicit glob from the caller. Without it a path mentioned in the
+    # query is invisible to retrieval, since BM25 only indexes chunk content.
+    if enable_path:
+        t = time.time()
+        branches.append(
+            path_affinity_search(
+                session, query, user_id, repo_ids, top_k=min(top_k, 25)
+            )
+        )
+        timing["path_affinity_ms"] = (time.time() - t) * 1000
+
     # 3. BM25
     if enable_bm25:
         t = time.time()
@@ -793,6 +1026,7 @@ def hybrid_retrieve(
         "bm25": sum(1 for c in fused if "bm25" in c.sources),
         "symbol": sum(1 for c in fused if "symbol" in c.sources),
         "path": sum(1 for c in fused if "path" in c.sources),
+        "path_affinity": sum(1 for c in fused if "path_affinity" in c.sources),
         "trigram": sum(1 for c in fused if "trigram" in c.sources),
     }
     logger.debug("hybrid_retrieve timing", **timing)

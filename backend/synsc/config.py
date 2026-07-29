@@ -281,7 +281,12 @@ class SearchConfig(BaseModel):
         default=0.3, description="Minimum similarity score for results"
     )
     enable_reranker: bool = Field(
-        default=False, description="Enable cross-encoder reranking for improved search quality"
+        default=True,
+        description=(
+            "Blend a cross-encoder over the fused head. Measured on the ARB "
+            "development split: +0.017 MRR, +0.038 Recall@5, +0.008 Recall@20 "
+            "for ~1.9s added latency."
+        ),
     )
     reranker_model: str = Field(
         default="cross-encoder/ms-marco-MiniLM-L-6-v2",
@@ -303,8 +308,12 @@ class SearchConfig(BaseModel):
         description="Top-K per branch before fusion (also the rerank window).",
     )
     hybrid_rerank_k: int = Field(
-        default=50,
-        description="Number of fused candidates to feed to the cross-encoder reranker.",
+        default=30,
+        description=(
+            "Fused candidates fed to the cross-encoder. Deeper is worse, not "
+            "just slower: at 60 and 100 the reranker pulls plausible-looking "
+            "but wrong files up from the tail, costing Recall@20."
+        ),
     )
 
     # Code-aware reranker — falls back to ms-marco when unavailable.
@@ -313,8 +322,13 @@ class SearchConfig(BaseModel):
         description="Code/text-aware reranker preferred over ms-marco when available.",
     )
     use_code_reranker: bool = Field(
-        default=True,
-        description="Try the code-aware reranker first; fall back to text reranker.",
+        default=False,
+        description=(
+            "Prefer the larger code-aware cross-encoder. Off by default: the "
+            "22M-parameter ms-marco model scored higher than 278M "
+            "bge-reranker-base on every ARB metric while running ~7x faster, "
+            "so the bigger model costs latency and quality both."
+        ),
     )
 
 
@@ -487,6 +501,23 @@ class SynscConfig(BaseModel):
             config.search.reranker_model = reranker_model
         if blend_alpha := os.getenv("RERANKER_BLEND_ALPHA"):
             config.search.reranker_blend_alpha = float(blend_alpha)
+        # The code-aware reranker is ~12x the parameters of the text one, which
+        # is a real latency decision on CPU rather than a free quality win.
+        if use_code_reranker := os.getenv("SYNSC_USE_CODE_RERANKER"):
+            config.search.use_code_reranker = use_code_reranker.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        if rerank_k := os.getenv("SYNSC_HYBRID_RERANK_K"):
+            config.search.hybrid_rerank_k = int(rerank_k)
+        # Candidate depth per branch. Raising it lifts the Recall@20 ceiling
+        # at the cost of a wider fusion, which is the trade a recall-oriented
+        # deployment usually wants to make explicitly.
+        if candidates := os.getenv("SYNSC_HYBRID_CANDIDATES"):
+            config.search.hybrid_candidates = int(candidates)
+        if min_score := os.getenv("SYNSC_MIN_SIMILARITY_SCORE"):
+            config.search.min_similarity_score = float(min_score)
 
         # Quality mode + indexing overrides — agents can override per-process
         # without a code change. Useful for benchmarks and ad-hoc reindexing.

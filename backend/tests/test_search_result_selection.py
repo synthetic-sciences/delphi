@@ -323,3 +323,55 @@ def test_agent_search_honors_explicit_reranker(monkeypatch) -> None:
 
     assert calls == [["a-1", "a-2", "b-1"]]
     assert [row["chunk_id"] for row in result["results"]] == ["b-1", "a-2"]
+
+
+# ── Intent-aware demotion ────────────────────────────────────────────────────
+
+
+def test_metadata_scoring_demotes_tests_for_implementation_query():
+    from synsc.services.search_service import _apply_metadata_scoring
+
+    results = [
+        {"file_path": "tests/test_auth.py", "content": "", "similarity": 0.9},
+        {"file_path": "src/auth.py", "content": "", "similarity": 0.9},
+    ]
+    _apply_metadata_scoring(results, query="where is login implemented")
+    assert results[0]["similarity"] < results[1]["similarity"]
+
+
+def test_metadata_scoring_spares_tests_when_query_asks_for_them():
+    """The regression: 'which test covers X' must not bury test files."""
+    from synsc.services.search_service import _apply_metadata_scoring
+
+    results = [
+        {"file_path": "tests/test_auth.py", "content": "", "similarity": 0.9},
+        {"file_path": "src/auth.py", "content": "", "similarity": 0.9},
+    ]
+    _apply_metadata_scoring(results, query="which regression test covers login")
+    assert results[0]["similarity"] == 0.9
+    assert results[1]["similarity"] == 0.9
+
+
+def test_metadata_scoring_spares_docs_when_query_asks_for_docs():
+    from synsc.services.search_service import _apply_metadata_scoring
+
+    results = [{"file_path": "docs/guide.md", "content": "", "similarity": 0.8}]
+    _apply_metadata_scoring(results, query="documentation for the auth guide")
+    assert results[0]["similarity"] == 0.8
+
+
+def test_metadata_scoring_test_intent_does_not_spare_docs():
+    """Suppression is per-family, not a blanket amnesty."""
+    from synsc.services.search_service import _apply_metadata_scoring
+
+    results = [{"file_path": "docs/guide.md", "content": "", "similarity": 0.8}]
+    _apply_metadata_scoring(results, query="which unit test covers login")
+    assert results[0]["similarity"] < 0.8
+
+
+def test_metadata_scoring_without_query_keeps_legacy_behavior():
+    from synsc.services.search_service import _apply_metadata_scoring
+
+    results = [{"file_path": "tests/test_auth.py", "content": "", "similarity": 0.9}]
+    _apply_metadata_scoring(results)
+    assert results[0]["similarity"] < 0.9

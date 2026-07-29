@@ -859,6 +859,16 @@ def create_app() -> FastAPI:
 
         warmup_task = asyncio.create_task(_warm_embeddings())
 
+        # Warm the cross-encoder reranker on the same principle. Left lazy, the
+        # first search to request reranking pays a multi-hundred-megabyte
+        # download inline; under a benchmark that means the opening queries are
+        # ranked differently from the rest of the run. Readiness is reported on
+        # /health so callers that need consistent ranking can wait for it.
+        if config.search.enable_reranker or config.quality.quality_mode == "agent":
+            from synsc.services.reranker import warm_reranker
+
+            warm_reranker()
+
         try:
             # Start MCP Streamable HTTP session manager (if attached to app)
             if hasattr(app, "_mcp_session_mgr") and app._mcp_session_mgr:
@@ -1018,6 +1028,41 @@ def create_app() -> FastAPI:
         except Exception as e:
             checks["embedding_generator"] = {"ok": False, "error": str(e)[:200]}
             ok = False
+
+        # 2b. Cross-encoder reranker — warmed in the background at startup.
+        # "Still loading" is not a failure, but it is worth reporting: until
+        # it is ready, searches silently fall back to fused ranking, so a
+        # benchmark started too early measures a different pipeline than the
+        # one it is trying to measure.
+        try:
+            from synsc.services.reranker import reranker_status
+            checks["reranker"] = {"ok": True, **reranker_status()}
+        except Exception as e:
+            checks["reranker"] = {"ok": False, "error": str(e)[:200]}
+
+        # 2c. Embedding-space consistency. A repository indexed by a different
+        # model than the one answering queries still returns results, still
+        # returns scores, and is wrong — the two vector spaces are unrelated.
+        # Same-width vectors mean nothing raises, so this has to be asserted.
+        try:
+            from synsc.services.embedding_consistency import (
+                active_embedding_model,
+                find_embedding_mismatches,
+            )
+
+            active = active_embedding_model()
+            with get_session() as session:
+                mismatches = find_embedding_mismatches(session, active)
+            checks["embedding_consistency"] = {
+                "ok": not mismatches,
+                "querying_with": active,
+                "mismatched_repositories": len(mismatches),
+                "examples": [m.as_dict() for m in mismatches[:3]],
+            }
+            if mismatches:
+                ok = False
+        except Exception as e:
+            checks["embedding_consistency"] = {"ok": False, "error": str(e)[:200]}
 
         # 3. MCP streamable-HTTP session manager — set by the lifespan
         # startup hook. If the api answered /health but never finished

@@ -699,10 +699,86 @@ _TEST_CONTENT_PATTERN = re.compile(
 )
 
 
+# Query signals that the caller is looking *for* tests, docs, or examples.
+# When one fires, the matching demotion is suppressed: the whole point of
+# "which test covers this?" is to return a test file.
+_WANTS_TEST_PATTERN = re.compile(
+    r"\b(?:tests?|testing|test-?case|test-?file|regression|spec|specs|"
+    r"unit-?test|integration-?test|e2e|end-?to-?end|pytest|unittest|jest|"
+    r"mocha|vitest|junit|rspec|testify|coverage|assertion|assertions)\b",
+    re.IGNORECASE,
+)
+
+_WANTS_DOCS_PATTERN = re.compile(
+    r"\b(?:docs?|documentation|guide|guides|tutorial|readme|changelog|"
+    r"how-?to|reference|manual|docstring)\b",
+    re.IGNORECASE,
+)
+
+_WANTS_EXAMPLE_PATTERN = re.compile(
+    r"\b(?:examples?|samples?|demos?|usage|snippet|snippets|starter|"
+    r"boilerplate|template|templates)\b",
+    re.IGNORECASE,
+)
+
+# Path families each intent protects from demotion.
+_TEST_PATH_PATTERN = re.compile(
+    r"(?:^|/)(?:test_|tests?/|__tests__/|spec/|specs/|e2e/|cypress/|"
+    r"playwright/|fixtures?/|mocks?/|__mocks__/|__snapshots__/)",
+    re.IGNORECASE,
+)
+
+_DOCS_PATH_PATTERN = re.compile(
+    r"(?:^|/)(?:docs_src/|docs?/)",
+    re.IGNORECASE,
+)
+
+_EXAMPLE_PATH_PATTERN = re.compile(
+    r"(?:^|/)(?:examples?/|storybook/|stories/|demo/|sandbox/|benchmarks?/)",
+    re.IGNORECASE,
+)
+
+
+def _query_seeks(query: str | None) -> set[str]:
+    """Which non-production file families the query is actually asking for."""
+    if not query:
+        return set()
+    wanted: set[str] = set()
+    if _WANTS_TEST_PATTERN.search(query):
+        wanted.add("test")
+    if _WANTS_DOCS_PATTERN.search(query):
+        wanted.add("docs")
+    if _WANTS_EXAMPLE_PATTERN.search(query):
+        wanted.add("example")
+    return wanted
+
+
+# Each intent protects the path families it asked for. Test intent covers both
+# the directory layout (tests/, spec/, e2e/) and the filename convention
+# (foo_test.py, foo.spec.ts), because either alone would miss half the cases.
+_SUPPRESSION_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "test": (_TEST_PATH_PATTERN, _TEST_FILE_PATTERN),
+    "docs": (_DOCS_PATH_PATTERN,),
+    "example": (_EXAMPLE_PATH_PATTERN,),
+}
+
+
+def _demotion_is_suppressed(file_path: str, wanted: set[str]) -> bool:
+    """True when this path belongs to a family the query explicitly wants."""
+    if not wanted or not file_path:
+        return False
+    return any(
+        pattern.search(file_path)
+        for intent in wanted
+        for pattern in _SUPPRESSION_PATTERNS.get(intent, ())
+    )
+
+
 def _apply_metadata_scoring(
     results: list[dict[str, Any]],
     path_penalty: float = 0.08,
     content_penalty: float = 0.04,
+    query: str | None = None,
 ) -> list[dict[str, Any]]:
     """Adjust scores based on file path and content signals.
 
@@ -714,18 +790,30 @@ def _apply_metadata_scoring(
     No boost for implementation — avoids false positives on similar_sig cases
     where both correct and decoy chunks contain definitions.
 
+    The penalties are **conditional on what the query asked for**. Demoting
+    tests is right for "where is this implemented?" and exactly backwards for
+    "which test covers this?" — the same heuristic that sharpens one query
+    buries the answer to the other. When the query names tests, docs, or
+    examples, the matching penalty is suppressed for those paths.
+
     Args:
         results: Search results with 'file_path', 'content', 'similarity' keys.
         path_penalty: Score penalty for test/doc/example file paths.
         content_penalty: Score penalty for test-heavy content.
+        query: The originating query, used to infer which families are wanted.
 
     Returns:
         Results with adjusted scores.
     """
+    wanted = _query_seeks(query)
+
     for r in results:
         penalty = 0.0
         file_path = r.get("file_path", "")
         content = r.get("content", "")
+
+        if _demotion_is_suppressed(file_path, wanted):
+            continue
 
         # Path-based signals
         if file_path and (
@@ -1303,9 +1391,11 @@ class SearchService:
 
             # 2. Metadata-aware scoring for implementation-focused modes.
             # Agent mode deliberately indexes tests/docs/examples as useful
-            # context, so a blanket penalty contradicts that contract.
+            # context, so a blanket penalty contradicts that contract. The
+            # other modes still demote, but only for families this query did
+            # not ask for — "which test covers X" must not bury tests.
             if not agent_mode:
-                _apply_metadata_scoring(raw_results)
+                _apply_metadata_scoring(raw_results, query=retrieval_query)
 
             # Re-sort after boosting + metadata adjustments
             raw_results.sort(key=lambda r: r["similarity"], reverse=True)
@@ -1426,7 +1516,32 @@ class SearchService:
             except Exception:
                 pass
 
-            return {
+            # An index built by a different embedding model returns plausible
+            # results with meaningless scores, and stays invisible unless it is
+            # reported. Surface it on the response rather than only in logs.
+            warnings: list[dict[str, str]] = []
+            try:
+                from synsc.services.embedding_consistency import (
+                    active_embedding_model,
+                    find_embedding_mismatches,
+                )
+
+                with get_session() as csess:
+                    mismatches = find_embedding_mismatches(
+                        csess, active_embedding_model(), repo_ids
+                    )
+                for mismatch in mismatches:
+                    logger.error(
+                        "embedding model mismatch — vector scores are not meaningful",
+                        **mismatch.as_dict(),
+                    )
+                    warnings.append(
+                        {"code": "embedding_model_mismatch", **mismatch.as_dict()}
+                    )
+            except Exception:
+                pass
+
+            payload = {
                 "success": True,
                 "query": query,
                 "retrieval_query": retrieval_query,
@@ -1442,6 +1557,9 @@ class SearchService:
                     "pipeline_ms": round(elapsed_time - embed_ms - db_ms, 1),
                 },
             }
+            if warnings:
+                payload["warnings"] = warnings
+            return payload
             
         except Exception as e:
             logger.error("Search failed", error=str(e), user_id=effective_user_id)
