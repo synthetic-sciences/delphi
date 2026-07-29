@@ -207,7 +207,7 @@ commands returns connector configuration or provider credentials.
 
 ## MCP Tools
 
-> **MCP defaults to `quality_mode='agent'`.** Indexing includes tests, docs, examples, configs, manifests, and dotfiles. Search runs hybrid retrieval (vector + BM25 + exact symbol + exact path + trigram) with a cross-encoder rerank. Each result carries `candidate_sources` so the agent can see which branches surfaced it. Pass `quality_mode='fast'` for the legacy pure-vector path.
+> **MCP defaults to `quality_mode='agent'`.** Indexing includes tests, docs, examples, configs, manifests, and dotfiles. Search runs hybrid retrieval (vector + BM25 + exact symbol + exact path + trigram) with stable file-level diversity; deployments can opt into a cross-encoder rerank with `SYNSC_ENABLE_RERANKER=true`. Each result carries `candidate_sources` so the agent can see which branches surfaced it. Pass `quality_mode='fast'` for the legacy pure-vector path.
 
 ### Code
 | Tool | Description |

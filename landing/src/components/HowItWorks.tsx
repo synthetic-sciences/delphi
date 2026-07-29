@@ -18,7 +18,9 @@ export function HowItWorks() {
             for embeddings and tree-sitter for symbol extraction. The
             retrieval side is a hybrid: dense vectors, BM25 over text,
             trigram for fuzzy identifiers, and an exact-symbol channel.
-            Results are fused per branch, then re-ranked by a cross-encoder.
+            Results are fused per branch, then diversified at the file level
+            without discarding the ranked candidate pool. Deployments can
+            optionally add a cross-encoder re-rank.
           </p>
           <p>
             Documents are chunked by heading where headings exist, by

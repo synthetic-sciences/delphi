@@ -76,8 +76,8 @@ class QualityConfig(BaseModel):
     - 'fast': legacy behavior — skip tests/docs/examples, turbo chunking, no rerank.
     - 'balanced': skip nothing structural, AST chunking on, no rerank.
     - 'agent': default for MCP. Index everything useful (tests, docs, configs,
-      manifests, dotfiles), AST chunking on, hybrid retrieval, rerank top 50,
-      lower min_chunk_tokens, context-pack ready.
+      manifests, dotfiles), AST chunking on, high-recall hybrid retrieval,
+      stable file diversity, lower min_chunk_tokens, context-pack ready.
     """
 
     quality_mode: Literal["fast", "balanced", "agent"] = Field(

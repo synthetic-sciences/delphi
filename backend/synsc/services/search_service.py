@@ -6,10 +6,9 @@ Uses pgvector for semantic search with smart deduplication:
 
 Post-retrieval quality pipeline:
 1. Symbol-aware score boosting (exact symbol name matches)
-2. Metadata-aware scoring (file path signals — demote tests/docs/examples)
-3. Cross-encoder reranking (query+candidate attention for fine discrimination)
-4. Dynamic similarity threshold (relative to top result)
-5. MMR diversification (reduce near-duplicate results)
+2. Agent mode: stable file diversity that preserves fused high-recall rank
+3. Other modes: metadata scoring, optional reranking, a dynamic threshold,
+   and content-based MMR
 """
 
 import json
@@ -776,6 +775,55 @@ def _apply_mmr(
     return [results[i] for i in selected_indices]
 
 
+def _select_file_diverse_results(
+    results: list[dict[str, Any]],
+    *,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Preserve rank while preferring one chunk per file.
+
+    Agent searches are context-acquisition calls: losing a relevant file is
+    more expensive than returning a merely imperfect score. Content-based MMR
+    can reorder or discard relevant candidates and is quadratic in the size of
+    the candidate set. This stable selector admits the first hit from each
+    file, then fills remaining slots with deferred same-file chunks in their
+    original order.
+
+    Results without a file path are keyed by chunk id so unrelated anonymous
+    candidates do not collapse into one lane.
+    """
+    if top_k <= 0 or not results:
+        return []
+
+    selected: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    seen_files: set[tuple[str, str]] = set()
+
+    for result in results:
+        file_id = str(result.get("file_id") or "")
+        file_path = str(result.get("file_path") or "")
+        repo_id = str(result.get("repo_id") or "")
+        chunk_id = str(result.get("chunk_id") or id(result))
+        if file_id:
+            file_key = ("file_id", file_id)
+        elif file_path:
+            file_key = (repo_id, file_path)
+        else:
+            file_key = ("chunk_id", chunk_id)
+        if file_key in seen_files:
+            deferred.append(result)
+            continue
+        seen_files.add(file_key)
+        selected.append(result)
+        if len(selected) >= top_k:
+            return selected
+
+    remaining = top_k - len(selected)
+    if remaining > 0:
+        selected.extend(deferred[:remaining])
+    return selected
+
+
 def _enrich_results_with_context(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Enrich search results with enclosing symbol docstrings/signatures and adjacent context.
 
@@ -783,7 +831,7 @@ def _enrich_results_with_context(results: list[dict[str, Any]]) -> list[dict[str
     symbol (function/class) and prepends its signature and docstring to the
     chunk content. Also fetches the previous chunk for flow context.
 
-    This runs after MMR selection, so operates on at most top_k (~10) results.
+    This runs after result selection, so operates on at most top_k results.
     Uses two batched SQL queries — expected latency ~10-30ms.
     """
     if not results:
@@ -935,10 +983,10 @@ class SearchService:
         ACCESS CONTROL: Only searches repos in user's collection.
 
         In agent quality mode (default for MCP), runs five retrieval branches
-        — vector, BM25, exact symbol, exact path, trigram — and fuses them
-        before reranking. Pure-vector search used to lose the identifier
-        battle on queries like ``handleAuthCallback`` or ``go.mod``; hybrid
-        recovers them.
+        — vector, BM25, exact symbol, exact path, trigram — fuses them, and
+        preserves high-recall rank with stable file-level diversity.
+        Pure-vector search used to lose the identifier battle on queries like
+        ``handleAuthCallback`` or ``go.mod``; hybrid recovers them.
 
         Args:
             query: Search query (natural language or keywords)
@@ -948,7 +996,8 @@ class SearchService:
             top_k: Number of results to return
             user_id: User ID for access control (overrides constructor user_id)
             quality_mode: 'fast', 'balanced', or 'agent'. None falls back to
-                the global default. Agent mode forces hybrid + rerank.
+                the global default. Agent mode forces high-recall hybrid
+                retrieval; reranking remains an explicit deployment option.
 
         Returns:
             Dict with search results, including ``candidate_sources`` per
@@ -994,12 +1043,11 @@ class SearchService:
         # Resolve effective quality mode for this call.
         effective_mode = quality_mode or self.config.quality.quality_mode
         agent_mode = effective_mode == "agent"
-        # Agent mode implies hybrid + rerank. Callers can opt in/out via env.
+        # Agent mode implies high-recall hybrid retrieval. Cross-encoder
+        # reranking remains an explicit deployment choice: forcing it here
+        # can erase exact test/doc/path candidates and adds model latency.
         use_hybrid = agent_mode or self.config.search.enable_hybrid
-        use_rerank = (
-            agent_mode
-            or self.config.search.enable_reranker
-        )
+        use_rerank = self.config.search.enable_reranker
 
         try:
             retrieval_query = _prepare_search_query(query)
@@ -1102,14 +1150,17 @@ class SearchService:
             if query_symbols:
                 _apply_symbol_boost(raw_results, query_symbols)
 
-            # 2. Metadata-aware scoring (demote tests/docs/examples)
-            _apply_metadata_scoring(raw_results)
+            # 2. Metadata-aware scoring for implementation-focused modes.
+            # Agent mode deliberately indexes tests/docs/examples as useful
+            # context, so a blanket penalty contradicts that contract.
+            if not agent_mode:
+                _apply_metadata_scoring(raw_results)
 
             # Re-sort after boosting + metadata adjustments
             raw_results.sort(key=lambda r: r["similarity"], reverse=True)
 
-            # 3. Cross-encoder reranking (blended with fused/vector similarity)
-            #    Always on in agent mode, otherwise gated by SYNSC_ENABLE_RERANKER.
+            # 3. Optional cross-encoder reranking (blended with fused/vector
+            #    similarity), gated by SYNSC_ENABLE_RERANKER.
             #    Limit to hybrid_rerank_k candidates to bound latency.
             if (
                 len(raw_results) > 1
@@ -1142,18 +1193,27 @@ class SearchService:
                     "results": [],
                 }
 
-            # 4. Dynamic similarity threshold
-            raw_results = _apply_dynamic_threshold(
-                raw_results,
-                min_absolute=self.config.search.min_similarity_score,
-            )
+            if agent_mode:
+                # Keep high-recall branch candidates and avoid returning many
+                # chunks from a single file without lossy thresholding or
+                # quadratic content-MMR.
+                raw_results = _select_file_diverse_results(
+                    raw_results,
+                    top_k=top_k,
+                )
+            else:
+                # 4. Dynamic similarity threshold
+                raw_results = _apply_dynamic_threshold(
+                    raw_results,
+                    min_absolute=self.config.search.min_similarity_score,
+                )
 
-            # 5. MMR diversification (select top_k from remaining candidates)
-            raw_results = _apply_mmr(
-                raw_results,
-                query_embedding=query_embedding,
-                top_k=top_k,
-            )
+                # 5. MMR diversification (select top_k from candidates)
+                raw_results = _apply_mmr(
+                    raw_results,
+                    query_embedding=query_embedding,
+                    top_k=top_k,
+                )
 
             # 6. Context enrichment (attach docstrings/signatures)
             raw_results = _enrich_results_with_context(raw_results)
