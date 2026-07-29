@@ -127,6 +127,58 @@ _STOPWORDS: frozenset[str] = frozenset({
     "explain", "tell", "give", "want's",
 })
 
+_FILE_EXTENSION_TOKENS: frozenset[str] = frozenset({
+    "c", "cc", "cfg", "cpp", "cs", "go", "h", "hpp", "java", "js",
+    "json", "jsx", "kt", "md", "php", "py", "rb", "rs", "rst", "swift",
+    "toml", "ts", "tsx", "vue", "yaml", "yml",
+})
+
+
+def _symbol_search_needles(query: str, *, limit: int = 8) -> list[str]:
+    """Choose bounded, symbol-shaped lookup terms from a developer query.
+
+    Diagnostic queries often start with environment variables and prose while
+    the useful APIs appear later as dotted expressions such as
+    ``click.Option`` or ``ctx.forward``. Prioritize dotted leaf names, then
+    snake/camel identifiers, before qualified and plain-text fallbacks.
+    File-like tokens such as ``setup.cfg`` are not symbol lookups.
+    """
+    if limit <= 0:
+        return []
+
+    dotted: list[str] = []
+    structured: list[str] = []
+    plain: list[str] = []
+    for identifier in extract_identifiers(query):
+        if "." in identifier:
+            leaf = identifier.rsplit(".", 1)[-1]
+            if leaf.lower() in _FILE_EXTENSION_TOKENS:
+                continue
+            # Keep each qualified form adjacent to its leaf so the bounded
+            # list cannot retain every leaf while dropping its API identity.
+            dotted.extend((leaf, identifier))
+            continue
+        if (
+            ("_" in identifier and not identifier.isupper())
+            or identifier[0].isupper()
+            or any(character.isupper() for character in identifier[1:])
+        ):
+            structured.append(identifier)
+        else:
+            plain.append(identifier)
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    for needle in (*dotted, *structured, *plain):
+        normalized = needle.lower()
+        if len(needle) <= 2 or normalized in seen:
+            continue
+        seen.add(normalized)
+        selected.append(needle)
+        if len(selected) >= limit:
+            break
+    return selected
+
 
 def _user_repo_filter() -> str:
     """SQL fragment that restricts to repos the user has access to."""
@@ -316,15 +368,38 @@ def exact_symbol_search(
     """Look up symbols whose name/qualified_name contains a query identifier,
     then return the chunks overlapping each symbol's line range.
     """
-    idents = extract_identifiers(query)
-    if not idents:
+    needles = _symbol_search_needles(query)
+    if not needles:
         return []
 
-    # Use the longest identifier as the primary key; pad with the next two so
-    # chains like `Class.method` still hit when only one part is exact.
-    needles = idents[:3]
     placeholders = ", ".join([f":n_{i}" for i in range(len(needles))])
     lower_needles = ", ".join([f":nl_{i}" for i in range(len(needles))])
+    qualified_indices = [
+        index for index, needle in enumerate(needles) if "." in needle
+    ]
+    qualified_placeholders = ", ".join(
+        f":n_{index}" for index in qualified_indices
+    )
+    lower_qualified_placeholders = ", ".join(
+        f":nl_{index}" for index in qualified_indices
+    )
+    exact_qualified_match = (
+        f"s.qualified_name IN ({qualified_placeholders})"
+        if qualified_indices
+        else "FALSE"
+    )
+    lower_qualified_match = (
+        f"lower(s.qualified_name) IN ({lower_qualified_placeholders})"
+        if qualified_indices
+        else "FALSE"
+    )
+    match_conditions = " OR ".join(
+        (
+            f"lower(s.name) LIKE '%' || :nl_{i} || '%' "
+            f"OR lower(s.qualified_name) LIKE '%' || :nl_{i} || '%'"
+        )
+        for i in range(len(needles))
+    )
 
     params: dict[str, Any] = {
         "user_id": user_id,
@@ -352,6 +427,8 @@ def exact_symbol_search(
             SELECT s.symbol_id, s.repo_id, s.file_id,
                    s.start_line, s.end_line, s.name, s.qualified_name,
                    CASE
+                       WHEN {exact_qualified_match} THEN 1.0
+                       WHEN {lower_qualified_match} THEN 0.97
                        WHEN s.name IN ({placeholders}) THEN 0.95
                        WHEN lower(s.name) IN ({lower_needles}) THEN 0.85
                        ELSE 0.7
@@ -360,11 +437,9 @@ def exact_symbol_search(
             INNER JOIN user_repos ur ON s.repo_id = ur.repo_id
             INNER JOIN repositories r ON s.repo_id = r.repo_id
                 AND (r.is_public = TRUE OR r.indexed_by = :user_id)
-            WHERE (
-                lower(s.name) LIKE '%' || :nl_0 || '%'
-                OR lower(s.qualified_name) LIKE '%' || :nl_0 || '%'
-            )
+            WHERE ({match_conditions})
             {extra}
+            ORDER BY sym_score DESC, s.start_line
             LIMIT :top_k
         )
         SELECT

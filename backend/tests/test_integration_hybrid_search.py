@@ -207,6 +207,82 @@ def test_hybrid_search_finds_exact_symbol(user_id, seeded_repo, fake_embeddings)
     assert "symbol" in top["candidate_sources"] or "bm25" in top["candidate_sources"]
 
 
+def test_qualified_symbol_outranks_same_leaf_name(user_id, seeded_repo):
+    """A fully qualified API query must win over unrelated same-name symbols."""
+    from sqlalchemy import text
+
+    from synsc.database.connection import get_session
+    from synsc.services.hybrid_retrieval import exact_symbol_search
+
+    repo_id, _, _, _ = seeded_repo
+    target_chunk_id = str(uuid.uuid4())
+    rows = (
+        {
+            "file_id": str(uuid.uuid4()),
+            "chunk_id": str(uuid.uuid4()),
+            "symbol_id": str(uuid.uuid4()),
+            "path": "src/other.py",
+            "qualified_name": "other.Option",
+            "start_line": 1,
+        },
+        {
+            "file_id": str(uuid.uuid4()),
+            "chunk_id": target_chunk_id,
+            "symbol_id": str(uuid.uuid4()),
+            "path": "src/click.py",
+            "qualified_name": "click.Option",
+            "start_line": 100,
+        },
+    )
+    with get_session() as session:
+        for index, row in enumerate(rows):
+            session.execute(
+                text(
+                    "INSERT INTO repository_files "
+                    "(file_id, repo_id, file_path, file_name, language) "
+                    "VALUES (:file_id, :repo_id, :path, :path, 'python')"
+                ),
+                {**row, "repo_id": repo_id},
+            )
+            session.execute(
+                text(
+                    "INSERT INTO code_chunks "
+                    "(chunk_id, repo_id, file_id, chunk_index, content, "
+                    " start_line, end_line, language, symbol_names) "
+                    "VALUES (:chunk_id, :repo_id, :file_id, :chunk_index, "
+                    " :content, :start_line, :start_line, 'python', '[\"Option\"]')"
+                ),
+                {
+                    **row,
+                    "repo_id": repo_id,
+                    "chunk_index": index + 10,
+                    "content": f"class {row['qualified_name']}: pass",
+                },
+            )
+            session.execute(
+                text(
+                    "INSERT INTO symbols "
+                    "(symbol_id, repo_id, file_id, name, qualified_name, "
+                    " symbol_type, start_line, end_line, language) "
+                    "VALUES (:symbol_id, :repo_id, :file_id, 'Option', "
+                    " :qualified_name, 'class', :start_line, :start_line, 'python')"
+                ),
+                {**row, "repo_id": repo_id},
+            )
+        session.commit()
+
+    with get_session() as session:
+        results = exact_symbol_search(
+            session,
+            "click.Option",
+            user_id,
+            repo_ids=[repo_id],
+            top_k=1,
+        )
+
+    assert [result.chunk_id for result in results] == [target_chunk_id]
+
+
 def test_hybrid_meta_block_reports_branches(user_id, seeded_repo, fake_embeddings):
     """search_code with agent mode returns the per-branch source counts."""
     from synsc.services.search_service import SearchService
