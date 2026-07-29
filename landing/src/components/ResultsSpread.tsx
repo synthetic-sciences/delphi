@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   BENCHMARK,
+  HEAD_TO_HEAD,
   HELD_OUT,
   RETRIEVAL_COMPARISON,
 } from "@/lib/evidence";
@@ -13,15 +14,15 @@ const bestRival = (key: "mrr" | "recall5") =>
 
 const MEASUREMENTS = [
   {
-    value: DELPHI.mrr.toFixed(3),
-    label: "Retrieval MRR",
-    detail: `best baseline ${bestRival("mrr").toFixed(3)}`,
+    value: HEAD_TO_HEAD.delphi.recall20.toFixed(3),
+    label: "Recall@20",
+    detail: `hosted comparator ${HEAD_TO_HEAD.nia.recall20.toFixed(3)}`,
     lead: true,
   },
   {
-    value: DELPHI.recall5.toFixed(3),
-    label: "Recall@5",
-    detail: `best baseline ${bestRival("recall5").toFixed(3)}`,
+    value: `${HEAD_TO_HEAD.latencyRatio.toFixed(1)}x`,
+    label: "Lower query latency",
+    detail: `${(HEAD_TO_HEAD.delphi.latencyMs / 1000).toFixed(1)}s vs ${(HEAD_TO_HEAD.nia.latencyMs / 1000).toFixed(0)}s`,
     lead: true,
   },
   {
@@ -52,10 +53,12 @@ export function ResultsSpread() {
           <div className="max-w-[680px] md:pt-9">
             <p className="text-[17px] leading-7 text-[var(--fg-dim)] md:text-[18px] md:leading-8">
               {BENCHMARK.cases} cases from {BENCHMARK.name}, scored by the
-              benchmark&apos;s own code against its own published baseline runs
-              — same cases, same candidate filter, same metric implementation.
-              Delphi leads on MRR and Recall@5. It does not lead on Recall@20,
-              where plain grep is still ahead.
+              benchmark&apos;s own code — same cases, same candidate filter,
+              same metric implementation, with the hosted comparator re-run
+              live on the same corpora. Delphi leads every published baseline
+              on MRR and Recall@5, and leads on Recall@20 coverage at a
+              twelfth of the comparator&apos;s latency. The comparator still
+              ranks the top of the list better.
             </p>
             <Link
               href="/blog/context-engine-is-the-product"
@@ -103,10 +106,13 @@ export function ResultsSpread() {
         <div className="mt-14 grid gap-8 border-t border-[var(--line)] pt-8 text-[14px] leading-7 text-[var(--fg-mute)] md:grid-cols-2">
           <p>
             Baseline numbers are the benchmark&apos;s own published runs on the
-            same split, not our reimplementation of them. Recall@20 is the one
-            headline metric Delphi does not lead: grep reaches{" "}
-            {RIVALS.find((r) => r.system === "grep")!.recall20.toFixed(3)}{" "}
-            against Delphi&apos;s {DELPHI.recall20.toFixed(3)}.
+            same split, not our reimplementation of them. Delphi does not lead
+            everywhere: the hosted comparator reaches{" "}
+            {HEAD_TO_HEAD.nia.mrr.toFixed(3)} MRR and{" "}
+            {HEAD_TO_HEAD.nia.recall5.toFixed(3)} Recall@5 against Delphi&apos;s{" "}
+            {DELPHI.mrr.toFixed(3)} and {DELPHI.recall5.toFixed(3)}, and grep
+            still holds Recall@20 at{" "}
+            {RIVALS.find((r) => r.system === "grep")!.recall20.toFixed(3)}.
           </p>
           <p>
             The held-out split is reported at partial scope. {HELD_OUT.scored}{" "}

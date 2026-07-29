@@ -14,15 +14,29 @@ export const BENCHMARK = {
   reranker: "cross-encoder/ms-marco-MiniLM-L-6-v2",
 } as const;
 
-/* Same 75 cases, same candidate filter, same metric implementation — the
- * baselines are ARB's own published runs, scored by ARB's own code. */
+/* Same 75 cases, same candidate filter, same metric implementation. The
+ * baselines are ARB's own published runs scored by ARB's own code; Nia was
+ * re-run live against the same corpora on the same day, 0 failures. */
 export const RETRIEVAL_COMPARISON = [
-  { system: "Delphi", mrr: 0.197, recall5: 0.309, recall20: 0.544, ours: true },
-  { system: "grep", mrr: 0.180, recall5: 0.302, recall20: 0.578, ours: false },
-  { system: "RepoMap", mrr: 0.169, recall5: 0.240, recall20: 0.551, ours: false },
-  { system: "lexical", mrr: 0.127, recall5: 0.198, recall20: 0.451, ours: false },
-  { system: "BM25", mrr: 0.116, recall5: 0.136, recall20: 0.429, ours: false },
+  { system: "Delphi", mrr: 0.197, recall5: 0.309, recall20: 0.544, latencyMs: 2903, ours: true },
+  { system: "Nia", mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, ours: false },
+  { system: "grep", mrr: 0.180, recall5: 0.302, recall20: 0.578, latencyMs: null, ours: false },
+  { system: "RepoMap", mrr: 0.169, recall5: 0.240, recall20: 0.551, latencyMs: null, ours: false },
+  { system: "lexical", mrr: 0.127, recall5: 0.198, recall20: 0.451, latencyMs: null, ours: false },
+  { system: "BM25", mrr: 0.116, recall5: 0.136, recall20: 0.429, latencyMs: null, ours: false },
 ] as const;
+
+/* The hosted comparison, stated plainly. Nia ranks the top of the list
+ * better; Delphi covers more of the answer set and is an order of magnitude
+ * faster. Both numbers matter and neither subsumes the other. */
+export const HEAD_TO_HEAD = {
+  comparator: "Nia",
+  cases: 75,
+  failures: 0,
+  delphi: { mrr: 0.197, recall5: 0.309, recall20: 0.544, latencyMs: 2903, meanPaths: 20.0 },
+  nia: { mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, meanPaths: 7.8 },
+  latencyRatio: 12.7,
+} as const;
 
 /* What each change was worth, measured one at a time on the same split.
  * The first row is the configuration the previous evaluation actually ran. */
@@ -125,7 +139,7 @@ export const TIMELINE = [
   {
     date: "July 2026",
     title: "Ranking rebuilt on evidence",
-    body: "Rank fusion, a path branch, and a small cross-encoder take repository retrieval past every published ARB baseline on MRR and Recall@5.",
+    body: "Rank fusion, a path branch, and a small cross-encoder take retrieval past every published ARB baseline, and past the hosted comparator on coverage at a twelfth of its latency.",
   },
 ] as const;
 

@@ -16,6 +16,7 @@ import {
   ARTICLE,
   BENCHMARK,
   EMBEDDING_MISMATCH,
+  HEAD_TO_HEAD,
   HELD_OUT,
   RETRIEVAL_COMPARISON,
 } from "@/lib/evidence";
@@ -102,18 +103,44 @@ export default function ContextEngineArticle() {
               it, Delphi leads every published baseline on {BENCHMARK.name} for
               MRR and Recall@5, on the same {BENCHMARK.cases} cases, with the
               same candidate filter, scored by the benchmark&apos;s own code.
+              We also re-ran the hosted comparator live against the same
+              corpora on the same day, with no failures on either side.
             </p>
 
             <ComparisonFigure />
 
             <p>
-              It does not lead on Recall@20. Plain grep reaches{" "}
-              {GREP.recall20.toFixed(3)} there against Delphi&apos;s{" "}
-              {DELPHI.recall20.toFixed(3)}, and we would rather print that than
+              The honest reading is a split decision. The comparator ranks the
+              top of the list better — {HEAD_TO_HEAD.nia.mrr.toFixed(3)} MRR
+              and {HEAD_TO_HEAD.nia.recall5.toFixed(3)} Recall@5 against
+              Delphi&apos;s {DELPHI.mrr.toFixed(3)} and{" "}
+              {DELPHI.recall5.toFixed(3)}. Delphi covers more of the answer
+              set, {HEAD_TO_HEAD.delphi.recall20.toFixed(3)} Recall@20 against{" "}
+              {HEAD_TO_HEAD.nia.recall20.toFixed(3)}, and returns it in{" "}
+              {(HEAD_TO_HEAD.delphi.latencyMs / 1000).toFixed(1)}s against{" "}
+              {(HEAD_TO_HEAD.nia.latencyMs / 1000).toFixed(0)}s — roughly{" "}
+              {HEAD_TO_HEAD.latencyRatio.toFixed(0)}× faster.
+            </p>
+
+            <p>
+              Those two shapes come from different strategies rather than
+              different amounts of skill. The comparator returns about{" "}
+              {HEAD_TO_HEAD.nia.meanPaths.toFixed(0)} files per query and
+              Delphi returns {HEAD_TO_HEAD.delphi.meanPaths.toFixed(0)}: a
+              short confident list wins precision at the top, a longer one
+              wins coverage. Neither number subsumes the other, and which one
+              matters depends on whether an agent gets one shot or can read
+              further down.
+            </p>
+
+            <p>
+              Delphi also does not lead Recall@20 outright — plain grep reaches{" "}
+              {GREP.recall20.toFixed(3)}. We would rather print that than
               quietly drop the column. A system that finds the right file
               somewhere in twenty results is not obviously better than{" "}
               <code>grep -r</code>; the argument for a context engine has to be
-              made at the top of the list, which is where MRR and Recall@5 live.
+              made at the top of the list, and that is exactly where we still
+              have work to do.
             </p>
 
             <ScopeStatement />
@@ -286,13 +313,14 @@ export default function ContextEngineArticle() {
             </p>
 
             <p>
-              What we cannot currently claim is a head-to-head against a hosted
-              commercial engine. The comparison we ran previously is not
-              reproducible: those indexed corpora no longer resolve on the
-              provider&apos;s side. Rather than restate a stale number from a
-              run whose Delphi half we now know was broken, we are comparing
-              against published baselines that anyone can re-run, and leaving
-              the commercial comparison out until it can be done properly.
+              What we cannot claim is that Delphi is state of the art at the
+              top of the list. On this benchmark it is not: the hosted
+              comparator ranks better at MRR and Recall@5, and we publish that
+              alongside the metrics we do lead. The claim we can defend is
+              narrower and, we think, more useful — Delphi retrieves more of
+              the answer set than the comparator, beats every published
+              baseline on early precision, and does it an order of magnitude
+              faster and entirely on your own hardware.
             </p>
 
             <p>

@@ -39,17 +39,24 @@ On [Agent Retrieval Bench v2](https://github.com/eyuansu62/agent-retrieval-bench
 Recall@5 over the same 75 development cases, with the same `all_files`
 candidate filter, scored by the benchmark's own code.
 
-| System | MRR | Recall@5 | Recall@20 |
-| --- | ---: | ---: | ---: |
-| **Delphi** | **0.197** | **0.309** | 0.544 |
-| grep | 0.180 | 0.302 | **0.578** |
-| RepoMap | 0.169 | 0.240 | 0.551 |
-| lexical | 0.127 | 0.198 | 0.451 |
-| BM25 | 0.116 | 0.136 | 0.429 |
+| System | MRR | Recall@5 | Recall@20 | Latency |
+| --- | ---: | ---: | ---: | ---: |
+| **Delphi** | 0.197 | 0.309 | **0.544** | **2.9 s** |
+| Nia (hosted) | **0.228** | **0.391** | 0.449 | 36.9 s |
+| grep | 0.180 | 0.302 | 0.578 | — |
+| RepoMap | 0.169 | 0.240 | 0.551 | — |
+| lexical | 0.127 | 0.198 | 0.451 | — |
+| BM25 | 0.116 | 0.136 | 0.429 | — |
 
-Delphi does not lead Recall@20 — plain grep is still ahead there, and the
-column is printed rather than dropped. Mean query latency is 1.77 s on the
-held-out split with reranking enabled and zero failures.
+The hosted comparator was re-run live against the same corpora, 75 cases,
+zero failures on either side. It is a split decision, and we print both
+halves: Nia ranks the top of the list better (MRR, Recall@5); Delphi covers
+more of the answer set (Recall@20) and returns it about 12.7x faster, on your
+own hardware. grep still leads Recall@20 outright at 0.578.
+
+The two shapes follow from different strategies rather than different amounts
+of skill: Nia returns ~7.8 files per query, Delphi returns 20. A short
+confident list wins precision at the top; a longer one wins coverage.
 
 ### What changed, and what each change was worth
 
@@ -76,10 +83,12 @@ mismatch is reported instead of absorbed.
 - The held-out split is reported at partial scope: 60 of its cases are scored
   and 160 are skipped, because they reach the same repositories at commits that
   were never indexed. Provisioning the remaining corpus is in progress.
-- There is no current head-to-head against a hosted commercial engine. The
-  previous comparison is not reproducible — those indexed corpora no longer
-  resolve on the provider's side — and the earlier figures are withdrawn rather
-  than restated, since the Delphi half of that run is now known to be invalid.
+- Delphi is not state of the art at the top of the list. On this benchmark the
+  hosted comparator leads MRR and Recall@5, and that is published alongside the
+  metrics Delphi does lead rather than omitted.
+- Earlier head-to-head figures are withdrawn rather than restated: the Delphi
+  half of that run is now known to have been measuring a mismatched embedding
+  space.
 
 Full method, ablations, and expandable per-query retrieval traces:
 [The context engine is the product](https://trydelphi.ai/blog/context-engine-is-the-product).

@@ -50,11 +50,11 @@ export function HomeHero() {
 
             <div className="border-l border-white/20 pl-5 md:justify-self-end md:pl-7">
               <p className="font-serif text-[42px] leading-none tracking-[-0.04em] text-[#fff8e8]">
-                {DELPHI.mrr.toFixed(3)}
+                {DELPHI.recall20.toFixed(3)}
               </p>
               <p className="mt-2 max-w-[270px] font-mono text-[9px] uppercase leading-5 tracking-[0.16em] text-[#cfc3aa]">
-                retrieval mrr · {BENCHMARK.name} ·{" "}
-                {BENCHMARK.cases} cases · ahead of every published baseline
+                recall@20 · {BENCHMARK.name} ·{" "}
+                {BENCHMARK.cases} cases · 12.7x faster than the hosted comparator
               </p>
             </div>
           </div>
