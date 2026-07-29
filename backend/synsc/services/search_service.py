@@ -119,6 +119,17 @@ _DIAGNOSTIC_SNAKE_STOPWORDS = {
     "with",
 }
 
+_RELATED_PATH_SUFFIXES = {
+    ".c", ".cc", ".cfg", ".cpp", ".cs", ".go", ".h", ".hpp", ".java",
+    ".js", ".json", ".jsx", ".kt", ".md", ".php", ".py", ".rb", ".rs",
+    ".rst", ".swift", ".toml", ".ts", ".tsx", ".vue", ".yaml", ".yml",
+}
+
+_RELATED_PATH_GENERIC_TOKENS = {
+    "core", "index", "init", "lib", "main", "mod", "src", "test", "tests",
+    "type", "types", "util", "utils",
+}
+
 
 def _structured_query_priority(key: str) -> int:
     """Rank generic structured fields by retrieval value."""
@@ -238,6 +249,69 @@ def _is_structured_developer_query(payload: dict[str, Any]) -> bool:
 
     context_wrappers = {"context", "developer_context", "request_context"}
     return bool(set(container_keys) & context_wrappers and priorities & {1, 2})
+
+
+def _related_path_pattern(query: str) -> str | None:
+    """Build a loose sibling-file probe from explicit developer path hints.
+
+    Given an implementation path such as ``src/core_model_loading.py``, agent
+    search should also consider paths like ``tests/test_core_model_loading.py``.
+    The wildcard probe is deliberately limited to structured developer
+    envelopes and safe repository-relative paths; literal JSON searches and
+    machine-local absolute paths remain untouched.
+    """
+    try:
+        payload = json.loads(query)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict) or not _is_structured_developer_query(payload):
+        return None
+
+    paths: list[str] = []
+
+    def collect(key: str, value: Any) -> None:
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                collect(str(nested_key), nested_value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                collect(key, item)
+            return
+        if not isinstance(value, str) or _structured_query_priority(key) != 2:
+            return
+        candidate = value.strip().replace("\\", "/")
+        if (
+            "/" not in candidate
+            or "://" in candidate
+            or candidate.startswith(("/", "~"))
+            or re.match(r"^[A-Za-z]:/", candidate) is not None
+            or ".." in candidate.split("/")
+            or Path(candidate).suffix.lower() not in _RELATED_PATH_SUFFIXES
+        ):
+            return
+        paths.append(candidate)
+
+    for field, field_value in payload.items():
+        collect(str(field), field_value)
+    if not paths:
+        return None
+
+    for path in paths:
+        stem = Path(path).stem
+        tokens = re.findall(
+            r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+",
+            stem.replace("-", "_"),
+        )
+        useful = [
+            token.lower()
+            for token in tokens
+            if len(token) >= 2
+            and token.lower() not in _RELATED_PATH_GENERIC_TOKENS
+        ]
+        if useful:
+            return "*" + "*".join(useful) + "*"
+    return None
 
 
 def _compact_structured_query(
@@ -1048,6 +1122,9 @@ class SearchService:
         # can erase exact test/doc/path candidates and adds model latency.
         use_hybrid = agent_mode or self.config.search.enable_hybrid
         use_rerank = self.config.search.enable_reranker
+        effective_file_pattern = file_pattern
+        if agent_mode and effective_file_pattern is None:
+            effective_file_pattern = _related_path_pattern(query)
 
         try:
             retrieval_query = _prepare_search_query(query)
@@ -1100,7 +1177,7 @@ class SearchService:
                         user_id=effective_user_id,
                         repo_ids=repo_ids,
                         language=language,
-                        file_pattern=file_pattern,
+                        file_pattern=effective_file_pattern,
                         top_k=fetch_k,
                     )
                 db_ms = (time.time() - t_db) * 1000

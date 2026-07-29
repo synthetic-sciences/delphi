@@ -3,6 +3,7 @@ import json
 from synsc.services.search_service import (
     _diagnostic_identifier_query,
     _prepare_search_query,
+    _related_path_pattern,
 )
 
 
@@ -87,6 +88,68 @@ def test_prepare_search_query_compacts_structured_developer_context() -> None:
     )
     assert "implementation_file_count" not in prepared
     assert not prepared.startswith("{")
+
+
+def test_related_path_pattern_uses_explicit_developer_file_hint() -> None:
+    query = json.dumps(
+        {
+            "changed_file_summary": "One implementation file changed.",
+            "implementation_files": ["server/etcdmain/grpc_proxy.go"],
+            "pr_title": "Add TLS support to the gRPC proxy",
+        }
+    )
+
+    assert _related_path_pattern(query) == "*grpc*proxy*"
+
+
+def test_related_path_pattern_splits_camel_case_stems() -> None:
+    query = json.dumps(
+        {
+            "intent": "Find related tests",
+            "target_path": (
+                "module/src/main/java/"
+                "HttpHandlerAutoConfiguration.java"
+            ),
+        }
+    )
+
+    assert _related_path_pattern(query) == (
+        "*http*handler*auto*configuration*"
+    )
+
+
+def test_related_path_pattern_ignores_literal_and_unsafe_json() -> None:
+    assert _related_path_pattern('{"filename":"src/auth.py","patch":"x"}') is None
+    assert _related_path_pattern(
+        json.dumps(
+            {
+                "intent": "Find related tests",
+                "target_path": "/Users/dev/project/src/auth.py",
+            }
+        )
+    ) is None
+    assert _related_path_pattern(
+        json.dumps(
+            {
+                "intent": "Find related tests",
+                "target_path": r"C:\project\src\auth.py",
+            }
+        )
+    ) is None
+
+
+def test_related_path_pattern_skips_generic_path_in_multi_file_change() -> None:
+    query = json.dumps(
+        {
+            "intent": "Find affected tests",
+            "implementation_files": [
+                "src/main.py",
+                "src/client/core_model_loading.py",
+            ],
+        }
+    )
+
+    assert _related_path_pattern(query) == "*model*loading*"
 
 
 def test_prepare_search_query_compacts_nested_developer_context() -> None:
