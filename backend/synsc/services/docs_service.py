@@ -33,7 +33,7 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from collections.abc import Iterator, Sequence
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 import numpy as np
@@ -74,6 +74,66 @@ _CHUNK_TOKENS = 800
 _CHUNK_OVERLAP = 80
 
 _SM_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+_DOC_PAGE_SUFFIXES = frozenset(
+    {
+        ".asp",
+        ".aspx",
+        ".htm",
+        ".html",
+        ".md",
+        ".php",
+        ".rst",
+        ".txt",
+        ".xhtml",
+    }
+)
+
+
+def _safe_scope_path(path: str) -> str | None:
+    decoded = path
+    for _ in range(8):
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+    else:
+        return None
+
+    decoded = decoded.replace("\\", "/")
+    if any(ord(character) < 32 for character in decoded):
+        return None
+    if any(segment in {".", ".."} for segment in decoded.split("/")):
+        return None
+    return re.sub(r"/+", "/", decoded) or "/"
+
+
+def _in_documentation_scope(start_url: str, candidate_url: str) -> bool:
+    """Return whether a page belongs to the requested documentation tree."""
+    start = urlparse(start_url)
+    candidate = urlparse(candidate_url)
+    if (
+        candidate.scheme.casefold() != start.scheme.casefold()
+        or candidate.netloc.casefold() != start.netloc.casefold()
+    ):
+        return False
+
+    start_path = _safe_scope_path(start.path or "/")
+    candidate_path = _safe_scope_path(candidate.path or "/")
+    if start_path is None or candidate_path is None:
+        return False
+    if start_path.endswith("/"):
+        return candidate_path.startswith(start_path)
+
+    terminal = start_path.rsplit("/", 1)[-1]
+    suffix = "." + terminal.rsplit(".", 1)[-1].casefold() if "." in terminal else ""
+    if suffix in _DOC_PAGE_SUFFIXES:
+        parent = start_path.rsplit("/", 1)[0] + "/"
+        return candidate_path.startswith(parent)
+
+    return (
+        candidate_path == start_path
+        or candidate_path.startswith(start_path + "/")
+    )
 
 
 class DocsService:
@@ -180,9 +240,6 @@ class DocsService:
         """Yield a bounded, same-origin documentation crawl with page bodies."""
 
         parsed_start = urlparse(start_url)
-        scope_path = parsed_start.path
-        if not scope_path.endswith("/"):
-            scope_path = scope_path.rsplit("/", 1)[0] + "/"
 
         canonical_start = parsed_start._replace(
             query="",
@@ -251,9 +308,7 @@ class DocsService:
                     continue
                 parsed = urlparse(urljoin(page_url, href))
                 if (
-                    parsed.scheme != parsed_start.scheme
-                    or parsed.netloc != parsed_start.netloc
-                    or not parsed.path.startswith(scope_path)
+                    not _in_documentation_scope(start_url, parsed.geturl())
                     or parsed.path.lower().endswith(skipped_suffixes)
                 ):
                     continue
@@ -290,10 +345,16 @@ class DocsService:
                 url=url,
             )
         else:
+            if not explicit_sitemap:
+                sitemap_pages = [
+                    page_url
+                    for page_url in sitemap_pages
+                    if _in_documentation_scope(url, page_url)
+                ]
             if sitemap_pages or explicit_sitemap:
                 return [(page_url, None) for page_url in sitemap_pages]
             logger.info(
-                "docs: auto-discovered sitemap empty; "
+                "docs: auto-discovered sitemap empty or outside scope; "
                 "falling back to scoped crawl",
                 sitemap=sitemap,
                 url=url,
