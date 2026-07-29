@@ -107,7 +107,15 @@ def test_openai_embeddings_do_not_retry_non_transient_error(
     post.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    "oversized",
+    [
+        pytest.param("token " * 9_000, id="ascii"),
+        pytest.param("a " * 8_190 + "раба", id="unicode-boundary"),
+    ],
+)
 def test_openai_embeddings_bound_each_input_to_model_limit(
+    oversized: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_provider_keys(monkeypatch)
@@ -119,13 +127,12 @@ def test_openai_embeddings_bound_each_input_to_model_limit(
     )
     monkeypatch.setattr("synsc.embeddings.providers.requests.post", post)
     provider = OpenAIEmbeddingProvider()
-    oversized = "token " * 9_000
 
     provider.generate_single(oversized)
 
     sent = post.call_args.kwargs["json"]["input"][0]
     encoding = tiktoken.encoding_for_model(provider.model_name)
-    assert len(encoding.encode(sent, disallowed_special=())) <= 8_192
+    assert len(encoding.encode(sent, disallowed_special=())) <= 8_191
     assert sent != oversized
 
 

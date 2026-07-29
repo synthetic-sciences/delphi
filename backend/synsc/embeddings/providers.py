@@ -337,9 +337,28 @@ class OpenAIEmbeddingProvider(_HttpEmbeddingProvider):
                     len(tokens),
                     _OPENAI_MAX_INPUT_TOKENS,
                 )
-                text = self._encoding.decode(
-                    tokens[:_OPENAI_MAX_INPUT_TOKENS]
-                )
+                bounded_tokens = tokens[:_OPENAI_MAX_INPUT_TOKENS]
+                while bounded_tokens:
+                    try:
+                        text = self._encoding.decode_bytes(
+                            bounded_tokens
+                        ).decode("utf-8")
+                    except UnicodeDecodeError:
+                        bounded_tokens.pop()
+                        continue
+                    if (
+                        len(
+                            self._encoding.encode(
+                                text,
+                                disallowed_special=(),
+                            )
+                        )
+                        <= _OPENAI_MAX_INPUT_TOKENS
+                    ):
+                        break
+                    bounded_tokens.pop()
+                else:
+                    text = ""
             bounded_texts.append(text)
         body = {
             "model": self.model_name,

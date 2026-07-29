@@ -104,9 +104,20 @@ def test_chunk_markdown_bounds_each_oversized_paragraph():
 
     chunks = DocsService._chunk_markdown(md, chunk_tokens=20)
 
-    for path, chunk in chunks:
-        prefix_length = len(path) + 2 if path else 0
-        assert len(chunk) <= 80 + prefix_length
+    for _, chunk in chunks:
+        assert len(chunk) <= 80
+
+
+def test_chunk_markdown_includes_heading_inside_total_budget():
+    heading = "Heading " * 100
+    body = "body " * 100
+    md = f"# {heading}\n\n{body}"
+
+    chunks = DocsService._chunk_markdown(md, chunk_tokens=20)
+
+    assert chunks
+    assert all(len(chunk) <= 80 for _, chunk in chunks)
+    assert all("body" in chunk for _, chunk in chunks)
 
 
 def test_clean_markdown_removes_consecutive_blank_lines():
