@@ -212,4 +212,3 @@ paper, and external report files remain untouched.
   overflow.
 - Reduced-motion and keyboard-focus behavior remain usable.
 - `pnpm build` and the repository landing CI smoke test pass.
-

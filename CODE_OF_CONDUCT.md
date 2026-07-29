@@ -125,4 +125,3 @@ For answers to common questions about this code of conduct, see the
 [Contributor Covenant FAQ](https://www.contributor-covenant.org/faq).
 Translations are available on the [Contributor Covenant
 website](https://www.contributor-covenant.org/translations).
-

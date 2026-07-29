@@ -123,4 +123,3 @@ Participation in Delphi is governed by our
 [Code of Conduct](CODE_OF_CONDUCT.md). By contributing, you agree that your
 contributions are licensed under the repository's
 [Apache License 2.0](LICENSE).
-

@@ -102,4 +102,3 @@ No CLA, DCO, or new governance mechanism is invented.
 - The limitations paragraph is visible without opening a separate artifact.
 - No raw benchmark output, secret, competitor name, SynsciContextBench
   reference, old memo, blog, or paper file is added or modified.
-

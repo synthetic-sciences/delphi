@@ -47,4 +47,3 @@ appropriate.
 Good-faith research that follows this policy, avoids privacy violations and
 service disruption, and does not access more data than necessary will be
 treated as authorized security research by the project.
-
