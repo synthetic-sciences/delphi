@@ -93,11 +93,11 @@ cache storage, and enforce page/depth/deadline/byte limits.
 
 | Var | Default | Description |
 |---|---|---|
-| `SYNSC_ENABLE_RERANKER` | `false` | Enable cross-encoder re-rank on the top-K candidates. Improves precision; costs a forward pass per query. Implicit on when `quality_mode='agent'`. |
+| `SYNSC_ENABLE_RERANKER` | `false` | Enable cross-encoder re-rank on the top-K candidates. Improves precision; costs a forward pass per query. |
 | `RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | sentence-transformers cross-encoder model id. Falls back to this when the code-aware model can't load. |
 | `RERANKER_BLEND_ALPHA` | `0.5` | Mix between vector similarity and reranker score. `0` = pure reranker, `1` = pure vector. |
 
-The agent mode tries the code-aware reranker (`BAAI/bge-reranker-base`) first and falls back to the ms-marco model if it can't load. The fallback prevents an offline / CDN-blocked environment from disabling rerank entirely.
+When reranking is enabled, Delphi tries the code-aware reranker (`BAAI/bge-reranker-base`) first and falls back to the ms-marco model if it can't load. If no model can load, search preserves the fused ranking.
 
 ---
 
@@ -105,8 +105,9 @@ The agent mode tries the code-aware reranker (`BAAI/bge-reranker-base`) first an
 
 Delphi's default `quality_mode=agent` is what MCP clients hit when no
 mode is specified. It enables hybrid retrieval (vector + BM25 + exact
-symbol + exact path + trigram), AST chunking, the cross-encoder reranker,
-and includes tests/docs/examples/configs/manifests in the index.
+symbol + exact path + trigram), stable file-level diversity, AST chunking,
+and includes tests/docs/examples/configs/manifests in the index. Cross-encoder
+reranking remains an explicit deployment option.
 
 | Var | Default | Description |
 |---|---|---|

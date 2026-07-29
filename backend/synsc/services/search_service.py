@@ -797,12 +797,19 @@ def _select_file_diverse_results(
 
     selected: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
-    seen_files: set[str] = set()
+    seen_files: set[tuple[str, str]] = set()
 
     for result in results:
+        file_id = str(result.get("file_id") or "")
         file_path = str(result.get("file_path") or "")
+        repo_id = str(result.get("repo_id") or "")
         chunk_id = str(result.get("chunk_id") or id(result))
-        file_key = file_path or f"chunk:{chunk_id}"
+        if file_id:
+            file_key = ("file_id", file_id)
+        elif file_path:
+            file_key = (repo_id, file_path)
+        else:
+            file_key = ("chunk_id", chunk_id)
         if file_key in seen_files:
             deferred.append(result)
             continue
