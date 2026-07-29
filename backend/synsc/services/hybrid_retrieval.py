@@ -57,9 +57,13 @@ class Candidate:
     language: str | None = None
     symbol_names: Any | None = None
     is_public: bool = True
-    # per-source contributions, normalized to [0, 1]. The fused score is a
-    # weighted sum of these.
+    # Per-source raw contributions, kept for observability and as a tiebreak.
+    # These are NOT comparable across branches — see ``fuse_candidates``.
     sources: dict[str, float] = field(default_factory=dict)
+    # Best (lowest) rank this chunk reached in each branch, 1-based. This is
+    # what fusion actually scores on, because ranks are comparable across
+    # branches and raw scores are not.
+    source_ranks: dict[str, int] = field(default_factory=dict)
     fused_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
@@ -83,6 +87,7 @@ class Candidate:
             # Why-this-matched: surface candidate sources in the result so
             # agents can reason about it (and it's invaluable for debugging).
             "candidate_sources": dict(self.sources),
+            "candidate_ranks": dict(self.source_ranks),
         }
 
 
@@ -311,9 +316,6 @@ def bm25_search(
     if not rows:
         return []
 
-    # Normalize ts_rank_cd into [0, 1]. ts_rank_cd is unbounded but in practice
-    # falls in [0, ~1.0] for common queries; we divide by the top score.
-    top_score = max((r["score"] for r in rows), default=1.0) or 1.0
     out: list[Candidate] = []
     for r in rows:
         c = Candidate(
@@ -331,7 +333,9 @@ def bm25_search(
             symbol_names=r["symbol_names"],
             is_public=bool(r["is_public"]),
         )
-        c.sources["bm25"] = float(r["score"]) / top_score
+        # Raw ts_rank_cd. Unbounded and not comparable to a cosine score, which
+        # is exactly why fusion uses rank position rather than magnitude.
+        c.sources["bm25"] = float(r["score"])
         out.append(c)
     return out
 
@@ -633,7 +637,6 @@ def vector_to_candidates(raw_results: list[dict[str, Any]]) -> list[Candidate]:
     if not raw_results:
         return out
 
-    top = max((r.get("similarity", 0.0) for r in raw_results), default=1.0) or 1.0
     for r in raw_results:
         c = Candidate(
             chunk_id=str(r.get("chunk_id", "")),
@@ -650,7 +653,10 @@ def vector_to_candidates(raw_results: list[dict[str, Any]]) -> list[Candidate]:
             symbol_names=r.get("symbol_names"),
             is_public=r.get("is_public", True),
         )
-        c.sources["vector"] = float(r.get("similarity", 0.0)) / top
+        # Raw cosine similarity, deliberately not rescaled against this
+        # result set's best hit: fusion ranks these, and a rescaled score
+        # would claim a perfect match whenever nothing better existed.
+        c.sources["vector"] = float(r.get("similarity", 0.0))
         out.append(c)
     return out
 
@@ -666,45 +672,81 @@ DEFAULT_WEIGHTS = {
 }
 
 
+# Reciprocal-rank-fusion damping constant. The standard value from Cormack
+# et al. (2009); large enough that the gap between rank 1 and rank 2 does not
+# dwarf the agreement signal from a second branch.
+RRF_K = 60
+
+
 def fuse_candidates(
     branches: list[list[Candidate]],
     weights: dict[str, float] | None = None,
+    rrf_k: int = RRF_K,
 ) -> list[Candidate]:
-    """Union candidates by chunk_id and produce a fused score.
+    """Union candidates by chunk_id and fuse them by weighted reciprocal rank.
 
-    Each branch contributes a normalized [0, 1] score; we sum them weighted
-    by ``weights[branch_name]``. A chunk hit by multiple branches gets a
-    higher fused score than one hit by a single branch alone — which is
-    exactly the reciprocal-rank-fusion intuition adapted to weighted scores.
+    Fusion scores **ranks, not raw scores**. Each branch previously normalized
+    its own scores by dividing by that branch's top score, which meant the best
+    hit of every branch was pinned to exactly 1.0 no matter how bad it was in
+    absolute terms. A query with no good semantic match still handed its
+    least-bad vector hit a perfect score, and at weight 0.5 that junk outranked
+    genuine multi-branch agreement.
+
+    Reciprocal rank fusion is immune to that because it never compares scores
+    across branches — only positions:
+
+        score(c) = Σ_b  weights[b] / (rrf_k + rank_b(c))
+
+    A chunk that several branches independently rank highly beats a chunk that
+    one branch happened to put first, which is the behaviour the weighted sum
+    was reaching for. Raw per-branch scores are kept on the candidate for
+    observability and as a deterministic tiebreak.
+
+    The result is rescaled to [0, 1] against the best achievable score (every
+    branch ranking the chunk first). Rescaling is a single positive linear
+    factor, so it cannot reorder anything — it just keeps ``fused_score`` in
+    the range downstream threshold and blending code already expects.
     """
     weights = weights or DEFAULT_WEIGHTS
 
     by_chunk: dict[str, Candidate] = {}
     for branch in branches:
-        for c in branch:
+        for rank, c in enumerate(branch, start=1):
             existing = by_chunk.get(c.chunk_id)
             if existing is None:
                 by_chunk[c.chunk_id] = c
-            else:
-                # Merge sources — same chunk hit by multiple branches.
-                for src, score in c.sources.items():
-                    existing.sources[src] = max(existing.sources.get(src, 0.0), score)
-                # Take the longest content (some branches don't read content).
-                if len(c.content) > len(existing.content):
-                    existing.content = c.content
+                for src in c.sources:
+                    c.source_ranks[src] = rank
+                continue
+            # Merge sources — same chunk hit by multiple branches. Keep the
+            # best score and the best (lowest) rank seen for each branch.
+            for src, score in c.sources.items():
+                existing.sources[src] = max(existing.sources.get(src, 0.0), score)
+                previous = existing.source_ranks.get(src)
+                existing.source_ranks[src] = (
+                    rank if previous is None else min(previous, rank)
+                )
+            # Take the longest content (some branches don't read content).
+            if len(c.content) > len(existing.content):
+                existing.content = c.content
+
+    # Best achievable score: every contributing branch ranks the chunk first.
+    best_possible = sum(weights.get(src, 0.0) for src in weights) / (rrf_k + 1)
 
     for c in by_chunk.values():
-        c.fused_score = sum(
-            weights.get(src, 0.0) * score for src, score in c.sources.items()
+        raw = sum(
+            weights.get(src, 0.0) / (rrf_k + rank)
+            for src, rank in c.source_ranks.items()
         )
-        # Multi-source bonus: if a chunk is hit by ≥2 branches, boost it.
-        # This is the heart of "did multiple retrievers agree?".
-        if len(c.sources) >= 2:
-            c.fused_score = min(1.0, c.fused_score * 1.15)
-        if len(c.sources) >= 3:
-            c.fused_score = min(1.0, c.fused_score * 1.10)
+        c.fused_score = raw / best_possible if best_possible > 0 else 0.0
 
-    out = sorted(by_chunk.values(), key=lambda c: c.fused_score, reverse=True)
+    # Ties on reciprocal rank fall back to the strongest raw branch score, so
+    # ordering stays deterministic instead of depending on dict insertion.
+    out = sorted(
+        by_chunk.values(),
+        key=lambda c: (c.fused_score, max(c.sources.values(), default=0.0)),
+        reverse=True,
+    )
     return out
 
 

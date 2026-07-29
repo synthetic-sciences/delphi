@@ -9,6 +9,7 @@ Expected improvement: +0.15-0.25 on adversarial discrimination score.
 """
 
 import logging
+import threading
 from typing import Any
 
 import numpy as np
@@ -147,11 +148,74 @@ class Reranker:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 _reranker: Reranker | None = None
+_load_lock = threading.Lock()
+_load_failed: BaseException | None = None
+_warm_thread: threading.Thread | None = None
 
 
 def get_reranker() -> Reranker:
-    """Get the global reranker instance (lazy-loaded on first use)."""
-    global _reranker
-    if _reranker is None:
-        _reranker = Reranker()
+    """Get the global reranker instance (lazy-loaded on first use).
+
+    Loading is serialized: a cold cross-encoder is hundreds of megabytes, and
+    without the lock every concurrent request would start its own download.
+    """
+    global _reranker, _load_failed
+    if _reranker is not None:
+        return _reranker
+    with _load_lock:
+        if _reranker is None:
+            try:
+                _reranker = Reranker()
+                _load_failed = None
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                _load_failed = exc
+                raise
     return _reranker
+
+
+def is_reranker_ready() -> bool:
+    """True when a rerank call will not block on a cold model load."""
+    return _reranker is not None
+
+
+def reranker_status() -> dict[str, object]:
+    """Readiness snapshot for health endpoints and benchmark preflight.
+
+    Callers that need reranking to be *consistently* applied — a benchmark
+    run, most obviously — should wait for ``ready`` before issuing queries.
+    Otherwise the first few results are ranked differently from the rest.
+    """
+    loading = _warm_thread is not None and _warm_thread.is_alive()
+    return {
+        "ready": _reranker is not None,
+        "loading": loading,
+        "model": getattr(_reranker, "model_name", None),
+        "error": None if _load_failed is None else str(_load_failed),
+    }
+
+
+def warm_reranker() -> threading.Thread | None:
+    """Start loading the cross-encoder in the background.
+
+    Called at startup so the first real query does not pay a multi-minute
+    model download. Returns the warming thread, or ``None`` if the model is
+    already resident.
+    """
+    global _warm_thread
+    if _reranker is not None:
+        return None
+    if _warm_thread is not None and _warm_thread.is_alive():
+        return _warm_thread
+
+    def _load() -> None:
+        try:
+            get_reranker()
+            logger.info("Reranker warm-up complete")
+        except Exception as exc:  # noqa: BLE001 - warm-up must never crash boot
+            logger.warning("Reranker warm-up failed: %s", exc)
+
+    _warm_thread = threading.Thread(
+        target=_load, name="reranker-warmup", daemon=True
+    )
+    _warm_thread.start()
+    return _warm_thread

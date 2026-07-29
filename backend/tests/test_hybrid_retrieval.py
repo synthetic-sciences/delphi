@@ -137,7 +137,7 @@ def test_bm25_search_uses_websearch_or_syntax_for_multiple_terms():
     assert session.params["query"] == "alpha or beta"
 
 
-def test_vector_to_candidates_normalizes_against_top():
+def test_vector_to_candidates_keeps_raw_similarity():
     raw = [
         {"chunk_id": "a", "similarity": 0.8, "content": "x"},
         {"chunk_id": "b", "similarity": 0.4, "content": "y"},
@@ -145,9 +145,12 @@ def test_vector_to_candidates_normalizes_against_top():
     ]
     cands = vector_to_candidates(raw)
     assert len(cands) == 3
-    assert cands[0].sources["vector"] == 1.0  # top is 1.0 after norm
-    assert cands[1].sources["vector"] == 0.5
-    assert cands[2].sources["vector"] == 0.25
+    # Raw cosine is preserved. Rescaling against the best hit in the result
+    # set used to report 1.0 here, which claimed a perfect semantic match
+    # even when the whole result set was weak.
+    assert cands[0].sources["vector"] == 0.8
+    assert cands[1].sources["vector"] == 0.4
+    assert cands[2].sources["vector"] == 0.2
 
 
 def test_vector_to_candidates_handles_empty():
@@ -155,68 +158,106 @@ def test_vector_to_candidates_handles_empty():
     assert vector_to_candidates(None or []) == []
 
 
-def test_fuse_single_source_basic_score():
-    c = Candidate(chunk_id="x", content="foo")
-    c.sources["vector"] = 0.8
-    fused = fuse_candidates([[c]])
-    assert len(fused) == 1
-    # Single source: no multi-hit bonus, just weight * score.
-    expected = DEFAULT_WEIGHTS["vector"] * 0.8
-    assert abs(fused[0].fused_score - expected) < 1e-9
+def _vector_branch(*scores: float) -> list[Candidate]:
+    """A rank-ordered vector branch, one candidate per score."""
+    branch = []
+    for index, score in enumerate(scores):
+        c = Candidate(chunk_id=f"v{index}", content="")
+        c.sources["vector"] = score
+        branch.append(c)
+    return branch
 
 
-def test_fuse_multi_source_gets_bonus():
-    # Same chunk hit by two branches.
+def test_fuse_scores_rank_not_magnitude():
+    # Two branches, each with one hit at rank 1. Raw magnitudes differ wildly
+    # (a cosine and a ts_rank_cd are not the same unit) but both are rank 1,
+    # so the only thing separating them is the branch weight.
+    vec = Candidate(chunk_id="a", content="")
+    vec.sources["vector"] = 0.31
+    bm = Candidate(chunk_id="b", content="")
+    bm.sources["bm25"] = 87.0
+
+    fused = fuse_candidates([[vec], [bm]])
+    by_id = {f.chunk_id: f.fused_score for f in fused}
+    assert by_id["a"] > by_id["b"]  # vector weight 0.5 beats bm25 weight 0.25
+    # The 87.0 magnitude bought nothing: score depends only on rank + weight.
+    expected_ratio = DEFAULT_WEIGHTS["bm25"] / DEFAULT_WEIGHTS["vector"]
+    assert abs(by_id["b"] / by_id["a"] - expected_ratio) < 1e-9
+
+
+def test_fuse_weak_top_hit_loses_to_multi_branch_agreement():
+    """The regression this fusion exists to prevent.
+
+    A query with no good semantic match still produces a vector branch, and
+    its first result is rank 1 no matter how irrelevant it is. Under the old
+    max-normalized weighted sum that junk hit was rescaled to a perfect 1.0
+    and outscored a chunk that three branches agreed on. It must not.
+    """
+    junk = Candidate(chunk_id="junk", content="")
+    junk.sources["vector"] = 0.32  # least-bad hit of a hopeless vector search
+
+    agreed_bm = Candidate(chunk_id="real", content="")
+    agreed_bm.sources["bm25"] = 0.9
+    agreed_sym = Candidate(chunk_id="real", content="")
+    agreed_sym.sources["symbol"] = 0.8
+    agreed_tri = Candidate(chunk_id="real", content="")
+    agreed_tri.sources["trigram"] = 0.7
+
+    fused = fuse_candidates(
+        [[junk], [agreed_bm], [agreed_sym], [agreed_tri]]
+    )
+    assert fused[0].chunk_id == "real"
+    assert set(fused[0].source_ranks) == {"bm25", "symbol", "trigram"}
+
+
+def test_fuse_merges_sources_and_keeps_best_rank():
     c1 = Candidate(chunk_id="x", content="foo")
     c1.sources["vector"] = 0.8
+    filler = Candidate(chunk_id="filler", content="")
+    filler.sources["bm25"] = 0.1
     c2 = Candidate(chunk_id="x", content="foo body longer")
     c2.sources["bm25"] = 0.5
 
-    fused = fuse_candidates([[c1], [c2]])
-    assert len(fused) == 1
-    # Sources should be merged.
-    assert set(fused[0].sources.keys()) == {"vector", "bm25"}
-    # Multi-source bonus is 1.15× when ≥2 sources hit.
-    base = (
-        DEFAULT_WEIGHTS["vector"] * 0.8
-        + DEFAULT_WEIGHTS["bm25"] * 0.5
-    )
-    expected = min(1.0, base * 1.15)
-    assert abs(fused[0].fused_score - expected) < 1e-9
+    # x is rank 1 in the vector branch and rank 2 in the bm25 branch.
+    fused = fuse_candidates([[c1], [filler, c2]])
+    x = next(f for f in fused if f.chunk_id == "x")
+    assert set(x.sources) == {"vector", "bm25"}
+    assert x.source_ranks == {"vector": 1, "bm25": 2}
     # Longer content wins.
-    assert fused[0].content == "foo body longer"
+    assert x.content == "foo body longer"
 
 
-def test_fuse_three_sources_compounds_bonus():
-    c1 = Candidate(chunk_id="x", content="")
-    c1.sources["vector"] = 0.7
-    c2 = Candidate(chunk_id="x", content="")
-    c2.sources["symbol"] = 0.9
-    c3 = Candidate(chunk_id="x", content="")
-    c3.sources["bm25"] = 0.4
-
-    fused = fuse_candidates([[c1], [c2], [c3]])
-    assert len(fused) == 1
-    # 2+ source bonus AND 3+ source bonus both apply.
-    base = (
-        DEFAULT_WEIGHTS["vector"] * 0.7
-        + DEFAULT_WEIGHTS["symbol"] * 0.9
-        + DEFAULT_WEIGHTS["bm25"] * 0.4
-    )
-    expected = min(1.0, base * 1.15 * 1.10)
-    assert abs(fused[0].fused_score - expected) < 1e-9
+def test_fuse_rescales_to_unit_range():
+    # A chunk ranked first by every weighted branch scores exactly 1.0.
+    branches = []
+    for src in DEFAULT_WEIGHTS:
+        c = Candidate(chunk_id="x", content="")
+        c.sources[src] = 1.0
+        branches.append([c])
+    fused = fuse_candidates(branches)
+    assert abs(fused[0].fused_score - 1.0) < 1e-9
+    # And nothing can exceed it.
+    assert all(f.fused_score <= 1.0 + 1e-9 for f in fused)
 
 
-def test_fuse_results_sorted_descending():
-    a = Candidate(chunk_id="a", content="")
-    a.sources["vector"] = 0.3
-    b = Candidate(chunk_id="b", content="")
-    b.sources["vector"] = 0.9
-    c = Candidate(chunk_id="c", content="")
-    c.sources["vector"] = 0.6
+def test_fuse_results_sorted_descending_by_rank():
+    branch = _vector_branch(0.9, 0.6, 0.3)
+    fused = fuse_candidates([branch])
+    assert [f.chunk_id for f in fused] == ["v0", "v1", "v2"]
+    assert [f.source_ranks["vector"] for f in fused] == [1, 2, 3]
 
-    fused = fuse_candidates([[a, b, c]])
-    assert [f.chunk_id for f in fused] == ["b", "c", "a"]
+
+def test_fuse_ties_broken_by_raw_score_not_insertion_order():
+    # Both chunks are rank 1 in their own single-branch list, so reciprocal
+    # rank ties. The stronger raw score must win deterministically.
+    weak = Candidate(chunk_id="weak", content="")
+    weak.sources["vector"] = 0.2
+    strong = Candidate(chunk_id="strong", content="")
+    strong.sources["vector"] = 0.95
+
+    assert fuse_candidates([[weak], [strong]])[0].chunk_id == "strong"
+    # Insertion order reversed: same answer.
+    assert fuse_candidates([[strong], [weak]])[0].chunk_id == "strong"
 
 
 def test_fuse_max_score_kept_when_same_source_appears_twice():
