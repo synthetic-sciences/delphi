@@ -77,6 +77,12 @@ def test_trigram_needles_prefer_code_symbol_over_long_environment_noise():
     ) == ["handlAuthCallback"]
 
 
+def test_trigram_needles_keep_long_uppercase_typo_over_question_prose():
+    assert _trigram_search_needles(
+        "where is VERY_LONG_APPLICATION_SETTNG defined",
+    ) == ["VERY_LONG_APPLICATION_SETTNG"]
+
+
 def test_exact_symbol_search_uses_every_selected_needle():
     class EmptyRows:
         def mappings(self):

@@ -5,7 +5,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from synsc.services.hybrid_retrieval import Candidate
-from synsc.services.search_service import _select_file_diverse_results
+from synsc.services.search_service import (
+    _select_file_diverse_results,
+    _select_source_diverse_results,
+)
 
 
 def _result(
@@ -167,6 +170,39 @@ def test_file_diversity_keeps_same_path_from_distinct_repositories() -> None:
         "repo-a-readme",
         "repo-b-readme",
     ]
+
+
+def test_source_diversity_prioritizes_typo_recovery_in_two_result_window() -> None:
+    ranked = [
+        _result("vector-1", "src/vector_1.py", 0.9),
+        _result("vector-2", "src/vector_2.py", 0.8),
+        _result("bm25-1", "src/bm25.py", 0.2),
+        _result("trigram-1", "src/trigram.py", 0.1),
+    ]
+    ranked[0]["candidate_sources"] = {"vector": 1.0}
+    ranked[1]["candidate_sources"] = {"vector": 0.9}
+    ranked[2]["candidate_sources"] = {"bm25": 0.8}
+    ranked[3]["candidate_sources"] = {"trigram": 0.8}
+
+    selected = _select_source_diverse_results(ranked, top_k=2)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "vector-1",
+        "trigram-1",
+    ]
+
+
+def test_source_diversity_top_one_preserves_best_ranked_result() -> None:
+    ranked = [
+        _result("vector-1", "src/vector.py", 0.9),
+        _result("trigram-1", "src/trigram.py", 0.1),
+    ]
+    ranked[0]["candidate_sources"] = {"vector": 1.0}
+    ranked[1]["candidate_sources"] = {"trigram": 0.8}
+
+    selected = _select_source_diverse_results(ranked, top_k=1)
+
+    assert [row["chunk_id"] for row in selected] == ["vector-1"]
 
 
 def test_agent_search_uses_high_recall_file_selection(monkeypatch) -> None:

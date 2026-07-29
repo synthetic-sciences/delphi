@@ -185,7 +185,8 @@ def _trigram_search_needles(query: str, *, limit: int = 1) -> list[str]:
     if limit <= 0:
         return []
 
-    ranked: list[tuple[float, int, str]] = []
+    code_ranked: list[tuple[float, int, str]] = []
+    prose_ranked: list[tuple[float, int, str]] = []
     noisy_fallbacks: list[tuple[float, int, str]] = []
     for order, identifier in enumerate(extract_identifiers(query)):
         is_environment_noise = (
@@ -216,13 +217,16 @@ def _trigram_search_needles(query: str, *, limit: int = 1) -> list[str]:
                 else 0.0
             )
             specificity = min(len(value), 24) / 24
-            ranked.append((code_shape + specificity, order, value))
+            ranked_value = (code_shape + specificity, order, value)
+            if code_shape:
+                code_ranked.append(ranked_value)
+            else:
+                prose_ranked.append(ranked_value)
 
-    # A query that consists only of an uppercase constant still deserves fuzzy
-    # retrieval; suppress long environment-shaped terms only when a better
-    # code-shaped candidate is present.
-    if not ranked:
-        ranked = noisy_fallbacks
+    # Prefer clear code identifiers, then long uppercase constants, then plain
+    # prose. This suppresses environment noise beside a camel/snake-case
+    # symbol without letting words such as "defined" hide a constant typo.
+    ranked = code_ranked or noisy_fallbacks or prose_ranked
 
     selected: list[str] = []
     seen: set[str] = set()

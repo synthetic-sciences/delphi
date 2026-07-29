@@ -920,7 +920,10 @@ def _select_source_diverse_results(
 
     original_rank = {id(result): index for index, result in enumerate(results)}
     selected_ids = {id(result) for result in selected}
-    for source in ("vector", "bm25", "symbol", "path", "trigram"):
+    # Preserve the semantic baseline first, then the highest-precision
+    # lexical branches. Trigram precedes broad BM25 so small result windows
+    # still retain the only branch able to recover a misspelled identifier.
+    for source in ("vector", "symbol", "path", "trigram", "bm25"):
         if any(
             source in (result.get("candidate_sources") or {})
             for result in selected
@@ -961,7 +964,7 @@ def _select_source_diverse_results(
         if replacement_index is None:
             continue
 
-        selected_ids.remove(id(selected[replacement_index]))
+        selected_ids.discard(id(selected[replacement_index]))
         selected[replacement_index] = candidate
         selected_ids.add(id(candidate))
 
