@@ -88,21 +88,28 @@ a, button { -webkit-tap-highlight-color: transparent; }
 
 .prose p { text-wrap: pretty; }
 
+/* Type scale.
+ *
+ * Sizes are deliberately editorial rather than poster-sized: the previous
+ * scale topped out at 131px for the hero and 83px for section headings,
+ * which reads as a splash page and pushes every section past a full
+ * viewport before any content appears. Tracking tightens as size grows,
+ * and leading opens up as size shrinks, so the rhythm stays even. */
 .display-title {
   font-family: var(--font-serif), Georgia, serif;
-  font-size: clamp(3.4rem, 8.5vw, 8.2rem);
+  font-size: clamp(2.5rem, 5.6vw, 4.5rem);
   font-weight: 400;
-  letter-spacing: -0.058em;
-  line-height: 0.92;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
   text-wrap: balance;
 }
 
 .section-title {
   font-family: var(--font-serif), Georgia, serif;
-  font-size: clamp(2.5rem, 5vw, 5.2rem);
+  font-size: clamp(1.85rem, 3.1vw, 2.85rem);
   font-weight: 400;
-  letter-spacing: -0.045em;
-  line-height: 0.98;
+  letter-spacing: -0.028em;
+  line-height: 1.08;
   text-wrap: balance;
 }
 
@@ -116,10 +123,10 @@ a, button { -webkit-tap-highlight-color: transparent; }
 
 .measure {
   font-family: var(--font-serif), Georgia, serif;
-  font-size: clamp(4rem, 10vw, 8.5rem);
+  font-size: clamp(2.4rem, 4.6vw, 3.9rem);
   font-variant-numeric: lining-nums tabular-nums;
-  letter-spacing: -0.06em;
-  line-height: 0.82;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
 }
 
 .hero-veil {
@@ -283,23 +290,23 @@ button:focus-visible {
 }
 
 .article-prose {
-  font-size: clamp(1.08rem, 1.6vw, 1.23rem);
-  line-height: 1.82;
+  font-size: clamp(1.02rem, 1.05vw, 1.115rem);
+  line-height: 1.72;
   color: var(--fg-dim);
 }
 
 .article-prose p {
-  margin-top: 1.4em;
+  margin-top: 1.35em;
   text-wrap: pretty;
 }
 
 .article-prose h2 {
-  margin-top: 3.2em;
+  margin-top: 2.6em;
   font-family: var(--font-serif), Georgia, serif;
-  font-size: clamp(2.1rem, 4vw, 3.8rem);
+  font-size: clamp(1.55rem, 2.3vw, 2.15rem);
   font-weight: 400;
-  letter-spacing: -0.04em;
-  line-height: 1;
+  letter-spacing: -0.025em;
+  line-height: 1.14;
   color: var(--fg-strong);
 }
 
@@ -367,3 +374,119 @@ a.quiet:hover {
 .light-only { display: none; }
 [data-theme="light"] .dark-only { display: none; }
 [data-theme="light"] .light-only { display: block; }
+
+/* ---- expandable evidence ------------------------------------------ */
+/* Traces sit inside article prose, so they inherit the measure but drop
+ * the serif: everything here is data, and data reads better in mono. */
+.trace-disclosure {
+  margin-top: 1.1rem;
+  border: 1px solid var(--line);
+  background: var(--code-bg);
+}
+
+.trace-disclosure .trace-disclosure {
+  margin: 0.75rem 0 0;
+  background: transparent;
+}
+
+.trace-summary {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 0.7rem;
+  padding: 0.7rem 0.85rem;
+  text-align: left;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--fg-dim);
+  transition: color 140ms ease;
+}
+
+.trace-summary:hover { color: var(--fg-strong); }
+
+.trace-caret {
+  width: 0.8em;
+  flex: none;
+  color: var(--gold);
+}
+
+.trace-summary-text { flex: 1 1 auto; }
+
+.trace-summary-meta {
+  flex: none;
+  color: var(--fg-mute);
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+}
+
+.trace-body {
+  border-top: 1px solid var(--line);
+  padding: 0.85rem;
+}
+
+.trace-facts {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 0.3rem 0.9rem;
+  margin: 0 0 0.9rem;
+  font-size: 0.72rem;
+  line-height: 1.6;
+}
+
+.trace-facts dt {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+
+.trace-facts dd { margin: 0; overflow-wrap: anywhere; color: var(--fg-dim); }
+
+.trace-json {
+  overflow-x: auto;
+  max-height: 22rem;
+  margin: 0;
+  border: 1px solid var(--line);
+  padding: 0.75rem 0.85rem;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.68rem;
+  line-height: 1.6;
+  white-space: pre;
+  color: var(--fg-dim);
+}
+
+.trace-ranked {
+  overflow-x: auto;
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+
+.trace-ranked-head,
+.trace-ranked-row {
+  display: grid;
+  grid-template-columns: 2.2rem minmax(14rem, 1fr) 7rem 3.4rem;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.32rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.trace-ranked-head {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+
+.trace-ranked-row { color: var(--fg-mute); }
+.trace-ranked-row.is-gold { color: var(--fg-strong); }
+.trace-ranked-row.is-gold em {
+  font-style: normal;
+  color: var(--gold);
+}
+
+.trace-path { overflow-wrap: anywhere; }
+.trace-branches { color: var(--gold); font-size: 0.62rem; }

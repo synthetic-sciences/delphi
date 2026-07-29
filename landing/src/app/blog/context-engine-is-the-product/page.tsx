@@ -9,6 +9,7 @@ import {
   RetrievalFigure,
 } from "@/components/EvidenceFigure";
 import { ScopeStatement } from "@/components/ScopeStatement";
+import { TraceGallery } from "@/components/TraceGallery";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteNav } from "@/components/SiteNav";
 import { ARTICLE, RETRIEVAL_AUDIT } from "@/lib/evidence";
@@ -39,6 +40,7 @@ const SECTIONS = [
   ["product", "What changed in the product"],
   ["claim", "What we can claim"],
   ["next", "Next evaluation"],
+  ["traces", "Open the evidence"],
 ] as const;
 
 export default function ContextEngineArticle() {
@@ -337,6 +339,29 @@ export default function ContextEngineArticle() {
               A leaderboard is useful. A system that can tell you why the agent
               succeeded—or why it failed—is the product.
             </p>
+
+            <h2 id="traces">Open the evidence</h2>
+
+            <p>
+              Every number above comes from queries that were recorded in
+              full. Below are real traces from the benchmarked build, two per
+              workflow, taken by position in the split rather than picked for
+              how they turned out. Expand one to see the exact query the engine
+              received, the ranked files it returned, which retrieval branch
+              found each one, and the raw response record.
+            </p>
+
+            <p>
+              They are worth reading for the failures as much as the hits. The
+              first <code>code2test</code> trace puts changelog files above the
+              regression test it was asked for: the query mentions a version
+              bump, changelogs are dense with version strings, and BM25 has no
+              way to know that a changelog can never be an answer to “which
+              test covers this?”. That is a live weakness, not a rounding
+              error.
+            </p>
+
+            <TraceGallery />
 
             <div className="mt-20 border-t border-[var(--line-strong)] pt-7">
               <p className="eyebrow text-[var(--fg-mute)]">References</p>

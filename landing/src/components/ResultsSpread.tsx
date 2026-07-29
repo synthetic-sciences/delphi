@@ -43,7 +43,7 @@ export function ResultsSpread() {
             </h2>
           </div>
           <div className="max-w-[680px] md:pt-9">
-            <p className="text-[20px] leading-8 text-[var(--fg-dim)] md:text-[23px] md:leading-9">
+            <p className="text-[17px] leading-7 text-[var(--fg-dim)] md:text-[18px] md:leading-8">
               With the model held fixed, Delphi produced the strongest code
               outcome in our 40-task developer pilot. The claim is narrow by
               design: state of the art in the tested developer-work setting,
@@ -69,7 +69,7 @@ export function ResultsSpread() {
               key={measurement.label}
             >
               <p
-                className={`font-serif text-[clamp(3.2rem,6vw,5.8rem)] leading-none tracking-[-0.055em] ${
+                className={`font-serif text-[clamp(2.1rem,4vw,3.3rem)] leading-none tracking-[-0.035em] ${
                   index === 0
                     ? "text-[var(--gold)]"
                     : "text-[var(--fg-strong)]"

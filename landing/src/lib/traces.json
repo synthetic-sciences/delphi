@@ -1,0 +1,1536 @@
+[
+  {
+    "baseCommit": "7ab761246cc449ddfc630001fb2caff160eb4ee3",
+    "goldFiles": [
+      "tests/e2e/etcd_grpcproxy_test.go"
+    ],
+    "latencyMs": 1856.4,
+    "query": "{\"changed_file_summary\": \"1 implementation files and 1 existing test files changed within 2 total files.\", \"implementation_file_count\": 1, \"implementation_files\": [\"server/etcdmain/grpc_proxy.go\"], \"pr_body\": \"This adds the min and max TLS version support from #13506 and #15156 to the grpc proxy.\\n\\nFixes #13506\\n\\n\\nPlease read https://github.com/etcd-io/etcd/blob/main/CONTRIBUTING.md#contribution-flow.\", \"pr_title\": \"add tls min/max version to grpc proxy\"}",
+    "ranked": [
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "CHANGELOG/CHANGELOG-3.2.md",
+        "score": 0.5254
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "tests/integration/v3_tls_test.go",
+        "score": 0.521
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "CHANGELOG/CHANGELOG-3.5.md",
+        "score": 0.339
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "CHANGELOG/CHANGELOG-3.6.md",
+        "score": 0.3337
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "CHANGELOG/CHANGELOG-3.4.md",
+        "score": 0.3183
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "path_affinity",
+          "vector"
+        ],
+        "path": "server/etcdmain/grpc_proxy.go",
+        "score": 0.3122
+      },
+      {
+        "branches": [
+          "path",
+          "path_affinity",
+          "vector"
+        ],
+        "path": "server/proxy/grpcproxy/doc.go",
+        "score": 0.3054
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "path_affinity",
+          "vector"
+        ],
+        "path": ".github/workflows/grpcproxy.yaml",
+        "score": 0.3046
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "tests/e2e/etcd_grpcproxy_test.go",
+        "score": 0.2797
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "CHANGELOG/CHANGELOG-4.0.md",
+        "score": 0.2779
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "CHANGELOG/CHANGELOG-3.1.md",
+        "score": 0.2684
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "go.mod",
+        "score": 0.2664
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "etcdutl/go.mod",
+        "score": 0.2661
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "CHANGELOG/CHANGELOG-3.3.md",
+        "score": 0.2653
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "server/go.mod",
+        "score": 0.2586
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "tests/go.mod",
+        "score": 0.2571
+      },
+      {
+        "branches": [
+          "bm25",
+          "path_affinity",
+          "vector"
+        ],
+        "path": "server/proxy/tcpproxy/doc.go",
+        "score": 0.257
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "hack/tls-setup/Procfile",
+        "score": 0.2568
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "tests/framework/e2e/cluster_proxy.go",
+        "score": 0.2548
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "api/versionpb/version.proto",
+        "score": 0.2521
+      }
+    ],
+    "raw": {
+      "hybrid": {
+        "candidates": 762,
+        "sources_hit": {
+          "bm25": 300,
+          "path": 255,
+          "symbol": 21,
+          "trigram": 0,
+          "vector": 300
+        }
+      },
+      "quality_mode": "agent",
+      "search_time_ms": 1840.8129215240479,
+      "timing": {
+        "db_search_ms": 338.7,
+        "embedding_ms": 682.7,
+        "pipeline_ms": 819.5
+      },
+      "warnings": null
+    },
+    "repo": "etcd-io/etcd",
+    "sampleId": "120f8ebe03b4feba2ac74c51",
+    "workflow": "code2test"
+  },
+  {
+    "baseCommit": "9f4f217153d1d289d17f267eaed65980aa0b1a9d",
+    "goldFiles": [
+      "tests/models/altclip/test_modeling_altclip.py",
+      "tests/test_modeling_common.py",
+      "tests/utils/test_core_model_loading.py"
+    ],
+    "latencyMs": 1839.6,
+    "query": "{\"changed_file\": \"src/transformers/core_model_loading.py\", \"pr_body\": \"# What does this PR do?\\n\\nAs per the title.\\n\\n## The issue\\n\\nThe problem is that transforms that want to remove a full part of a model name (such as a prefix, e.g. the `model.` start) are non bijective in general, i.e. we completely lose the information when they are dropped. So adding them back later when saving is impossible without runtime information about the checkpoint that was used, i.e. we need to know if we had the prefix before or not, we cannot infer it based on anything.\\n\\n## Proposed solution\\n\\nThis PR add a simple mechanism for such things, i.e. WeightTransform have a simple flag to describe if they were used to rename a weight or not. If it is the case, we keep them when we save the Transform on the model (this was already performed before). If not, we drop them, so that they are not used when resaving.\\nIt also introduces the `PrefixChange` class (a simple class inherited from `WeightRenaming`) to simplify full addition/removal of full parts, because otherwise the regexes to use in such cases are hard to read/write.\", \"pr_title\": \"[loading] Clean way to add/remove full parts in checkpoint names\"}",
+    "ranked": [
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/source/en/weightconverter.md",
+        "score": 0.3366
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "utils/mlinter/rules.toml",
+        "score": 0.3033
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/source/en/modeling_rules.md",
+        "score": 0.2972
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/source/en/add_new_model.md",
+        "score": 0.2948
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/source/en/pr_checks.md",
+        "score": 0.262
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/source/en/models.md",
+        "score": 0.256
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "src/transformers/models/megatron_gpt2/checkpoint_reshaping_and_interoperability.py",
+        "score": 0.2515
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "src/transformers/models/hubert/convert_hubert_original_s3prl_checkpoint_to_pytorch.py",
+        "score": 0.2451
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "src/transformers/models/tapas/convert_tapas_original_tf_checkpoint_to_pytorch.py",
+        "score": 0.2391
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": ".github/PULL_REQUEST_TEMPLATE.md",
+        "score": 0.2301
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "src/transformers/models/bert/convert_bert_original_tf2_checkpoint_to_pytorch.py",
+        "score": 0.2295
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "docs/source/ja/pr_checks.md",
+        "score": 0.2237
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "src/transformers/models/wav2vec2/convert_wav2vec2_original_s3prl_checkpoint_to_pytorch.py",
+        "score": 0.2217
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "utils/modular_model_converter.py",
+        "score": 0.2202
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "src/transformers/models/mistral4/convert_mistral4_weight_to_hf.py",
+        "score": 0.2166
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tests/repo_utils/test_mlinter.py",
+        "score": 0.2151
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "src/transformers/models/wavlm/convert_wavlm_original_s3prl_checkpoint_to_pytorch.py",
+        "score": 0.2084
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "docs/source/it/big_models.md",
+        "score": 0.2071
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "tests/utils/test_core_model_loading.py",
+        "score": 0.2055
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "MIGRATION_GUIDE_V5.md",
+        "score": 0.2038
+      }
+    ],
+    "raw": {
+      "hybrid": {
+        "candidates": 582,
+        "sources_hit": {
+          "bm25": 300,
+          "path": 17,
+          "symbol": 18,
+          "trigram": 1,
+          "vector": 300
+        }
+      },
+      "quality_mode": "agent",
+      "search_time_ms": 1827.2593021392822,
+      "timing": {
+        "db_search_ms": 595.1,
+        "embedding_ms": 409.3,
+        "pipeline_ms": 822.9
+      },
+      "warnings": null
+    },
+    "repo": "huggingface/transformers",
+    "sampleId": "12b84b0c5fa5ad2a5ec98099",
+    "workflow": "code2test"
+  },
+  {
+    "baseCommit": "a4d828f2d5ed85440bc0774eab342e6f9a5e5f62",
+    "goldFiles": [
+      "packages/create-vite/template-lit-ts/src/my-element.ts",
+      "packages/create-vite/template-lit/src/my-element.js"
+    ],
+    "latencyMs": 1708.4,
+    "query": "{\"diff_hunk_context\": \"@@ -22,6 +22,7 @@ function App() {\\n           </p>\\n         </div>\\n         <button\", \"given_file\": \"packages/create-vite/template-react-ts/src/App.tsx\", \"line\": 25, \"path\": \"packages/create-vite/template-react-ts/src/App.tsx\", \"pr_title\": \"fix(create-vite): use `type=\\\"button\\\"` to counter button in templates consistently\", \"review_comment\": \"Would you add this to other templates that are missing as well?\"}",
+    "ranked": [
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/README.md",
+        "score": 0.6517
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "symbol",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-react/src/App.jsx",
+        "score": 0.5086
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/package.json",
+        "score": 0.4993
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-svelte-ts/README.md",
+        "score": 0.4964
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-react/README.md",
+        "score": 0.4899
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/CHANGELOG.md",
+        "score": 0.446
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "symbol",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-preact/src/app.jsx",
+        "score": 0.4449
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-react-ts/README.md",
+        "score": 0.4217
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/guide/index.md",
+        "score": 0.4176
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "symbol",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-solid/src/App.jsx",
+        "score": 0.4089
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-qwik-ts/src/app.tsx",
+        "score": 0.4056
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-svelte/README.md",
+        "score": 0.3738
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-vue-ts/src/components/HelloWorld.vue",
+        "score": 0.3602
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-qwik/src/app.jsx",
+        "score": 0.3243
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-vue/src/components/HelloWorld.vue",
+        "score": 0.3217
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-svelte/src/App.svelte",
+        "score": 0.3062
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-svelte-ts/src/App.svelte",
+        "score": 0.3056
+      },
+      {
+        "branches": [
+          "bm25",
+          "symbol",
+          "vector"
+        ],
+        "path": "playground/css/async/base.js",
+        "score": 0.3048
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/blog/announcing-vite4.md",
+        "score": 0.2675
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/create-vite/template-vue-ts/README.md",
+        "score": 0.2633
+      }
+    ],
+    "raw": {
+      "hybrid": {
+        "candidates": 589,
+        "sources_hit": {
+          "bm25": 300,
+          "path": 86,
+          "symbol": 23,
+          "trigram": 0,
+          "vector": 300
+        }
+      },
+      "quality_mode": "agent",
+      "search_time_ms": 1699.620008468628,
+      "timing": {
+        "db_search_ms": 251.9,
+        "embedding_ms": 661.0,
+        "pipeline_ms": 786.8
+      },
+      "warnings": null
+    },
+    "repo": "vitejs/vite",
+    "sampleId": "056f7ac0b2a4940bc1ad5342",
+    "workflow": "comment2context"
+  },
+  {
+    "baseCommit": "cea3cf758645c9683db51822590b073ce3069dda",
+    "goldFiles": [
+      "packages/reactivity/src/collectionHandlers.ts"
+    ],
+    "latencyMs": 1541.1,
+    "query": "{\"diff_hunk_context\": \"@@ -112,6 +112,28 @@ describe('reactivity/reactive', () => {\\n     expect(dummy).toBe(false)\\n   })\\n \", \"given_file\": \"packages/reactivity/__tests__/reactive.spec.ts\", \"line\": 127, \"path\": \"packages/reactivity/__tests__/reactive.spec.ts\", \"pr_title\": \"fix(reactivity): handle `Set` with initial reactive values edge case\", \"review_comment\": \"The test case for `Map.set` here is incorrect because you only modified `add` without changing `set`. I think this part of the test would pass even without this PR. Additionally, the `observedMap` should have an initial value like `observedSet`\"}",
+    "ranked": [
+      {
+        "branches": [
+          "path",
+          "path_affinity",
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/reactive.spec.ts",
+        "score": 0.3532
+      },
+      {
+        "branches": [
+          "path",
+          "path_affinity",
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/reactiveArray.spec.ts",
+        "score": 0.3332
+      },
+      {
+        "branches": [
+          "bm25",
+          "symbol",
+          "vector"
+        ],
+        "path": "packages/reactivity/src/baseHandlers.ts",
+        "score": 0.3323
+      },
+      {
+        "branches": [
+          "path_affinity",
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/collections/Set.spec.ts",
+        "score": 0.2889
+      },
+      {
+        "branches": [
+          "path_affinity",
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/collections/Map.spec.ts",
+        "score": 0.2845
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/shallowReactive.spec.ts",
+        "score": 0.2584
+      },
+      {
+        "branches": [
+          "bm25",
+          "symbol",
+          "vector"
+        ],
+        "path": "packages/runtime-core/src/rendererTemplateRef.ts",
+        "score": 0.2377
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/reactivity/src/collectionHandlers.ts",
+        "score": 0.2295
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "changelogs/CHANGELOG-3.2.md",
+        "score": 0.2224
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/collections/WeakMap.spec.ts",
+        "score": 0.2216
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/collections/WeakSet.spec.ts",
+        "score": 0.2184
+      },
+      {
+        "branches": [
+          "path_affinity",
+          "vector"
+        ],
+        "path": "packages/reactivity/src/reactive.ts",
+        "score": 0.2144
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/effect.spec.ts",
+        "score": 0.2046
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages-private/dts-test/ref.test-d.ts",
+        "score": 0.2019
+      },
+      {
+        "branches": [
+          "path_affinity",
+          "vector"
+        ],
+        "path": "packages/reactivity/src/dep.ts",
+        "score": 0.2006
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "packages/reactivity/__benchmarks__/reactiveMap.bench.ts",
+        "score": 0.1985
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "packages/reactivity/src/watch.ts",
+        "score": 0.1954
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "changelogs/CHANGELOG-3.3.md",
+        "score": 0.1874
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "packages/reactivity/__tests__/effectScope.spec.ts",
+        "score": 0.1856
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "packages/reactivity/src/index.ts",
+        "score": 0.1837
+      }
+    ],
+    "raw": {
+      "hybrid": {
+        "candidates": 566,
+        "sources_hit": {
+          "bm25": 300,
+          "path": 4,
+          "symbol": 25,
+          "trigram": 0,
+          "vector": 300
+        }
+      },
+      "quality_mode": "agent",
+      "search_time_ms": 1531.5189361572266,
+      "timing": {
+        "db_search_ms": 193.6,
+        "embedding_ms": 526.1,
+        "pipeline_ms": 811.9
+      },
+      "warnings": null
+    },
+    "repo": "vuejs/core",
+    "sampleId": "08152da08307954bc8ce76d3",
+    "workflow": "comment2context"
+  },
+  {
+    "baseCommit": "9f598a31aafb92d675f38f1c8371e4ac76f858bf",
+    "goldFiles": [
+      "binding/form_mapping_test.go"
+    ],
+    "latencyMs": 1533.4,
+    "query": "{\"anchor_diff\": \"@@ -1,89 +1,90 @@\\n // Copyright 2014 Manu Martinez-Almeida. All rights reserved.\\n // Use of this source code is governed by a MIT style\\n // license that can be found in the LICENSE file.\\n \\n package binding\\n \\n import (\\n \\t\\\"errors\\\"\\n \\t\\\"fmt\\\"\\n+\\t\\\"mime/multipart\\\"\\n \\t\\\"reflect\\\"\\n \\t\\\"strconv\\\"\\n \\t\\\"strings\\\"\\n \\t\\\"time\\\"\\n \\n \\t\\\"github.com/gin-gonic/gin/internal/bytesconv\\\"\\n \\t\\\"github.com/gin-gonic/gin/internal/json\\\"\\n )\\n \\n var (\\n \\terrUnknownType = errors.New(\\\"unknown type\\\")\\n \\n \\t// ErrConvertMapStringSlice can not convert to map[string][]string\\n \\tErrConvertMapStringSlice = errors.New(\\\"can not convert to map slices of strings\\\")\\n \\n \\t// ErrConvertToMapString can not convert to map[string]string\\n \\tErrConvertToMapString = errors.New(\\\"can not convert to map of strings\\\")\\n )\\n \\n func mapURI(ptr any, m map[string][]string) error {\\n \\treturn mapFormByTag(ptr, m, \\\"uri\\\")\\n }\\n \\n func mapForm(ptr any, form map[string][]string) error {\\n \\treturn mapFormByTag(ptr, form, \\\"form\\\")\\n }\\n \\n func MapFormWithTag(ptr any, form map[string][]string, tag string) error {\\n \\treturn mapFormByTag(ptr, form, tag)\\n }\\n \\n var emptyField = reflect.StructField{}\\n \\n func mapFormByTag(ptr any, form map[string][]string, tag string) error {\\n \\t// Check if ptr is a map\\n \\tptrVal := reflect.ValueOf(ptr)\\n \\tvar pointed any\\n \\tif ptrVal.Kind() == reflect.Ptr {\\n \\t\\tptrVal = ptrVal.Elem()\\n \\t\\tpointed = ptrVal.Interface()\\n \\t}\\n \\tif ptrVal.Kind() == reflect.Map &&\\n \\t\\tptrVal.Type().Key().Kind() == reflect.String {\\n \\t\\tif pointed != nil {\\n \\t\\t\\tptr = pointed\\n \\t\\t}\\n \\t\\treturn setFormMap(ptr, form)\\n \\t}\\n \\n \\treturn mappingByPtr(ptr, formSource(form), tag)\\n }\\n \\n // setter tries to set value on a walking by fields of a struct\\n type setter interface {\\n \\tTrySet(value reflect.Value, field reflect.StructField, key string, opt setOptions) (isSet bool, err error)\\n }\\n \\n type formSource map[string][]string\\n \\n var _ setter = formSource(nil)\\n \\n // TrySet tries to set a value by request's form source (like map[string][]string)\\n func (form formSource) TrySet(value reflect.Value, field reflect.StructField, tagValue string, opt setOptions) (isSet bool, err error) {\\n \\treturn setByForm(value, field, form, tagValue, opt)\\n }\\n \\n func mappingByPtr(ptr any, setter setter, tag string) error {\\n \\t_, err := mapping(reflect.ValueOf(ptr), emptyField, setter, tag)\\n \\treturn err\\n }\\n \\n func mapping(value reflect.Value, field reflect.StructField, setter setter, tag string) (bool, error) {\\n \\tif field.Tag.Get(tag) == \\\"-\\\" { // just ignoring this field\\n \\t\\treturn false, nil\\n \\t}\\n \\n \\tvKind := value.Kind()\\n \\n \\tif vKind == reflect.Ptr {\\n \\t\\tvar isNew bool\\n@@ -158,160 +159,162 @@ func tryToSetValue(value reflect.Value, field reflect.StructField, setter setter\\n \\t\\tif k, v := head(opt, \\\"=\\\"); k == \\\"default\\\" {\\n \\t\\t\\tsetOpt.isDefaultExists = true\\n \\t\\t\\tsetOpt.defaultValue = v\\n \\t\\t}\\n \\t}\\n \\n \\treturn setter.TrySet(value, field, tagValue, setOpt)\\n }\\n \\n func setByForm(value reflect.Value, field reflect.StructField, form map[string][]string, tagValue string, opt setOptions) (isSet bool, err error) {\\n \\tvs, ok := form[tagValue]\\n \\tif !ok && !opt.isDefaultExists {\\n \\t\\treturn false, nil\\n \\t}\\n \\n \\tswitch value.Kind() {\\n \\tcase reflect.Slice:\\n \\t\\tif !ok {\\n \\t\\t\\tvs = []string{opt.defaultValue}\\n \\t\\t}\\n \\t\\treturn true, setSlice(vs, value, field)\\n \\tcase reflect.Array:\\n \\t\\tif !ok {\\n \\t\\t\\tvs = []string{opt.defaultValue}\\n \\t\\t}\\n \\t\\tif len(vs) != value.Len() {\\n \\t\\t\\treturn false, fmt.Errorf(\\\"%q is not valid value for %s\\\", vs, value.Type().String())\\n \\t\\t}\\n \\t\\treturn true, setArray(vs, value, field)\\n \\tdefault:\\n \\t\\tvar val string\\n \\t\\tif !ok {\\n \\t\\t\\tval = opt.defaultValue\\n \\t\\t}\\n \\n \\t\\tif len(vs) > 0 {\\n \\t\\t\\tval = vs[0]\\n \\t\\t}\\n \\t\\treturn true, setWithProperType(val, value, field)\\n \\t}\\n }\\n \\n func setWithProperType(val string, value reflect.Value, field reflect.StructField) error {\\n \\tswitch value.Kind() {\\n \\tcase reflect.Int:\\n \\t\\treturn setIntField(val, 0, value)\\n \\tcase reflect.Int8:\\n \\t\\treturn setIntField(val, 8, value)\\n \\tcase reflect.Int16:\\n \\t\\treturn setIntField(val, 16, value)\\n \\tcase reflect.Int32:\\n \\t\\treturn setIntField(val, 32, value)\\n \\tcase reflect.Int64:\\n \\t\\tswitch value.Interface().(type) {\\n \\t\\tcase time.Duration:\\n \\t\\t\\treturn setTimeDuration(val, value)\\n \\t\\t}\\n \\t\\treturn setIntField(val, 64, value)\\n \\tcase reflect.Uint:\\n \\t\\treturn setUintField(val, 0, value)\\n \\tcase reflect.Uint8:\\n \\t\\treturn setUintField(val, 8, value)\\n \\tcase reflect.Uint16:\\n \\t\\treturn setUintField(val, 16, value)\\n \\tcase reflect.Uint32:\\n \\t\\treturn setUintField(val, 32, value)\\n \\tcase reflect.Uint64:\\n \\t\\treturn setUintField(val, 64, value)\\n \\tcase reflect.Bool:\\n \\t\\treturn setBoolField(val, value)\\n \\tcase reflect.Float32:\\n \\t\\treturn setFloatField(val, 32, value)\\n \\tcase reflect.Float64:\\n \\t\\treturn setFloatField(val, 64, value)\\n \\tcase reflect.String:\\n \\t\\tvalue.SetString(val)\\n \\tcase reflect.Struct:\\n \\t\\tswitch value.Interface().(type) {\\n \\t\\tcase time.Time:\\n \\t\\t\\treturn setTimeField(val, field, value)\\n+\\t\\tcase multipart.FileHeader:\\n+\\t\\t\\treturn nil\\n \\t\\t}\\n \\t\\treturn json.Unmarshal(bytesconv.StringToBytes(val), value.Addr().Interface())\\n \\tcase reflect.Map:\\n \\t\\treturn json.Unmarshal(bytesconv.StringToBytes(val), value.Addr().Interface())\\n \\tcase reflect.Ptr:\\n \\t\\tif !value.Elem().IsValid() {\\n...[truncated]\", \"anchor_file\": \"binding/form_mapping.go\", \"intent\": \"fix(binding): binding error while not upload file (#3819) (#3820)\\n\\nfix(binding): binding error while not upload file (#3819) (#3820)\\n\\nCo-authored-by: zhangmj <zhangmj1@dustess.com>\\n\\nfix(binding): binding error while not upload file (#3819) (#3820)\\n\\nCo-authored-by: zhangmj <zhangmj1@dustess.com>\"}",
+    "ranked": [
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "binding/form_mapping.go",
+        "score": 0.489
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "binding/multipart_form_mapping.go",
+        "score": 0.4013
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "binding/form_mapping_test.go",
+        "score": 0.3624
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/header.go",
+        "score": 0.3193
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/binding.go",
+        "score": 0.3056
+      },
+      {
+        "branches": [
+          "bm25",
+          "symbol",
+          "vector"
+        ],
+        "path": "gin.go",
+        "score": 0.3008
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "binding/multipart_form_mapping_test.go",
+        "score": 0.2793
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/binding_nomsgpack.go",
+        "score": 0.2791
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "binding/form_mapping_benchmark_test.go",
+        "score": 0.2649
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/doc.md",
+        "score": 0.2635
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/form.go",
+        "score": 0.227
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/default_validator_test.go",
+        "score": 0.2199
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/default_validator.go",
+        "score": 0.217
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/binding_test.go",
+        "score": 0.2163
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "CHANGELOG.md",
+        "score": 0.1901
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "utils.go",
+        "score": 0.1892
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/uri.go",
+        "score": 0.1715
+      },
+      {
+        "branches": [
+          "bm25"
+        ],
+        "path": "errors.go",
+        "score": 0.165
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/protobuf.go",
+        "score": 0.1609
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "context_test.go",
+        "score": 0.1581
+      }
+    ],
+    "raw": {
+      "hybrid": {
+        "candidates": 436,
+        "sources_hit": {
+          "bm25": 300,
+          "path": 48,
+          "symbol": 6,
+          "trigram": 0,
+          "vector": 300
+        }
+      },
+      "quality_mode": "agent",
+      "search_time_ms": 1525.0256061553955,
+      "timing": {
+        "db_search_ms": 97.7,
+        "embedding_ms": 559.6,
+        "pipeline_ms": 867.7
+      },
+      "warnings": null
+    },
+    "repo": "gin-gonic/gin",
+    "sampleId": "0150e5de390fa7c521175b89",
+    "workflow": "edit2ripple"
+  },
+  {
+    "baseCommit": "40e96454f122a8220342429507f5652fdafe57e6",
+    "goldFiles": [
+      "docs/source/en/api/modular_diffusers/pipeline_blocks.md"
+    ],
+    "latencyMs": 2953.5,
+    "query": "{\"anchor_diff\": \"@@ -1556,161 +1556,168 @@ class ModularPipeline(ConfigMixin, PushToHubMixin):\\n         **kwargs,\\n     ):\\n         \\\"\\\"\\\"\\n         Initialize a ModularPipeline instance.\\n \\n         This method sets up the pipeline by:\\n         - creating default pipeline blocks if not provided\\n         - gather component and config specifications based on the pipeline blocks's requirement (e.g.\\n            expected_components, expected_configs)\\n         - update the loading specs of from_pretrained components based on the modular_model_index.json file from\\n            huggingface hub if `pretrained_model_name_or_path` is provided\\n         - create defaultfrom_config components and register everything\\n \\n         Args:\\n             blocks: `ModularPipelineBlocks` instance. If None, will attempt to load\\n                    default blocks based on the pipeline class name.\\n             pretrained_model_name_or_path: Path to a pretrained pipeline configuration. Can be None if the pipeline\\n                     does not require any additional loading config. If provided, will first try to load component specs\\n                     (only for from_pretrained components) and config values from `modular_model_index.json`, then\\n                     fallback to `model_index.json` for compatibility with standard non-modular repositories.\\n             components_manager:\\n                 Optional ComponentsManager for managing multiple component cross different pipelines and apply\\n                 offloading strategies.\\n             collection: Optional collection name for organizing components in the ComponentsManager.\\n             **kwargs: Additional arguments passed to `load_config()` when loading pretrained configuration.\\n \\n         Examples:\\n             ```python\\n             # Initialize with custom blocks\\n             pipeline = ModularPipeline(blocks=my_custom_blocks)\\n \\n             # Initialize from pretrained configuration\\n             pipeline = ModularPipeline(blocks=my_blocks, pretrained_model_name_or_path=\\\"my-repo/modular-pipeline\\\")\\n \\n             # Initialize with components manager\\n             pipeline = ModularPipeline(\\n                 blocks=my_blocks, components_manager=ComponentsManager(), collection=\\\"my_collection\\\"\\n             )\\n             ```\\n \\n         Notes:\\n             - If blocks is None, the method will try to find default blocks based on the pipeline class name\\n             - Components with default_creation_method=\\\"from_config\\\" are created immediately, its specs are not included\\n               in config dict and will not be saved in `modular_model_index.json`\\n             - Components with default_creation_method=\\\"from_pretrained\\\" are set to None and can be loaded later with\\n               `load_components()` (with or without specific component names)\\n             - The pipeline's config dict is populated with component specs (only for from_pretrained components) and\\n               config values, which will be saved as `modular_model_index.json` during `save_pretrained`\\n             - The pipeline's config dict is also used to store the pipeline blocks's class name, which will be saved as\\n               `_blocks_class_name` in the config dict\\n         \\\"\\\"\\\"\\n \\n         if modular_config_dict is None and config_dict is None and pretrained_model_name_or_path is not None:\\n             cache_dir = kwargs.pop(\\\"cache_dir\\\", None)\\n             force_download = kwargs.pop(\\\"force_download\\\", False)\\n             proxies = kwargs.pop(\\\"proxies\\\", None)\\n             token = kwargs.pop(\\\"token\\\", None)\\n             local_files_only = kwargs.pop(\\\"local_files_only\\\", False)\\n             revision = kwargs.pop(\\\"revision\\\", None)\\n \\n             load_config_kwargs = {\\n                 \\\"cache_dir\\\": cache_dir,\\n                 \\\"force_download\\\": force_download,\\n                 \\\"proxies\\\": proxies,\\n                 \\\"token\\\": token,\\n                 \\\"local_files_only\\\": local_files_only,\\n                 \\\"revision\\\": revision,\\n             }\\n \\n             modular_config_dict, config_dict = self._load_pipeline_config(\\n                 pretrained_model_name_or_path, **load_config_kwargs\\n             )\\n \\n         if blocks is None:\\n             if modular_config_dict is not None:\\n                 blocks_class_name = modular_config_dict.get(\\\"_blocks_class_name\\\")\\n             else:\\n                 blocks_class_name = self.default_blocks_name\\n             if blocks_class_name is not None:\\n                 diffusers_module = importlib.import_module(\\\"diffusers\\\")\\n-                blocks_class = getattr(diffusers_module, blocks_class_name)\\n+                blocks_class = getattr(diffusers_module, blocks_class_name, None)\\n+                # If the blocks_class is not found or is a base class (e.g. SequentialPipelineBlocks saved by from_blocks_dict) with empty block_classes\\n+                # fall back to default_blocks_name\\n+                if blocks_class is None or not blocks_class.block_classes:\\n+                    blocks_class_name = self.default_blocks_name\\n+                    blocks_class = getattr(diffusers_module, blocks_class_name)\\n+\\n+            if blocks_class is not None:\\n                 blocks = blocks_class()\\n             else:\\n                 logger.warning(f\\\"`blocks` is `None`, no default blocks class found for {self.__class__.__name__}\\\")\\n \\n         self._blocks = blocks\\n         self._components_manager = components_manager\\n         self._collection = collection\\n         self._component_specs = {spec.name: deepcopy(spec) for spec in self._blocks.expected_components}\\n         self._config_specs = {spec.name: deepcopy(spec) for spec in self._blocks.expected_configs}\\n \\n         # update component_specs and config_specs based on modular_model_index.json\\n         if modular_config_dict is not None:\\n             for name, value in modular_config_dict.items():\\n                 # all the components in modular_model_index.json are from_pretrained components\\n                 if name in self._component_specs and isinstance(value, (tuple, list)) and len(value) == 3:\\n                     library, class_name, component_spec_dict = value\\n                     component_spec = self._dict_to_component_spec(name, component_spec_dict)\\n                     component_spec.default_creation_method = \\\"from_pretrained\\\"\\n                     self._component_specs[name] = component_spec\\n \\n                 elif name in self._config_specs:\\n                     self._config_specs[name].default = value\\n \\n         # if `modular_config_dict` is None (i.e. `modular_model_index.json` is not found), update based on `config_dict` (i.e. `model_index.json`)\\n         elif config_dict is not None:\\n             for name, value in config_dict.items():\\n                 if name in self._component_specs and isinstance(value, (tuple, list)) and len(value) == 2:\\n                     library, class_name = value\\n                     component_spec_dict = {\\n                         \\\"repo\\\": pretrained_model_name_or_path,\\n                         \\\"subfolder\\\": name,\\n                         \\\"type_hint\\\": (library, class_name),\\n                     }\\n                     component_spec = self._dict_to_component_spec(name, component_spec_dict)\\n                     component_spec.default_creation_method = \\\"from_pretrained\\\"\\n                     self._component_specs[name] = component_spec\\n                 elif name in self._config_specs:\\n                     self._config_specs[name].default = value\\n \\n         if len(kwargs) > 0:\\n             logger.warning(f\\\"Unexpected input '{kwargs.keys()}' provided. This input will be ignored.\\\")\\n \\n         register_components_dict = {}\\n         for name, component_spec in self._component_specs.items():\\n             if component_spec.default_creation_method == \\\"from_config\\\":\\n                 component = component_spec.create()\\n             else:\\n                 component = None\\n             register_components_dict[name] = component\\n         self.register_components(**register_components_dict)\\n...[truncated]\", \"anchor_file\": \"src/diffusers/modular_pipelines/modular_pipeline.py\", \"intent\": \"[modular] fallback to default_blocks_name when loading base block classes in ModularPipeline\\n\\nso that we are able to correctly load repos like https://huggingface.co/diffusers/flux2-modular\\n\\nWhen creating a pipeline using `SequentialPipelineBlocks.from_blocks_dict()` and saving it, the `modular_model_index.json` stores `_blocks_class_name` as `\\\"SequentialPipelineBlocks\\\"`. On loading, `from_pretrained` tries to instantiate `SequentialPipelineBlocks()` directly, which has empty `block_classes` and produces a broken pipeline.\\n\\n```python\\nfrom diffusers import ModularPipeline\\npipe = ModularPipeline.from_pretrained(\\\"diffusers/flux2-modular\\\")\\nprint(pipe.blocks)\\n```\\n\\nunder `main`, it won't be able to map to `Flux2AutoBlocks`\\n\\n```\\n>>> print(pipe.blocks)\\nSequentialPipelineBlocks(\\n  Class: ModularPipelineBlocks\\n\\n  Description: \\n\\n\\n  Sub-Blocks:\\n)\\n```\\n\\nThis PR added a fallback behavior in `ModularPipeline.__init__ method` so if the resolved blocks class is not importable from our library or has empty `block_classes` (i.e., it's a base class like `SequentialPipelineBlocks`, `ConditionalPipelineBlocks`, etc.), fall back to the pipeline's `default_blocks_name` .\\n\\n[modular] fallback to default_blocks_name when loading base block classes in ModularPipeline (#13193)\\n\\nup\\n\\nCo-authored-by: yiyi@huggingface.co <yiyi@ip-26-0-161-123.ec2.internal>\"}",
+    "ranked": [
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "path_affinity",
+          "vector"
+        ],
+        "path": "docs/source/en/modular_diffusers/modular_pipeline.md",
+        "score": 0.6569
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "docs/source/en/modular_diffusers/auto_pipeline_blocks.md",
+        "score": 0.4906
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "docs/source/en/modular_diffusers/pipeline_block.md",
+        "score": 0.4803
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "vector"
+        ],
+        "path": "docs/source/en/modular_diffusers/sequential_pipeline_blocks.md",
+        "score": 0.4642
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "src/diffusers/pipelines/pipeline_flax_utils.py",
+        "score": 0.4552
+      },
+      {
+        "branches": [
+          "bm25",
+          "path",
+          "path_affinity",
+          "vector"
+        ],
+        "path": "docs/source/zh/modular_diffusers/modular_pipeline.md",
+        "score": 0.4372
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "src/diffusers/pipelines/pipeline_utils.py",
+        "score": 0.4364
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/source/en/modular_diffusers/custom_blocks.md",
+        "score": 0.435
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "docs/source/en/api/modular_diffusers/pipeline_blocks.md",
+        "score": 0.4273
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/source/en/using-diffusers/loading.md",
+        "score": 0.4224
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "docs/source/en/modular_diffusers/quickstart.md",
+        "score": 0.4145
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "docs/source/en/modular_diffusers/loop_sequential_pipeline_blocks.md",
+        "score": 0.4099
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "src/diffusers/modular_pipelines/flux2/modular_pipeline.py",
+        "score": 0.4066
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "src/diffusers/modular_pipelines/stable_diffusion_xl/modular_pipeline.py",
+        "score": 0.3793
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "src/diffusers/modular_pipelines/flux/modular_pipeline.py",
+        "score": 0.3076
+      },
+      {
+        "branches": [
+          "path",
+          "path_affinity",
+          "vector"
+        ],
+        "path": "src/diffusers/modular_pipelines/modular_pipeline.py",
+        "score": 0.2768
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "docs/source/en/api/modular_diffusers/pipeline.md",
+        "score": 0.2696
+      },
+      {
+        "branches": [
+          "symbol",
+          "vector"
+        ],
+        "path": "src/diffusers/utils/dummy_torch_and_transformers_objects.py",
+        "score": 0.2564
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "src/diffusers/modular_pipelines/qwenimage/modular_pipeline.py",
+        "score": 0.2447
+      },
+      {
+        "branches": [
+          "path",
+          "vector"
+        ],
+        "path": "tests/modular_pipelines/test_modular_pipelines_custom_blocks.py",
+        "score": 0.2446
+      }
+    ],
+    "raw": {
+      "hybrid": {
+        "candidates": 718,
+        "sources_hit": {
+          "bm25": 300,
+          "path": 275,
+          "symbol": 25,
+          "trigram": 0,
+          "vector": 300
+        }
+      },
+      "quality_mode": "agent",
+      "search_time_ms": 2941.990613937378,
+      "timing": {
+        "db_search_ms": 1321.9,
+        "embedding_ms": 704.7,
+        "pipeline_ms": 915.4
+      },
+      "warnings": null
+    },
+    "repo": "huggingface/diffusers",
+    "sampleId": "0978d6fdeb5a091c654607c7",
+    "workflow": "edit2ripple"
+  },
+  {
+    "baseCommit": "5e5ff3ace496a31b138b0820136a146bfb5de0ef",
+    "goldFiles": [
+      "context.go"
+    ],
+    "latencyMs": 1253.8,
+    "query": "{\"command\": \"go test ./.\", \"failure_excerpt\": \"$ go test ./.\\nFAIL\\tgithub.com/gin-gonic/gin [build failed]\\nFAIL\\n\\n# github.com/gin-gonic/gin [github.com/gin-gonic/gin.test]\\n./context_test.go:1644:21: undefined: MIMEPROTOBUF\", \"run_strategy\": \"go_test_package\", \"source_type\": \"local_test_reproduction\"}",
+    "ranked": [
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/binding_nomsgpack.go",
+        "score": 0.7058
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/binding.go",
+        "score": 0.6713
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "binding/binding_test.go",
+        "score": 0.5254
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "render/protobuf.go",
+        "score": 0.2271
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "testdata/protoexample/test.proto",
+        "score": 0.2234
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "binding/protobuf.go",
+        "score": 0.2133
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "binding/multipart_form_mapping_test.go",
+        "score": 0.207
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "render/msgpack.go",
+        "score": 0.2011
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "context_test.go",
+        "score": 0.1983
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "binding/msgpack_test.go",
+        "score": 0.1928
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "LICENSE",
+        "score": 0.1902
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "binding/multipart_form_mapping.go",
+        "score": 0.1877
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "render/render_test.go",
+        "score": 0.1852
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "binding/msgpack.go",
+        "score": 0.1805
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "binding/header.go",
+        "score": 0.1782
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "binding/form.go",
+        "score": 0.1738
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "BENCHMARKS.md",
+        "score": 0.1717
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "docs/doc.md",
+        "score": 0.1696
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "codec/json/api.go",
+        "score": 0.1656
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "binding/form_mapping_test.go",
+        "score": 0.1637
+      }
+    ],
+    "raw": {
+      "hybrid": {
+        "candidates": 300,
+        "sources_hit": {
+          "bm25": 3,
+          "path": 0,
+          "symbol": 0,
+          "trigram": 0,
+          "vector": 300
+        }
+      },
+      "quality_mode": "agent",
+      "search_time_ms": 1245.821237564087,
+      "timing": {
+        "db_search_ms": 28.3,
+        "embedding_ms": 331.7,
+        "pipeline_ms": 885.8
+      },
+      "warnings": null
+    },
+    "repo": "gin-gonic/gin",
+    "sampleId": "0f4d4723a06149a5172fed0a",
+    "workflow": "trace2code"
+  },
+  {
+    "baseCommit": "873cb8ae2fc291eaffbd71e3c83d17b2f0ed7abf",
+    "goldFiles": [
+      "tokio/src/sync/mpsc/block.rs"
+    ],
+    "latencyMs": 1274.3,
+    "query": "{\"command\": \"cargo test --features full,test-util -p tokio --test sync_mpsc\", \"failure_excerpt\": \"$ cargo test --features full,test-util -p tokio --test sync_mpsc\\n...\\n... ok\\ntest test_rx_unbounded_is_closed_when_there_are_no_senders_and_there_are_messages ... ok\\ntest try_recv_close_while_empty_bounded ... ok\\ntest test_rx_len_on_filled_channel ... ok\\ntest test_rx_unbounded_is_not_closed_when_there_are_senders ... ok\\ntest try_recv_close_while_empty_unbounded ... ok\\ntest test_rx_unbounded_is_not_empty_when_all_but_one_messages_are_consumed ... ok\\ntest try_reserve_fails ... ok\\ntest try_reserve_many_edge_cases ... ok\\ntest test_rx_unbounded_is_empty_when_all_messages_are_consumed ... ok\\ntest unconsumed_messages_are_dropped ... ok\\ntest try_send_fail ... ok\\ntest tx_close_gets_none ... ok\\ntest try_send_fail_with_try_recv ... ok\\ntest try_reserve_many_on_closed_channel ... ok\\ntest test_rx_unbounded_is_empty_when_no_messages_were_sent ... ok\\ntest reserve_many_and_send ... ok\\ntest try_reserve_many_zero ... ok\\ntest blocking_send ... ok\\ntest try_recv_unbounded ... ok\\ntest blocking_recv ... ok\\ntest try_reserve_many_and_send ... ok\\ntest try_reserve_many_full ... ok\\n\\nfailures:\\n\\n---- test_is_empty_32_msgs stdout ----\\n\\nthread 'test_is_empty_32_msgs' (937127) panicked at tokio/tests/sync_mpsc.rs:1432:9:\\n32. len: 0\\n\\n\\nfailures:\\n    test_is_empty_32_msgs\\n\\ntest result: FAILED. 88 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s\\n\\n\\n    Updating crates.io index\\n     Locking 212 packages to latest compatible versions\\n      Adding criterion v0.5.1 (available: v0.8.2)\\n      Adding hashbrown v0.14.5 (available: v0.17.1)\\n      Adding http v0.2.12 (available: v1.4.0)\\n      Adding mio v0.8.11 (available: v1.2.0)\\n      Adding mio-aio v0.9.0 (available: v2.0.0)\\n      Adding mockall v0.11.4 (available: v0.14.0)\\n      Adding nix v0.29.0 (available: v0.31.3)\\n      Adding rand v0.8.6 (available: v0.10.1)\\n      Adding rand_chacha v0.3.1 (available: v0.10.0)\\n      Adding socket2 v0.5.10 (available: v0.6.3)\\n      Adding windows-sys v0.48.0 (available: v0.61.2)\\n Downloading crates ...\\n  Downloaded num_cpus v1.17.0\\n  Downloaded mio v0.8.11\\n   Compiling libc v0.2.186\\n   Compiling proc-macro2 v1.0.106\\n   Compiling quote v1.0.45\\n   Compiling unicode-ident v1.0.24\\n   Compiling cfg-if v1.0.4\\n   Compiling autocfg v1.5.0\\n   Compiling futures-core v0.3.32\\n   Compiling memchr v2.8.0\\n   Compiling pin-project-lite v0.2.17\\n   Compiling parking_lot_core v0.9.12\\n   Compiling scopeguard v1.2.0\\n   Compiling smallvec v1.15.1\\n   Compiling zerocopy v0.8.48\\n   Compiling futures-sink v0.3.32\\n   Compiling regex-syntax v0.8.10\\n   Compiling syn v1.0.109\\n   Compiling slab v0.4.12\\n   Compiling bytes v1.11.1\\n   Compiling rustix v1.1.4\\n   Compiling getrandom v0.4.2\\n   Compiling predicates-core v1.0.10\\n   Compiling futures-task v0.3.32\\n   Compiling cfg_aliases v0.2.1\\n   Compiling either v1.15.0\\n   Compiling futures-io v0.3.32\\n   Compiling bitflags v2.11.1\\n   Compiling normalize-line-endings v0.3.0\\n   Compiling difflib v0.4.0\\n   Compiling linux-raw-sys v0.12.1\\n   Compiling termtree v0.5.1\\n   Compiling pin-utils v0.1.0\\n   Compiling once_cell v1.21.4\\n   Compiling fastrand v2.4.1\\n   Compiling lock_api v0.4.14\\n   Compiling lazy_static v1.5.0\\n   Compiling futures-channel v0.3.32\\n   Compiling fragile v2.1.0\\n   Compiling downcast v0.11.0\\n   Compiling nix v0.29.0\\n   Compiling predicates-tree v1.0.13\\n   Compiling itertools v0.10.5\\n   Compiling aho-corasick v1.1.4\\n   Compiling num-traits v0.2.19\\n   Compiling memoffset v0.9.1\\n   Compiling syn v2.0.117\\n   Compiling float-cmp v0.9.0\\n   Compiling errno v0.3.14\\n   Compiling mio v0.8.11\\n   Compiling num_cpus v1.17.0\\n   Compiling getrandom v0.2.17\\n   Compiling socket2 v0.5.10\\n   Compiling regex-automata v0.4.14\\n   Compiling signal-hook-registry v1.4.8\\n   Compiling tempfile v3.27.0\\n   Compiling rand_core v0.6.4\\n   Compiling parking_lot v0.12.5\\n   Compiling futures-macro v0.3.32\\n   Compiling tokio-macros v2.2.0 (/home/ubuntu/agent-retrieval-bench-private/data/repro_worktrees_v1_1_tokio_history/tokio-rs__tokio/f70416cb27d93e46bb1ef91a/tokio-macros)\\n   Compiling async-stream-impl v0.3.6\\n   Compiling regex v1.1\\n...[truncated]\", \"run_strategy\": \"cargo_test_focused\", \"source_type\": \"local_test_reproduction\"}",
+    "ranked": [
+      {
+        "branches": [
+          "bm25",
+          "symbol",
+          "vector"
+        ],
+        "path": "tokio/tests/sync_mpsc_weak.rs",
+        "score": 0.357
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio-stream/src/lib.rs",
+        "score": 0.2309
+      },
+      {
+        "branches": [
+          "trigram",
+          "vector"
+        ],
+        "path": "tokio/src/sync/mpsc/chan.rs",
+        "score": 0.2298
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/src/sync/tests/loom_mpsc.rs",
+        "score": 0.2271
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/src/sync/tests/mod.rs",
+        "score": 0.2234
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/src/runtime/scheduler/multi_thread_alt/mod.rs",
+        "score": 0.22
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/src/runtime/scheduler/multi_thread/mod.rs",
+        "score": 0.2166
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio-util/src/sync/mod.rs",
+        "score": 0.2133
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/src/io/read_buf.rs",
+        "score": 0.2101
+      },
+      {
+        "branches": [
+          "trigram",
+          "vector"
+        ],
+        "path": "tokio/src/util/idle_notified_set.rs",
+        "score": 0.2101
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio-util/src/lib.rs",
+        "score": 0.204
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/tests/sync_mpsc.rs",
+        "score": 0.2011
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/src/sync/mpsc/mod.rs",
+        "score": 0.1902
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "benches/sync_mpsc.rs",
+        "score": 0.1852
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio-util/tests/mpsc.rs",
+        "score": 0.1828
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio-stream/src/wrappers.rs",
+        "score": 0.1782
+      },
+      {
+        "branches": [
+          "bm25",
+          "vector"
+        ],
+        "path": "stress-test/examples/simple_echo_tcp.rs",
+        "score": 0.1761
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "spellcheck.toml",
+        "score": 0.176
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/src/fs/mod.rs",
+        "score": 0.1676
+      },
+      {
+        "branches": [
+          "vector"
+        ],
+        "path": "tokio/src/sync/tests/loom_oneshot.rs",
+        "score": 0.1642
+      }
+    ],
+    "raw": {
+      "hybrid": {
+        "candidates": 307,
+        "sources_hit": {
+          "bm25": 3,
+          "path": 0,
+          "symbol": 1,
+          "trigram": 19,
+          "vector": 300
+        }
+      },
+      "quality_mode": "agent",
+      "search_time_ms": 1267.2717571258545,
+      "timing": {
+        "db_search_ms": 51.1,
+        "embedding_ms": 419.9,
+        "pipeline_ms": 796.3
+      },
+      "warnings": null
+    },
+    "repo": "tokio-rs/tokio",
+    "sampleId": "1132f037ebb462f13652adff",
+    "workflow": "trace2code"
+  }
+]

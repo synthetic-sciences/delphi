@@ -16,12 +16,12 @@ export function ArticleHeader() {
           <span>{ARTICLE.readingTime}</span>
         </div>
 
-        <h1 className="mt-10 max-w-[1120px] font-serif text-[clamp(4rem,10vw,9.4rem)] leading-[0.84] tracking-[-0.065em] text-[var(--fg-strong)]">
+        <h1 className="mt-10 max-w-[780px] font-serif text-[clamp(2.4rem,5.2vw,4.1rem)] leading-[1.04] tracking-[-0.033em] text-[var(--fg-strong)]">
           {ARTICLE.title}
         </h1>
 
         <div className="mt-12 grid gap-10 border-t border-[var(--line-strong)] pt-7 md:grid-cols-[1.4fr_0.6fr] md:gap-20">
-          <p className="max-w-[820px] text-[20px] leading-8 text-[var(--fg-dim)] md:text-[24px] md:leading-9">
+          <p className="max-w-[820px] text-[17px] leading-7 text-[var(--fg-dim)] md:text-[19px] md:leading-8">
             {ARTICLE.dek}
           </p>
           <div className="md:text-right">

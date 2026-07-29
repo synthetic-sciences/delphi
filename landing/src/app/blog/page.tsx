@@ -29,7 +29,7 @@ export default function BlogIndex() {
             <p className="eyebrow text-[var(--gold)]">
               Delphi research · field notes
             </p>
-            <h1 className="mt-6 max-w-[1050px] font-serif text-[clamp(4rem,10vw,9.8rem)] leading-[0.84] tracking-[-0.065em] text-[var(--fg-strong)]">
+            <h1 className="mt-6 max-w-[760px] font-serif text-[clamp(2.5rem,5.6vw,4.5rem)] leading-[1.02] tracking-[-0.035em] text-[var(--fg-strong)]">
               Work from the context layer.
             </h1>
             <p className="mt-10 max-w-[660px] text-[19px] leading-8 text-[var(--fg-dim)]">
@@ -52,7 +52,7 @@ export default function BlogIndex() {
               </div>
 
               <div>
-                <h2 className="max-w-[760px] font-serif text-[clamp(2.8rem,5vw,5.5rem)] leading-[0.95] tracking-[-0.05em] text-[var(--fg-strong)]">
+                <h2 className="max-w-[680px] font-serif text-[clamp(1.7rem,2.9vw,2.5rem)] leading-[1.1] tracking-[-0.028em] text-[var(--fg-strong)]">
                   <Link
                     className="transition-colors hover:text-[var(--gold)]"
                     href={ARTICLE.href}

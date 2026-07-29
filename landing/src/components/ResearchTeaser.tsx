@@ -12,7 +12,7 @@ export function ResearchTeaser() {
           </p>
         </div>
         <div>
-          <blockquote className="max-w-[840px] font-serif text-[clamp(2.5rem,5vw,5.4rem)] leading-[0.98] tracking-[-0.045em] text-[var(--fg-strong)]">
+          <blockquote className="max-w-[840px] font-serif text-[clamp(1.6rem,2.9vw,2.4rem)] leading-[1.22] tracking-[-0.022em] text-[var(--fg-strong)]">
             “Before asking who won retrieval, we had to ask whether the
             benchmark still contained the files it said it was scoring.”
           </blockquote>
