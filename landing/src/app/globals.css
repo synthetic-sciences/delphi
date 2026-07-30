@@ -97,11 +97,60 @@ a, button { -webkit-tap-highlight-color: transparent; }
  * and leading opens up as size shrinks, so the rhythm stays even. */
 .display-title {
   font-family: var(--font-serif), Georgia, serif;
-  font-size: clamp(2.5rem, 5.6vw, 4.5rem);
+  font-size: clamp(2.1rem, 4.2vw, 3.4rem);
   font-weight: 400;
-  letter-spacing: -0.035em;
-  line-height: 1.02;
+  letter-spacing: -0.03em;
+  line-height: 1.06;
   text-wrap: balance;
+}
+
+/* Hero headline. Deliberately smaller than a poster: the engraving is the
+ * image, the sentence is not. */
+.hero-title {
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: clamp(2.15rem, 4.4vw, 3.5rem);
+  font-weight: 400;
+  letter-spacing: -0.028em;
+  line-height: 1.06;
+  text-wrap: balance;
+}
+
+/* The plate sits at the top of the frame and fades out before the copy
+ * starts, rather than being stretched behind the whole section. */
+.hero-plate {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 72%;
+  -webkit-mask-image: linear-gradient(to bottom, #000 46%, transparent 92%);
+  mask-image: linear-gradient(to bottom, #000 46%, transparent 92%);
+}
+
+/* Scrim from transparent at the plate down to solid page colour, so the
+ * lower third the copy sits on is effectively flat. */
+.hero-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    #070605 0%,
+    rgba(7, 6, 5, 0.99) 40%,
+    rgba(7, 6, 5, 0.88) 52%,
+    rgba(7, 6, 5, 0.5) 66%,
+    rgba(7, 6, 5, 0.14) 84%,
+    rgba(7, 6, 5, 0) 100%
+  );
+}
+
+[data-theme="light"] .hero-scrim {
+  background: linear-gradient(
+    to top,
+    #0a0908 0%,
+    rgba(10, 9, 8, 0.98) 40%,
+    rgba(10, 9, 8, 0.86) 52%,
+    rgba(10, 9, 8, 0.48) 66%,
+    rgba(10, 9, 8, 0.12) 84%,
+    rgba(10, 9, 8, 0) 100%
+  );
 }
 
 .section-title {

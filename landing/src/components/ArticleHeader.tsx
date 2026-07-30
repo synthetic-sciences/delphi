@@ -16,7 +16,7 @@ export function ArticleHeader() {
           <span>{ARTICLE.readingTime}</span>
         </div>
 
-        <h1 className="mt-10 max-w-[780px] font-serif text-[clamp(2.4rem,5.2vw,4.1rem)] leading-[1.04] tracking-[-0.033em] text-[var(--fg-strong)]">
+        <h1 className="mt-10 max-w-[780px] font-serif text-[clamp(2.1rem,4.4vw,3.4rem)] leading-[1.06] tracking-[-0.028em] text-[var(--fg-strong)]">
           {ARTICLE.title}
         </h1>
 

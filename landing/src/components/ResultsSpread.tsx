@@ -53,13 +53,10 @@ export function ResultsSpread() {
           <div className="max-w-[680px] md:pt-9">
             <p className="text-[17px] leading-7 text-[var(--fg-dim)] md:text-[18px] md:leading-8">
               {BENCHMARK.cases} cases from {BENCHMARK.name}, scored by the
-              benchmark&apos;s own code — same cases, same candidate filter,
-              same metric implementation. Delphi leads every published
-              baseline on MRR and Recall@5. Against the hosted comparator, on
-              the {HEAD_TO_HEAD.cases} cases where both engines have the
-              corpus indexed, Delphi leads Recall@20 by a wide margin and runs{" "}
-              {HEAD_TO_HEAD.latencyRatio.toFixed(1)}x faster; the comparator
-              ranks the top of the list better.
+              benchmark&apos;s own code. Delphi leads every published baseline
+              on MRR and Recall@5, and leads the hosted comparator on coverage
+              at {HEAD_TO_HEAD.latencyRatio.toFixed(1)}x lower latency. The
+              comparator ranks the top of the list better.
             </p>
             <Link
               href="/blog/context-engine-is-the-product"
@@ -106,22 +103,13 @@ export function ResultsSpread() {
 
         <div className="mt-14 grid gap-8 border-t border-[var(--line)] pt-8 text-[14px] leading-7 text-[var(--fg-mute)] md:grid-cols-2">
           <p>
-            Baseline numbers are the benchmark&apos;s own published runs on the
-            same split, not our reimplementation of them. Delphi does not lead
-            everywhere: the hosted comparator reaches{" "}
-            {HEAD_TO_HEAD.nia.mrr.toFixed(3)} MRR and{" "}
-            {HEAD_TO_HEAD.nia.recall5.toFixed(3)} Recall@5 against Delphi&apos;s{" "}
-            {DELPHI.mrr.toFixed(3)} and {DELPHI.recall5.toFixed(3)}, and grep
-            still holds Recall@20 at{" "}
-            {RIVALS.find((r) => r.system === "grep")!.recall20.toFixed(3)}.
+            Delphi does not lead everywhere. The hosted comparator reaches{" "}
+            {HEAD_TO_HEAD.nia.mrr.toFixed(3)} MRR against{" "}
+            {DELPHI.mrr.toFixed(3)}, and grep still holds Recall@20.
           </p>
           <p>
-            The held-out split is now reported at full scope: all{" "}
-            {HELD_OUT.scored} positive cases, every corpus provisioned,{" "}
-            {HELD_OUT.failures} failed queries. Delphi scores{" "}
-            {HELD_OUT.mrr.toFixed(3)} MRR and{" "}
-            {HELD_OUT.recall20.toFixed(3)} Recall@20 there — slightly ahead of
-            the split it was tuned on.
+            Held out: {HELD_OUT.scored} cases, {HELD_OUT.failures} failures,{" "}
+            {HELD_OUT.mrr.toFixed(3)} MRR — ahead of the split it was tuned on.
           </p>
         </div>
       </div>
