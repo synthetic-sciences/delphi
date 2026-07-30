@@ -1474,7 +1474,13 @@ class SearchService:
                     top_k=top_k,
                 )
 
-            # 6. Context enrichment (attach docstrings/signatures)
+            # 6. Listwise rerank: the cross-encoder scored candidates in
+            # isolation, this one sees them together and orders them.
+            from synsc.services.listwise_rerank import listwise_rerank
+
+            raw_results = listwise_rerank(retrieval_query, raw_results)
+
+            # 7. Context enrichment (attach docstrings/signatures)
             raw_results = _enrich_results_with_context(raw_results)
 
             # Format results — surface candidate_sources so agents can reason

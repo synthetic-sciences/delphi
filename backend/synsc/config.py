@@ -319,6 +319,30 @@ class SearchConfig(BaseModel):
         default="gpt-4o-mini",
         description="Small chat model used to draft the hypothetical snippet.",
     )
+    enable_listwise_rerank: bool = Field(
+        default=False,
+        description=(
+            "Reorder the retrieved head with a listwise language model. A "
+            "cross-encoder scores candidates in isolation; ranking is "
+            "comparative, and a listwise model sees them together."
+        ),
+    )
+    listwise_rerank_model: str = Field(
+        default="gpt-4o-mini",
+        description="Chat model used for listwise reranking.",
+    )
+    listwise_rerank_k: int = Field(
+        default=20,
+        description="How many of the top results the listwise model reorders.",
+    )
+    listwise_excerpt_chars: int = Field(
+        default=280,
+        description="Excerpt length per candidate in the listwise prompt.",
+    )
+    listwise_timeout_seconds: float = Field(
+        default=20.0,
+        description="Timeout for the listwise call before falling back.",
+    )
     hybrid_rerank_k: int = Field(
         default=30,
         description=(
@@ -536,6 +560,16 @@ class SynscConfig(BaseModel):
             )
         if expansion_model := os.getenv("SYNSC_QUERY_EXPANSION_MODEL"):
             config.search.query_expansion_model = expansion_model
+        if listwise := os.getenv("SYNSC_LISTWISE_RERANK"):
+            config.search.enable_listwise_rerank = listwise.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        if listwise_model := os.getenv("SYNSC_LISTWISE_RERANK_MODEL"):
+            config.search.listwise_rerank_model = listwise_model
+        if listwise_k := os.getenv("SYNSC_LISTWISE_RERANK_K"):
+            config.search.listwise_rerank_k = int(listwise_k)
         if min_score := os.getenv("SYNSC_MIN_SIMILARITY_SCORE"):
             config.search.min_similarity_score = float(min_score)
 
