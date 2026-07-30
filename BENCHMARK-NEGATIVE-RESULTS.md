@@ -4,9 +4,13 @@ Every idea below was implemented, measured on the Agent Retrieval Bench v2
 development split, and rejected. They are recorded so nobody spends the
 afternoon rediscovering them.
 
-The pattern worth internalising: three of these looked like wins on the
+The pattern worth internalising: **four** of these looked like wins on the
 75-case development split and lost on the 220-case held-out split. Development
-differences under about 0.01 are noise at that sample size.
+differences under about 0.03 are not trustworthy at that sample size, and where
+a language model is in the loop the run-to-run variance alone is about 0.02 —
+the same configuration scored Recall@5 0.367 and 0.391 on two different runs.
+Every candidate change here was confirmed on the held-out split before shipping,
+and four did not survive it.
 
 | Idea | Result |
 | --- | --- |
@@ -18,6 +22,7 @@ differences under about 0.01 are noise at that sample size.
 | **Fusion weight rebalancing** — 5 configurations including lexical-heavy and vector-heavy | Existing defaults already at or near optimum; spread across the top three inside noise. Lexical-heavy was clearly worse once embeddings were aligned. |
 | **Reverse-dependency branch at a global weight** | Real capability, wrong mechanism. edit2ripple R@5 0.238 → 0.381 at w=0.3, but overall MRR 0.193 → 0.163: the three workflows whose answer is not a dependent pay for it. Kept, defaulted off, needs query-intent gating. See PR #77. |
 | **File path prepended to rerank passages** | Looked like a win on development (R@5 0.327 → 0.333) and lost on held-out (0.355 → 0.346, trace2code 0.763 → 0.697). Discarded. |
+| **Listwise rerank tuning: shallower window, longer excerpts** | k=12 with 700-char excerpts looked best on development (R@5 0.411 vs 0.391) and lost on held-out (0.378 vs 0.419, MRR 0.260 vs 0.285). Shipped defaults k=20 / 280 chars unchanged. Longer excerpts at k=20 were clearly worse on both splits. |
 
 ## What did work
 
@@ -28,3 +33,4 @@ differences under about 0.01 are noise at that sample size.
 | Path-affinity branch | File paths were not searchable text at all. |
 | ms-marco-MiniLM rerank at k=30, alpha=0.4 | MRR 0.176 → 0.193 for ~1.9s. |
 | Hypothetical-document query expansion | Held-out MRR 0.228 → 0.241, R@20 0.552 → 0.579. |
+| Listwise reranking of the retrieved head | Held-out MRR 0.241 → 0.285, R@5 0.355 → 0.419, BCY@8k 0.376 → 0.446. Worth more than everything else combined. |
