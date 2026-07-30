@@ -41,22 +41,34 @@ candidate filter, scored by the benchmark's own code.
 
 | System | MRR | Recall@5 | Recall@20 | Latency |
 | --- | ---: | ---: | ---: | ---: |
-| **Delphi** | 0.220 | 0.369 | **0.551** | **5.7 s** |
-| Nia (hosted) | 0.228 | **0.391** | 0.449 | 36.9 s |
+| **Delphi** | 0.229 | 0.350 | **0.528** | **5.7 s** |
+| Nia (hosted) | **0.261** | 0.360 | 0.424 | 36.9 s |
 | grep | 0.180 | 0.302 | 0.578 | — |
 | RepoMap | 0.169 | 0.240 | 0.551 | — |
 | lexical | 0.127 | 0.198 | 0.451 | — |
 | BM25 | 0.116 | 0.136 | 0.429 | — |
 
-The hosted comparator was re-run live against the same corpora, 75 cases,
-zero failures on either side. Delphi leads Recall@20 decisively and returns
-results about 6.5x faster, on your own hardware. MRR and Recall@5 are a
-coin-flip: the two engines land within 0.01 and 0.02 of each other, which is
-inside the run-to-run variance we measured on this split, so we do not claim
-either. grep still leads Recall@20 outright at 0.578.
+The head-to-head pools every case where both engines have the corpus indexed —
+135 of them, not the 75 of the development split alone — because a 0.02
+difference cannot be resolved at n=75 when run-to-run variance is itself about
+0.02. Zero failures on either side.
 
-The 75-case development split is small. The 220-case held-out numbers below are
-the ones to weigh.
+Counting per-case outcomes rather than averages:
+
+| Metric | Delphi wins | Nia wins | Ties |
+| --- | ---: | ---: | ---: |
+| MRR | 40 | 47 | 48 |
+| Recall@5 | 21 | 22 | 92 |
+| Recall@20 | **31** | 12 | 92 |
+
+**Nia ranks the top of the list better.** It leads MRR by 0.031 and wins more
+cases head to head. Recall@5 is a genuine tie, 21 cases to 22. What Delphi wins
+is coverage — Recall@20 by 0.104, and 31 cases to 12 — and latency, by about
+6.5x, on your own hardware.
+
+We ran the larger comparison specifically to test a more flattering number from
+the smaller one, and it did not survive. grep still leads Recall@20 outright at
+0.578.
 
 The two shapes follow from different strategies rather than different amounts
 of skill: Nia returns ~7.8 files per query, Delphi returns 20. A short
@@ -120,10 +132,9 @@ and one that does not.
 - The hosted head-to-head is run on the development split, where both engines
   have every corpus indexed. Nia has 60 of the 220 final-split commits indexed
   on its side, so a full held-out head-to-head is not available.
-- On the 75-case shared split, Delphi and the hosted comparator are level on
-  MRR and Recall@5 to within run-to-run variance. Delphi leads Recall@20 by a
-  wide margin and runs about 6.5x faster. We do not claim a top-of-list win on
-  a sample that small.
+- Delphi is not state of the art at the top of the list. On 135 shared cases
+  the hosted comparator leads MRR 0.261 to 0.229 and wins more cases head to
+  head. Recall@5 is tied. Delphi's wins are coverage and latency.
 - Every reported configuration was confirmed on the 220-case held-out split
   before shipping. Four candidate improvements looked good on the development
   split and were rejected when held-out disagreed.

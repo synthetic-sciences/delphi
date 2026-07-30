@@ -16,12 +16,14 @@ export const BENCHMARK = {
 
 /* Same 75 cases, same candidate filter, same metric implementation. The
  * baselines are ARB's own published runs scored by ARB's own code; Nia was
- * re-run live against the same corpora on the same day, 0 failures. Delphi is
- * measured in the configuration we recommend running, query expansion
- * included, so the latency column carries its cost rather than hiding it. */
+ * re-run live against the same corpora, 0 failures. The head-to-head pools
+ * every case where both engines have the corpus indexed — 135, not the 75 of
+ * the development split alone — because a 0.02 difference cannot be resolved
+ * at n=75 when run-to-run variance is itself about 0.02. Delphi is measured in
+ * the configuration we recommend, so the latency column carries its cost. */
 export const RETRIEVAL_COMPARISON = [
-  { system: "Delphi", mrr: 0.220, recall5: 0.369, recall20: 0.551, latencyMs: 5694, ours: true },
-  { system: "Nia", mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, ours: false },
+  { system: "Delphi", mrr: 0.229, recall5: 0.350, recall20: 0.528, latencyMs: 5694, ours: true },
+  { system: "Nia", mrr: 0.261, recall5: 0.360, recall20: 0.424, latencyMs: 36881, ours: false },
   { system: "grep", mrr: 0.180, recall5: 0.302, recall20: 0.578, latencyMs: null, ours: false },
   { system: "RepoMap", mrr: 0.169, recall5: 0.240, recall20: 0.551, latencyMs: null, ours: false },
   { system: "lexical", mrr: 0.127, recall5: 0.198, recall20: 0.451, latencyMs: null, ours: false },
@@ -33,12 +35,21 @@ export const RETRIEVAL_COMPARISON = [
  * faster. Both numbers matter and neither subsumes the other. */
 export const HEAD_TO_HEAD = {
   comparator: "Nia",
-  cases: 75,
+  cases: 135,
   failures: 0,
-  delphi: { mrr: 0.220, recall5: 0.369, recall20: 0.551, latencyMs: 5694, meanPaths: 20.0 },
-  nia: { mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, meanPaths: 7.8 },
+  delphi: { mrr: 0.229, recall5: 0.350, recall20: 0.528, latencyMs: 5694, meanPaths: 20.0 },
+  nia: { mrr: 0.261, recall5: 0.360, recall20: 0.424, latencyMs: 36881, meanPaths: 7.8 },
   latencyRatio: 6.5,
 } as const;
+
+/* Paired per-case outcomes on the 135 shared cases. Averages hide how often
+ * two systems simply agree; these counts do not. Recall@5 is a genuine tie —
+ * 21 cases each — while Recall@20 is decided 31 to 12. */
+export const PAIRED_OUTCOMES = [
+  { metric: "MRR", delphiWins: 40, niaWins: 47, ties: 48 },
+  { metric: "Recall@5", delphiWins: 21, niaWins: 22, ties: 92 },
+  { metric: "Recall@20", delphiWins: 31, niaWins: 12, ties: 92 },
+] as const;
 
 /* What each change was worth, measured one at a time on the same split.
  * The first row is the configuration the previous evaluation actually ran. */
