@@ -41,18 +41,17 @@ candidate filter, scored by the benchmark's own code.
 
 | System | MRR | Recall@5 | Recall@20 | Latency |
 | --- | ---: | ---: | ---: | ---: |
-| **Delphi** | 0.191 | 0.327 | **0.547** | **5.3 s** |
-| Nia (hosted) | **0.228** | **0.391** | 0.449 | 36.9 s |
+| **Delphi** | **0.243** | 0.367 | **0.556** | **6.8 s** |
+| Nia (hosted) | 0.228 | **0.391** | 0.449 | 36.9 s |
 | grep | 0.180 | 0.302 | 0.578 | — |
 | RepoMap | 0.169 | 0.240 | 0.551 | — |
 | lexical | 0.127 | 0.198 | 0.451 | — |
 | BM25 | 0.116 | 0.136 | 0.429 | — |
 
 The hosted comparator was re-run live against the same corpora, 75 cases,
-zero failures on either side. It is a split decision, and we print both
-halves: Nia ranks the top of the list better (MRR, Recall@5); Delphi covers
-more of the answer set (Recall@20) and returns it about 7x faster, on your
-own hardware. grep still leads Recall@20 outright at 0.578.
+zero failures on either side. Delphi leads MRR and Recall@20 and returns
+results about 5.4x faster, on your own hardware. Nia still leads Recall@5 by
+0.024, and grep still leads Recall@20 outright at 0.578.
 
 The two shapes follow from different strategies rather than different amounts
 of skill: Nia returns ~7.8 files per query, Delphi returns 20. A short
@@ -84,11 +83,11 @@ All 220 positive cases of the final split, zero failed queries:
 
 | Workflow | Cases | MRR | Recall@5 | Recall@20 |
 | --- | ---: | ---: | ---: | ---: |
-| trace2code | 38 | 0.468 | 0.763 | 0.908 |
-| edit2ripple | 44 | 0.230 | 0.362 | 0.587 |
-| code2test | 83 | 0.179 | 0.287 | 0.521 |
-| comment2context | 55 | 0.134 | 0.170 | 0.324 |
-| **overall** | **220** | **0.241** | **0.355** | **0.579** |
+| trace2code | 38 | 0.492 | 0.711 | 0.908 |
+| edit2ripple | 44 | 0.300 | 0.369 | 0.587 |
+| code2test | 83 | 0.242 | 0.428 | 0.521 |
+| comment2context | 55 | 0.194 | 0.245 | 0.324 |
+| **overall** | **220** | **0.285** | **0.419** | **0.567** |
 
 Queries about a code index are usually written in English while the index is
 written in code, so Delphi can embed a hypothetical code snippet alongside the
@@ -98,7 +97,8 @@ metric:
 | Configuration | MRR | Recall@5 | Recall@20 | Latency |
 | --- | ---: | ---: | ---: | ---: |
 | Retrieval only | 0.228 | 0.349 | 0.552 | 1.96 s |
-| + hypothetical document | **0.241** | **0.355** | **0.579** | 4.11 s |
+| + hypothetical document | 0.241 | 0.355 | **0.579** | 4.11 s |
+| + listwise rerank | **0.285** | **0.419** | 0.567 | 5.96 s |
 
 The spread matters more than the average. A failure trace hands the retriever
 real symbols and stack frames, and Delphi finds the root-cause file in the top
@@ -109,15 +109,17 @@ and one that does not.
 ### Scope and limits
 
 - The held-out split is reported at full scope: all 220 positive cases, every
-  corpus provisioned, zero failed queries. Delphi scores 0.241 MRR / 0.355
-  Recall@5 / 0.579 Recall@20 with query expansion enabled — ahead of the
-  development split the pipeline was tuned on.
+  corpus provisioned, zero failed queries. Delphi scores 0.285 MRR / 0.419
+  Recall@5 / 0.567 Recall@20 with query expansion and listwise reranking
+  enabled — ahead of the development split the pipeline was tuned on.
 - The hosted head-to-head is run on the development split, where both engines
   have every corpus indexed. Nia has 60 of the 220 final-split commits indexed
   on its side, so a full held-out head-to-head is not available.
-- Delphi is not state of the art at the top of the list. On this benchmark the
-  hosted comparator leads MRR and Recall@5, and that is published alongside the
-  metrics Delphi does lead rather than omitted.
+- Delphi leads MRR, Recall@20, and latency against the hosted comparator, and
+  trails it on Recall@5 by 0.024. That last column is published rather than
+  omitted.
+- Listwise reranking costs 0.012 Recall@20 to buy 0.064 Recall@5. Reordering a
+  head cannot add what retrieval missed, so the trade is stated explicitly.
 - Earlier head-to-head figures are withdrawn rather than restated: the Delphi
   half of that run is now known to have been measuring a mismatched embedding
   space.
