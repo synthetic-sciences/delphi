@@ -16,9 +16,11 @@ export const BENCHMARK = {
 
 /* Same 75 cases, same candidate filter, same metric implementation. The
  * baselines are ARB's own published runs scored by ARB's own code; Nia was
- * re-run live against the same corpora on the same day, 0 failures. */
+ * re-run live against the same corpora on the same day, 0 failures. Delphi is
+ * measured in the configuration we recommend running, query expansion
+ * included, so the latency column carries its cost rather than hiding it. */
 export const RETRIEVAL_COMPARISON = [
-  { system: "Delphi", mrr: 0.197, recall5: 0.309, recall20: 0.544, latencyMs: 2903, ours: true },
+  { system: "Delphi", mrr: 0.191, recall5: 0.327, recall20: 0.547, latencyMs: 5296, ours: true },
   { system: "Nia", mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, ours: false },
   { system: "grep", mrr: 0.180, recall5: 0.302, recall20: 0.578, latencyMs: null, ours: false },
   { system: "RepoMap", mrr: 0.169, recall5: 0.240, recall20: 0.551, latencyMs: null, ours: false },
@@ -33,9 +35,9 @@ export const HEAD_TO_HEAD = {
   comparator: "Nia",
   cases: 75,
   failures: 0,
-  delphi: { mrr: 0.197, recall5: 0.309, recall20: 0.544, latencyMs: 2903, meanPaths: 20.0 },
+  delphi: { mrr: 0.191, recall5: 0.327, recall20: 0.547, latencyMs: 5296, meanPaths: 20.0 },
   nia: { mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, meanPaths: 7.8 },
-  latencyRatio: 12.7,
+  latencyRatio: 7.0,
 } as const;
 
 /* What each change was worth, measured one at a time on the same split.

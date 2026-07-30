@@ -41,7 +41,7 @@ candidate filter, scored by the benchmark's own code.
 
 | System | MRR | Recall@5 | Recall@20 | Latency |
 | --- | ---: | ---: | ---: | ---: |
-| **Delphi** | 0.197 | 0.309 | **0.544** | **2.9 s** |
+| **Delphi** | 0.191 | 0.327 | **0.547** | **5.3 s** |
 | Nia (hosted) | **0.228** | **0.391** | 0.449 | 36.9 s |
 | grep | 0.180 | 0.302 | 0.578 | — |
 | RepoMap | 0.169 | 0.240 | 0.551 | — |
@@ -51,7 +51,7 @@ candidate filter, scored by the benchmark's own code.
 The hosted comparator was re-run live against the same corpora, 75 cases,
 zero failures on either side. It is a split decision, and we print both
 halves: Nia ranks the top of the list better (MRR, Recall@5); Delphi covers
-more of the answer set (Recall@20) and returns it about 12.7x faster, on your
+more of the answer set (Recall@20) and returns it about 7x faster, on your
 own hardware. grep still leads Recall@20 outright at 0.578.
 
 The two shapes follow from different strategies rather than different amounts
