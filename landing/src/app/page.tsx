@@ -3,7 +3,7 @@ import { ClosingImage } from "@/components/HeroImage";
 import { ContextPipeline } from "@/components/ContextPipeline";
 import { HomeHero } from "@/components/HomeHero";
 import { OpenSourceInstall } from "@/components/OpenSourceInstall";
-import { ProductTimeline } from "@/components/ProductTimeline";
+import { ProductCapabilities } from "@/components/ProductCapabilities";
 import { ResearchTeaser } from "@/components/ResearchTeaser";
 import { ResultsSpread } from "@/components/ResultsSpread";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -13,9 +13,9 @@ export default function Home() {
     <>
       <main>
         <HomeHero />
-        <ResultsSpread />
+        <ProductCapabilities />
         <ContextPipeline />
-        <ProductTimeline />
+        <ResultsSpread />
         <OpenSourceInstall />
         <ResearchTeaser />
         <ClosingImage variant="archive">

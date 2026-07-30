@@ -11,38 +11,42 @@ import { ThemedImage } from "./HeroImage";
  * the bottom, and neither fights the other. */
 export function HomeHero() {
   return (
-    <section className="relative min-h-[100svh] overflow-hidden bg-[#070605] text-[#f7f0dc]">
+    <section className="relative flex min-h-[100svh] flex-col overflow-hidden bg-[#070605] text-[#f7f0dc]">
       <div className="hero-plate">
-        <ThemedImage variant="sacred-way" priority />
+        <ThemedImage variant="sacred-way" priority fit="natural" />
       </div>
       <div className="hero-scrim" />
       <SiteNav mode="overlay" />
 
-      <div className="relative z-10 mx-auto flex min-h-[100svh] w-full max-w-[1180px] flex-col justify-end px-5 pb-14 pt-28 sm:px-8 md:pb-20">
-        <p className="eyebrow text-[#bd9555]">Open-source context infrastructure</p>
+      {/* mt-auto pins the copy to the floor of the frame. The block is kept
+          short on purpose: every line added here climbs back up into the
+          engraving, which is the thing it must not do. */}
+      <div className="relative z-10 mx-auto mt-auto w-full max-w-[1180px] px-5 pb-[8vh] sm:px-8">
+        <p className="eyebrow text-[#bd9555]">Open source · Apache 2.0</p>
 
-        <h1 className="hero-title mt-5 max-w-[19ch] text-[#fff8e8]">
-          The context engine for agents that write code.
+        <h1 className="hero-title mt-4 max-w-[24ch] text-[#fff8e8]">
+          Give your coding agent the right files.
         </h1>
 
-        <p className="mt-6 max-w-[54ch] text-[16px] leading-[1.65] text-[#ddd2ba] sm:text-[17px]">
-          Delphi indexes your code, docs, and papers, then hands an agent the
-          evidence it needs. Runs locally. Every answer traceable.
+        <p className="mt-5 max-w-[50ch] text-[16px] leading-[1.6] text-[#ddd2ba] sm:text-[17px]">
+          Delphi indexes your repositories, docs, and papers, then answers an
+          agent&apos;s question with the exact code that answers it. Runs on
+          your own machine.
         </p>
 
-        <div className="mt-8 flex flex-wrap items-center gap-3">
+        <div className="mt-7 flex flex-wrap items-center gap-3">
           <Link className="button-primary bg-[#fff8e8] text-[#090807]" href="#install">
             Install Delphi <span className="ml-3">→</span>
           </Link>
           <Link
             className="button-secondary border-white/30 text-[#f7f0dc] hover:border-[#bd9555]"
-            href="/blog/context-engine-is-the-product"
+            href="#product"
           >
-            Read the field note
+            See how it works
           </Link>
         </div>
 
-        <p className="mt-10 border-t border-white/15 pt-5 font-mono text-[10px] uppercase leading-5 tracking-[0.14em] text-[#bdb29a]">
+        <p className="mt-8 border-t border-white/15 pt-4 font-mono text-[10px] uppercase leading-5 tracking-[0.14em] text-[#bdb29a]">
           {HEAD_TO_HEAD.delphi.recall20.toFixed(3)} recall@20 ·{" "}
           {HEAD_TO_HEAD.latencyRatio.toFixed(1)}× faster than the hosted
           comparator · {HEAD_TO_HEAD.cases} shared cases

@@ -3,7 +3,7 @@ import { PIPELINE } from "@/lib/evidence";
 export function ContextPipeline() {
   return (
     <section
-      id="product"
+      id="how-it-works"
       className="border-b border-[var(--line)] bg-[var(--bg-deep)] py-24 md:py-36"
     >
       <div className="mx-auto w-full max-w-[1240px] px-5 sm:px-8">

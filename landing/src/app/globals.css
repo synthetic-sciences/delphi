@@ -115,28 +115,49 @@ a, button { -webkit-tap-highlight-color: transparent; }
   text-wrap: balance;
 }
 
-/* The plate sits at the top of the frame and fades out before the copy
- * starts, rather than being stretched behind the whole section. */
+/* The plate hangs from the top of the frame at its own aspect ratio and is
+ * never cropped: an earlier version pinned it to 72% of the section and used
+ * object-cover, which cut the temple off at both ends and left the headline
+ * sitting across the mountain. Height comes from the image, so the engraving
+ * arrives whole and the copy is placed relative to where it actually ends. */
 .hero-plate {
   position: absolute;
   inset: 0 0 auto 0;
-  height: 72%;
-  -webkit-mask-image: linear-gradient(to bottom, #000 46%, transparent 92%);
-  mask-image: linear-gradient(to bottom, #000 46%, transparent 92%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 52%, rgba(0, 0, 0, 0.4) 78%, transparent 97%);
+  mask-image: linear-gradient(to bottom, #000 52%, rgba(0, 0, 0, 0.4) 78%, transparent 97%);
 }
 
-/* Scrim from transparent at the plate down to solid page colour, so the
- * lower third the copy sits on is effectively flat. */
+/* A 1.83:1 plate laid out at natural width is only ~210px tall on a phone,
+ * which leaves a dead black band between the engraving and the copy. Narrow
+ * screens get a vertical crop instead: the frame is held at 56% of the
+ * viewport and the plate fills it, anchored left-of-centre so the temple and
+ * the figure on the Sacred Way both survive the crop. */
+@media (max-width: 640px) {
+  .hero-plate {
+    height: 56%;
+  }
+
+  .hero-plate img {
+    height: 100%;
+    width: 100%;
+    object-fit: cover;
+    object-position: 38% center;
+  }
+}
+
+/* Scrim from solid page colour up to nothing. It reaches full opacity by the
+ * time it meets the copy, so the type sits on flat ground rather than on the
+ * foreground detail of the plate. */
 .hero-scrim {
   position: absolute;
   inset: 0;
   background: linear-gradient(
     to top,
     #070605 0%,
-    rgba(7, 6, 5, 0.99) 40%,
-    rgba(7, 6, 5, 0.88) 52%,
-    rgba(7, 6, 5, 0.5) 66%,
-    rgba(7, 6, 5, 0.14) 84%,
+    #070605 32%,
+    rgba(7, 6, 5, 0.94) 46%,
+    rgba(7, 6, 5, 0.62) 62%,
+    rgba(7, 6, 5, 0.22) 80%,
     rgba(7, 6, 5, 0) 100%
   );
 }
@@ -145,10 +166,10 @@ a, button { -webkit-tap-highlight-color: transparent; }
   background: linear-gradient(
     to top,
     #0a0908 0%,
-    rgba(10, 9, 8, 0.98) 40%,
-    rgba(10, 9, 8, 0.86) 52%,
-    rgba(10, 9, 8, 0.48) 66%,
-    rgba(10, 9, 8, 0.12) 84%,
+    #0a0908 32%,
+    rgba(10, 9, 8, 0.93) 46%,
+    rgba(10, 9, 8, 0.6) 62%,
+    rgba(10, 9, 8, 0.2) 80%,
     rgba(10, 9, 8, 0) 100%
   );
 }

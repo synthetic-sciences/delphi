@@ -181,29 +181,6 @@ export const ARTICLE = {
   labels: ["Evaluation", "Retrieval", "Developer agents"],
 } as const;
 
-export const TIMELINE = [
-  {
-    date: "Open source",
-    title: "A context engine you can own",
-    body: "Delphi begins as an Apache-2.0 MCP server for local-first code, paper, documentation, and dataset context.",
-  },
-  {
-    date: "Product foundation",
-    title: "Context becomes a pipeline",
-    body: "Versioned sources, hybrid retrieval, code intelligence, provenance, and token-bounded context packs become one system.",
-  },
-  {
-    date: "July 2026",
-    title: "The measurement broke first",
-    body: "A corpus indexed by one embedding model and queried by another scored cosine 0.0101 against itself. Same vector width, so nothing ever raised.",
-  },
-  {
-    date: "July 2026",
-    title: "Ranking rebuilt on evidence",
-    body: "Rank fusion, a path branch, and a small cross-encoder take retrieval past every published ARB baseline, and past the hosted comparator on coverage at a twelfth of its latency.",
-  },
-] as const;
-
 export const PIPELINE = [
   ["01", "Index", "Immutable source versions"],
   ["02", "Retrieve", "Semantic, lexical, symbol, path, structural"],
