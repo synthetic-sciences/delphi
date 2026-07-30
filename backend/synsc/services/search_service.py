@@ -1290,10 +1290,16 @@ class SearchService:
 
         try:
             retrieval_query = _prepare_search_query(query)
-            # Generate query embedding
+            # The vector branch may embed a hypothetical code snippet rather
+            # than the caller's English. Every lexical branch still receives
+            # retrieval_query verbatim: they are exact-match machinery, and
+            # inventing terms for them would manufacture false precision.
+            from synsc.services.query_expansion import embedding_text
+
+            embed_input, query_expanded = embedding_text(retrieval_query)
             t_embed = time.time()
             query_embedding = self.embedding_generator.generate_single(
-                retrieval_query
+                embed_input
             )
             embed_ms = (time.time() - t_embed) * 1000
             if stopped():
@@ -1546,6 +1552,7 @@ class SearchService:
                 "query": query,
                 "retrieval_query": retrieval_query,
                 "query_compacted": retrieval_query != query,
+                "query_expanded": query_expanded,
                 "results": results,
                 "count": len(results),
                 "search_time_ms": elapsed_time,

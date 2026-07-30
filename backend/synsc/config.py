@@ -307,6 +307,18 @@ class SearchConfig(BaseModel):
         default=50,
         description="Top-K per branch before fusion (also the rerank window).",
     )
+    enable_query_expansion: bool = Field(
+        default=False,
+        description=(
+            "Embed a hypothetical code snippet alongside prose queries. A code "
+            "index is written in code and questions about it are written in "
+            "English, so the two vocabularies barely overlap."
+        ),
+    )
+    query_expansion_model: str = Field(
+        default="gpt-4o-mini",
+        description="Small chat model used to draft the hypothetical snippet.",
+    )
     hybrid_rerank_k: int = Field(
         default=30,
         description=(
@@ -516,6 +528,14 @@ class SynscConfig(BaseModel):
         # deployment usually wants to make explicitly.
         if candidates := os.getenv("SYNSC_HYBRID_CANDIDATES"):
             config.search.hybrid_candidates = int(candidates)
+        if expansion := os.getenv("SYNSC_QUERY_EXPANSION"):
+            config.search.enable_query_expansion = expansion.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        if expansion_model := os.getenv("SYNSC_QUERY_EXPANSION_MODEL"):
+            config.search.query_expansion_model = expansion_model
         if min_score := os.getenv("SYNSC_MIN_SIMILARITY_SCORE"):
             config.search.min_similarity_score = float(min_score)
 
