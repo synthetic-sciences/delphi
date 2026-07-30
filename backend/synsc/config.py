@@ -328,8 +328,14 @@ class SearchConfig(BaseModel):
         ),
     )
     listwise_rerank_model: str = Field(
-        default="gpt-4o-mini",
-        description="Chat model used for listwise reranking.",
+        default="gpt-4o",
+        description=(
+            "Chat model used for listwise reranking. Measured on the 220-case "
+            "held-out split, the larger model is better on every metric and "
+            "no slower end to end (MRR 0.309 vs 0.285, Recall@5 0.442 vs "
+            "0.419): it returns a usable ordering first time, where the "
+            "smaller model more often needs the omitted-candidate fallback."
+        ),
     )
     listwise_rerank_k: int = Field(
         default=20,
