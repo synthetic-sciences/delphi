@@ -22,6 +22,7 @@ and four did not survive it.
 | **Fusion weight rebalancing** — 5 configurations including lexical-heavy and vector-heavy | Existing defaults already at or near optimum; spread across the top three inside noise. Lexical-heavy was clearly worse once embeddings were aligned. |
 | **Reverse-dependency branch at a global weight** | Real capability, wrong mechanism. edit2ripple R@5 0.238 → 0.381 at w=0.3, but overall MRR 0.193 → 0.163: the three workflows whose answer is not a dependent pay for it. Kept, defaulted off, needs query-intent gating. See PR #77. |
 | **File path prepended to rerank passages** | Looked like a win on development (R@5 0.327 → 0.333) and lost on held-out (0.355 → 0.346, trace2code 0.763 → 0.697). Discarded. |
+| **Dedupe to unique files before listwise ranking** | Checked before building it: the agent-mode selection step already caps chunks per file, so the 20-candidate pool is already 20 distinct files. There was no wasted comparison budget to reclaim. |
 | **Wider listwise pool (20 → 40 candidates)** | Motivated by a real gap: 70.5% of held-out cases have gold in the top 20 but only 54.1% in the top 5. Widening bought +0.016 Recall@20 and cost 0.016 MRR and 0.008 Recall@5 for an extra 1.2s. The model given more to read spreads its judgement thinner; coverage was never the binding constraint on rank 1. |
 | **Cascade listwise: second pass over the top 6 with 1200-char excerpts** | Aimed squarely at MRR, which is decided by rank 1. Bought +0.001 MRR on held-out and cost 0.036 Recall@5, 0.017 Recall@20, and a second per query. Re-reading a head the model has already ordered shuffles it without improving the first decision. |
 | **Listwise rerank tuning: shallower window, longer excerpts** | k=12 with 700-char excerpts looked best on development (R@5 0.411 vs 0.391) and lost on held-out (0.378 vs 0.419, MRR 0.260 vs 0.285). Shipped defaults k=20 / 280 chars unchanged. Longer excerpts at k=20 were clearly worse on both splits. |
@@ -36,3 +37,26 @@ and four did not survive it.
 | ms-marco-MiniLM rerank at k=30, alpha=0.4 | MRR 0.176 → 0.193 for ~1.9s. |
 | Hypothetical-document query expansion | Held-out MRR 0.228 → 0.241, R@20 0.552 → 0.579. |
 | Listwise reranking of the retrieved head | Held-out MRR 0.241 → 0.285, R@5 0.355 → 0.419, BCY@8k 0.376 → 0.446. Worth more than everything else combined. |
+
+
+## Where the remaining gap is
+
+The hosted comparator leads MRR by 0.031 on 135 shared cases. Everything above
+was an attempt to close it, and nothing in the retrieval or reranking stack
+moved it.
+
+The diagnostic that explains why: **70.5% of held-out cases have the gold file
+somewhere in the top 20, and only 54.1% have it in the top 5.** Those sixteen
+points are already inside the reranker's window. The model reads them and does
+not promote them. That is not a coverage problem, a fusion problem, a pool-size
+problem, or a prompt-shape problem — all four were tested and none of them moved
+it.
+
+What has not been tried, and is where the next attempt should start:
+
+- **Training a reranker on this task** rather than prompting a general one.
+  Every reranking result here comes from an off-the-shelf model being asked to
+  judge relevance it was never fitted for.
+- **Retrieval-time query decomposition** — the workflows split cleanly by how
+  much evidence the query contains (trace2code 0.842 Recall@5, comment2context
+  0.245), which suggests routing rather than one pipeline for all four.
