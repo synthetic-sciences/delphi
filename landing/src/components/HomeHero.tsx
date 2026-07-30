@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BENCHMARK, RETRIEVAL_COMPARISON } from "@/lib/evidence";
+import { HEAD_TO_HEAD, RETRIEVAL_COMPARISON } from "@/lib/evidence";
 
 const DELPHI = RETRIEVAL_COMPARISON.find((row) => row.ours)!;
 import { SiteNav } from "./SiteNav";
@@ -50,11 +50,12 @@ export function HomeHero() {
 
             <div className="border-l border-white/20 pl-5 md:justify-self-end md:pl-7">
               <p className="font-serif text-[42px] leading-none tracking-[-0.04em] text-[#fff8e8]">
-                {DELPHI.recall20.toFixed(3)}
+                {HEAD_TO_HEAD.delphi.recall20.toFixed(3)}
               </p>
               <p className="mt-2 max-w-[270px] font-mono text-[9px] uppercase leading-5 tracking-[0.16em] text-[#cfc3aa]">
-                recall@20 · {BENCHMARK.name} ·{" "}
-                {BENCHMARK.cases} cases · 12.7x faster than the hosted comparator
+                recall@20 · {HEAD_TO_HEAD.cases} shared cases vs the hosted
+                comparator&apos;s {HEAD_TO_HEAD.nia.recall20.toFixed(3)} ·{" "}
+                {HEAD_TO_HEAD.latencyRatio.toFixed(1)}x faster
               </p>
             </div>
           </div>

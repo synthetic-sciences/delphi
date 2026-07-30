@@ -16,14 +16,16 @@ export const BENCHMARK = {
 
 /* Same 75 cases, same candidate filter, same metric implementation. The
  * baselines are ARB's own published runs scored by ARB's own code; Nia was
- * re-run live against the same corpora, 0 failures. The head-to-head pools
- * every case where both engines have the corpus indexed — 135, not the 75 of
- * the development split alone — because a 0.02 difference cannot be resolved
- * at n=75 when run-to-run variance is itself about 0.02. Delphi is measured in
- * the configuration we recommend, so the latency column carries its cost. */
+ * re-run live against the same corpora, 0 failures.
+ *
+ * Every row here is the 75-case development split, because that is the split
+ * ARB's published baselines were run on and mixing sample sizes inside one
+ * table would not be a comparison. The Delphi-versus-Nia question is answered
+ * separately in HEAD_TO_HEAD, which pools 135 cases — a 0.02 difference cannot
+ * be resolved at n=75 when run-to-run variance is itself about 0.02. */
 export const RETRIEVAL_COMPARISON = [
-  { system: "Delphi", mrr: 0.229, recall5: 0.350, recall20: 0.528, latencyMs: 5694, ours: true },
-  { system: "Nia", mrr: 0.261, recall5: 0.360, recall20: 0.424, latencyMs: 36881, ours: false },
+  { system: "Delphi", mrr: 0.220, recall5: 0.369, recall20: 0.551, latencyMs: 5694, ours: true },
+  { system: "Nia", mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, ours: false },
   { system: "grep", mrr: 0.180, recall5: 0.302, recall20: 0.578, latencyMs: null, ours: false },
   { system: "RepoMap", mrr: 0.169, recall5: 0.240, recall20: 0.551, latencyMs: null, ours: false },
   { system: "lexical", mrr: 0.127, recall5: 0.198, recall20: 0.451, latencyMs: null, ours: false },

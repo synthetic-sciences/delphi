@@ -41,17 +41,28 @@ candidate filter, scored by the benchmark's own code.
 
 | System | MRR | Recall@5 | Recall@20 | Latency |
 | --- | ---: | ---: | ---: | ---: |
-| **Delphi** | 0.229 | 0.350 | **0.528** | **5.7 s** |
-| Nia (hosted) | **0.261** | 0.360 | 0.424 | 36.9 s |
+| **Delphi** | 0.220 | 0.369 | **0.551** | **5.7 s** |
+| Nia (hosted) | 0.228 | **0.391** | 0.449 | 36.9 s |
 | grep | 0.180 | 0.302 | 0.578 | — |
 | RepoMap | 0.169 | 0.240 | 0.551 | — |
 | lexical | 0.127 | 0.198 | 0.451 | — |
 | BM25 | 0.116 | 0.136 | 0.429 | — |
 
-The head-to-head pools every case where both engines have the corpus indexed —
-135 of them, not the 75 of the development split alone — because a 0.02
-difference cannot be resolved at n=75 when run-to-run variance is itself about
-0.02. Zero failures on either side.
+Every row above is the 75-case development split, because that is the split
+ARB's published baselines were run on; mixing sample sizes inside one table
+would not be a comparison.
+
+The Delphi-versus-Nia question is answered separately, on the 135 cases where
+both engines have the corpus indexed — a 0.02 difference cannot be resolved at
+n=75 when run-to-run variance is itself about 0.02:
+
+| Metric | Delphi | Nia |
+| --- | ---: | ---: |
+| MRR | 0.229 | **0.261** |
+| Recall@5 | 0.350 | 0.360 |
+| Recall@20 | **0.528** | 0.424 |
+
+Zero failures on either side.
 
 Counting per-case outcomes rather than averages:
 
