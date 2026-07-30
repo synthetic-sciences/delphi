@@ -3,6 +3,7 @@ import {
   BENCHMARK,
   HEAD_TO_HEAD,
   HELD_OUT,
+  INTERVALS,
   RETRIEVAL_COMPARISON,
 } from "@/lib/evidence";
 import { ComparisonFigure, AblationFigure } from "./EvidenceFigure";
@@ -103,13 +104,17 @@ export function ResultsSpread() {
 
         <div className="mt-14 grid gap-8 border-t border-[var(--line)] pt-8 text-[14px] leading-7 text-[var(--fg-mute)] md:grid-cols-2">
           <p>
-            Delphi does not lead everywhere. The hosted comparator reaches{" "}
-            {HEAD_TO_HEAD.nia.mrr.toFixed(3)} MRR against{" "}
-            {DELPHI.mrr.toFixed(3)}, and grep still holds Recall@20.
+            Against the hosted comparator on {HEAD_TO_HEAD.cases} paired cases,
+            one difference resolves: Recall@20, by{" "}
+            {INTERVALS.find((row) => row.metric === "Recall@20")!.diff.toFixed(3)}.
+            MRR reads {HEAD_TO_HEAD.delphi.mrr.toFixed(3)} against{" "}
+            {HEAD_TO_HEAD.nia.mrr.toFixed(3)}, but its interval spans zero, so
+            we do not report it as a loss any more than as a win.
           </p>
           <p>
             Held out: {HELD_OUT.scored} cases, {HELD_OUT.failures} failures,{" "}
             {HELD_OUT.mrr.toFixed(3)} MRR, ahead of the split it was tuned on.
+            grep still holds Recall@20 among the published baselines.
           </p>
         </div>
       </div>

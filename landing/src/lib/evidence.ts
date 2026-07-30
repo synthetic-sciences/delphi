@@ -32,25 +32,36 @@ export const RETRIEVAL_COMPARISON = [
   { system: "BM25", mrr: 0.116, recall5: 0.136, recall20: 0.429, latencyMs: null, ours: false },
 ] as const;
 
-/* The hosted comparison, stated plainly. Nia ranks the top of the list
- * better; Delphi covers more of the answer set and is an order of magnitude
- * faster. Both numbers matter and neither subsumes the other. */
+/* The hosted comparison, on the configuration Delphi actually ships.
+ *
+ * An earlier version of this block reported 135 cases at 0.229 MRR against
+ * 0.261. That run had query expansion and listwise reranking switched off,
+ * which are the two stages that decide the order of the head of the list, so
+ * it measured a build nobody runs. These numbers come from delphi-4o-final
+ * (HyDE + gpt-4o listwise, the shipped defaults) paired case by case against
+ * nia-final60, on the 60 final-split cases the comparator completed without
+ * error. Both engines saw the same corpora and were scored by ARB's own code.
+ *
+ * Nothing here is called a win unless its interval says so. See INTERVALS. */
 export const HEAD_TO_HEAD = {
   comparator: "Nia",
-  cases: 135,
+  cases: 60,
   failures: 0,
-  delphi: { mrr: 0.229, recall5: 0.350, recall20: 0.528, latencyMs: 5694, meanPaths: 20.0 },
-  nia: { mrr: 0.261, recall5: 0.360, recall20: 0.424, latencyMs: 36881, meanPaths: 7.8 },
-  latencyRatio: 6.5,
+  delphi: { mrr: 0.241, recall5: 0.326, recall20: 0.499, bcy8k: 0.362, latencyMs: 5571, meanPaths: 20.0 },
+  nia: { mrr: 0.301, recall5: 0.321, recall20: 0.392, bcy8k: 0.344, latencyMs: 31774, meanPaths: 8.1 },
+  latencyRatio: 5.7,
 } as const;
 
-/* Paired per-case outcomes on the 135 shared cases. Averages hide how often
- * two systems simply agree; these counts do not. Recall@5 is a genuine tie —
- * 21 cases each — while Recall@20 is decided 31 to 12. */
-export const PAIRED_OUTCOMES = [
-  { metric: "MRR", delphiWins: 40, niaWins: 47, ties: 48 },
-  { metric: "Recall@5", delphiWins: 21, niaWins: 22, ties: 92 },
-  { metric: "Recall@20", delphiWins: 31, niaWins: 12, ties: 92 },
+/* Paired bootstrap over the 60 shared cases, 4000 resamples, 95% interval on
+ * the per-case difference. Only Recall@20 clears zero. The MRR difference
+ * looks like a loss and is not one: at this sample size the interval spans
+ * both outcomes, and the 220-case comparator run failed every query, so there
+ * is no larger paired sample to settle it with yet. */
+export const INTERVALS = [
+  { metric: "MRR", diff: -0.060, lo: -0.142, hi: 0.020, wins: 18, ties: 18, losses: 24, resolved: false },
+  { metric: "Recall@5", diff: 0.005, lo: -0.097, hi: 0.108, wins: 12, ties: 37, losses: 11, resolved: false },
+  { metric: "Recall@20", diff: 0.107, lo: 0.008, hi: 0.207, wins: 16, ties: 38, losses: 6, resolved: true },
+  { metric: "BCY@8k", diff: 0.019, lo: -0.081, hi: 0.119, wins: 12, ties: 38, losses: 10, resolved: false },
 ] as const;
 
 /* What each change was worth, measured one at a time on the same split.

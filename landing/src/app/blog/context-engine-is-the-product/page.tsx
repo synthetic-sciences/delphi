@@ -8,6 +8,7 @@ import {
   PipelineFigure,
   RerankerFigure,
 } from "@/components/EvidenceFigure";
+import { HeadlineResults } from "@/components/HeadlineResults";
 import { ScopeStatement } from "@/components/ScopeStatement";
 import { TraceGallery } from "@/components/TraceGallery";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -19,6 +20,7 @@ import {
   HEAD_TO_HEAD,
   HELD_OUT,
   HELD_OUT_WORKFLOWS,
+  INTERVALS,
   QUERY_EXPANSION,
   RETRIEVAL_COMPARISON,
 } from "@/lib/evidence";
@@ -40,19 +42,22 @@ export const metadata: Metadata = {
 };
 
 const SECTIONS = [
-  ["result", "The result"],
-  ["orthogonal", "A corpus orthogonal to itself"],
+  ["result", "Results"],
+  ["orthogonal", "Case study 1: a corpus orthogonal to itself"],
   ["check", "The check that found it"],
-  ["fusion", "Comparing incomparable numbers"],
+  ["fusion", "Case study 2: comparing incomparable numbers"],
   ["paths", "The path nobody indexed"],
-  ["rerank", "The reranker that never ran"],
-  ["worth", "What each fix was worth"],
-  ["claim", "What we can claim"],
+  ["rerank", "Case study 3: ranking is comparative"],
+  ["worth", "What each change was worth"],
+  ["claim", "What we can and cannot claim"],
   ["traces", "Open the evidence"],
+  ["next", "What comes next"],
 ] as const;
 
 const DELPHI = RETRIEVAL_COMPARISON.find((row) => row.ours)!;
 const GREP = RETRIEVAL_COMPARISON.find((row) => row.system === "grep")!;
+const RECALL20 = INTERVALS.find((row) => row.metric === "Recall@20")!;
+const MRR_ROW = INTERVALS.find((row) => row.metric === "MRR")!;
 
 export default function ContextEngineArticle() {
   return (
@@ -88,46 +93,61 @@ export default function ContextEngineArticle() {
 
           <article className="article-prose min-w-0">
             <p className="mt-0 text-[1.2em] leading-[1.7] text-[var(--fg-strong)]">
-              Delphi kept losing a retrieval benchmark it had no business
-              losing. It took us a week to work out why, and the answer was
-              stupid. The corpus had been indexed with one embedding model and
-              queried with another. Both produce 768-dimensional vectors, so
-              Postgres compared them happily and returned noise. No error, no
-              warning, no log line. Just wrong answers that looked fine.
+              We are publishing the retrieval results behind Delphi, the
+              corpora they were measured on, and the per-query traces they came
+              from. On {BENCHMARK.name}, the shipped build returns more of the
+              answer set than the leading hosted context engine and does it{" "}
+              {HEAD_TO_HEAD.latencyRatio.toFixed(1)} times faster on a laptop.
+              It does not lead on every metric, and this piece is specific
+              about which.
             </p>
 
-            <h2 id="result">The result</h2>
+            <h2 id="result">Results</h2>
 
             <p>
-              With that fixed and the ranking rebuilt on top of it, Delphi
-              beats every published baseline on {BENCHMARK.name} for MRR and
-              Recall@5. Same {BENCHMARK.cases} cases, same candidate filter,
-              scored by the benchmark&apos;s own code. We also re-ran the
-              hosted comparator live against the same corpora that day. No
-              failures on either side.
+              Delphi is an open-source context engine: it indexes
+              repositories, documentation, papers, and datasets, and answers an
+              agent&apos;s question with the files that answer it. The number
+              that matters for an agent is whether the file it needs is in the
+              window it gets, which is what these measure.
+            </p>
+
+            <HeadlineResults />
+
+            <p>
+              Recall@20 is the difference that survives:{" "}
+              {RECALL20.diff.toFixed(3)} in Delphi&apos;s favour, 95% interval{" "}
+              [{RECALL20.lo.toFixed(3)}, {RECALL20.hi.toFixed(3)}], winning{" "}
+              {RECALL20.wins} cases to {RECALL20.losses}. Latency is the other:
+              {" "}{(HEAD_TO_HEAD.delphi.latencyMs / 1000).toFixed(1)}s against{" "}
+              {(HEAD_TO_HEAD.nia.latencyMs / 1000).toFixed(1)}s.
+            </p>
+
+            <p>
+              MRR reads {HEAD_TO_HEAD.delphi.mrr.toFixed(3)} against{" "}
+              {HEAD_TO_HEAD.nia.mrr.toFixed(3)}, which looks like a loss and is
+              not one we can claim: the interval runs from{" "}
+              {MRR_ROW.lo.toFixed(3)} to {MRR_ROW.hi.toFixed(3)} and the cases
+              split {MRR_ROW.wins} to {MRR_ROW.losses} with {MRR_ROW.ties}{" "}
+              ties. At sixty cases that is a coin flip. We say so rather than
+              reporting it either way.<sup>1</sup>
+            </p>
+
+            <p>
+              The two engines also answer differently. The comparator returns
+              about {HEAD_TO_HEAD.nia.meanPaths.toFixed(0)} files per query and
+              Delphi returns {HEAD_TO_HEAD.delphi.meanPaths.toFixed(0)}. Short
+              lists concentrate on rank one, long lists cover more of the
+              answer. Which you want depends on whether your agent gets one
+              shot or can keep reading.
+            </p>
+
+            <p>
+              Against the benchmark&apos;s own published baselines on the
+              development split, scored by the same code:
             </p>
 
             <ComparisonFigure />
-
-            <p>
-              It is a split decision. The comparator ranks the top of the list
-              better, {HEAD_TO_HEAD.nia.mrr.toFixed(3)} MRR and{" "}
-              {HEAD_TO_HEAD.nia.recall5.toFixed(3)} Recall@5 against Delphi at{" "}
-              {DELPHI.mrr.toFixed(3)} and {DELPHI.recall5.toFixed(3)}. Delphi
-              finds more of the answer set, {HEAD_TO_HEAD.delphi.recall20.toFixed(3)}{" "}
-              Recall@20 against {HEAD_TO_HEAD.nia.recall20.toFixed(3)}, and
-              returns it in {(HEAD_TO_HEAD.delphi.latencyMs / 1000).toFixed(1)}s
-              instead of {(HEAD_TO_HEAD.nia.latencyMs / 1000).toFixed(0)}s.
-            </p>
-
-            <p>
-              That gap is a strategy difference, not a skill one. The
-              comparator returns about {HEAD_TO_HEAD.nia.meanPaths.toFixed(0)}{" "}
-              files per query. Delphi returns {HEAD_TO_HEAD.delphi.meanPaths.toFixed(0)}.
-              Short lists win at the top, long lists win on coverage. Which you
-              want depends on whether your agent gets one shot or can keep
-              reading.
-            </p>
 
             <p>
               Delphi does not lead Recall@20 outright either. Plain grep gets{" "}
@@ -457,7 +477,55 @@ export default function ContextEngineArticle() {
 
             <TraceGallery />
 
+            <h2 id="next">What comes next</h2>
+
+            <p>
+              The comparison above rests on {HEAD_TO_HEAD.cases} cases because
+              that is how many the hosted comparator completed. The run against
+              all {HELD_OUT.scored} failed every query on an HTTP error, so the
+              larger paired sample does not exist yet. Re-indexing those corpora
+              into the comparator and running it again is the single thing that
+              would settle MRR, and until it happens we are not going to
+              describe that metric as won or lost.
+            </p>
+
+            <p>
+              On our own side the open problem is rank one. Across the
+              held-out split the gold file is inside the top twenty
+              far more often than it is inside the top five, so the candidate
+              is usually retrieved and then not promoted. That is a judgement
+              problem in the reranking stage rather than a coverage problem in
+              retrieval, and widening the pool makes it worse rather than
+              better. Two directions we have not tried: fitting a reranker to
+              this task instead of using an off-the-shelf one, and routing by
+              query shape so that a question asking &ldquo;which test covers
+              this&rdquo; is ranked by a different rule than one asking where
+              something is implemented.
+            </p>
+
+            <p>
+              Every artifact behind these numbers is in the repository: the
+              corpus lock file, the per-query records, the summaries, and the
+              measured-and-rejected list of everything that did not work.
+            </p>
+
             <div className="mt-20 border-t border-[var(--line-strong)] pt-7">
+              <p className="eyebrow text-[var(--fg-mute)]">Footnotes</p>
+              <ol className="mt-5 space-y-3 text-[13px] leading-6 text-[var(--fg-mute)]">
+                <li>
+                  1. Intervals are a paired bootstrap over the per-case
+                  difference, 4000 resamples, 95% percentile interval. We treat
+                  a difference as real only when the interval excludes zero. An
+                  earlier version of this page reported the comparison at 135
+                  cases with a {BENCHMARK.name} configuration that had query
+                  expansion and listwise reranking disabled, which are the two
+                  stages that order the head of the list. Those numbers
+                  described a build we do not ship and have been replaced.
+                </li>
+              </ol>
+            </div>
+
+            <div className="mt-10 border-t border-[var(--line-strong)] pt-7">
               <p className="eyebrow text-[var(--fg-mute)]">References</p>
               <ol className="mt-5 space-y-3 text-[13px] leading-6 text-[var(--fg-mute)]">
                 <li>
