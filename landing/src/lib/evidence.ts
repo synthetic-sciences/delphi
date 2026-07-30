@@ -96,22 +96,30 @@ export const HELD_OUT = {
   split: "final",
   scored: 220,
   skippedUnprovisioned: 0,
-  mrr: 0.228,
-  recall5: 0.349,
-  recall20: 0.552,
-  bcy8k: 0.373,
-  latencyMsMean: 1957,
+  mrr: 0.241,
+  recall5: 0.355,
+  recall20: 0.579,
+  bcy8k: 0.376,
+  latencyMsMean: 4110,
   failures: 0,
 } as const;
+
+/* Query expansion, measured on the full held-out split. A code index is
+ * written in code and questions about it are written in English; embedding a
+ * hypothetical snippet alongside the question bridges that. */
+export const QUERY_EXPANSION = [
+  { label: "Retrieval only", mrr: 0.228, recall5: 0.349, recall20: 0.552, latencyMs: 1957 },
+  { label: "+ hypothetical document", mrr: 0.241, recall5: 0.355, recall20: 0.579, latencyMs: 4110 },
+] as const;
 
 /* Per-workflow on the held-out split. The spread is the interesting part:
  * a failure trace names symbols that exist in the code, and a review comment
  * names almost nothing a retriever can key on. */
 export const HELD_OUT_WORKFLOWS = [
-  { workflow: "trace2code", cases: 38, mrr: 0.468, recall5: 0.737, recall20: 0.908 },
-  { workflow: "edit2ripple", cases: 44, mrr: 0.230, recall5: 0.356, recall20: 0.587 },
-  { workflow: "code2test", cases: 83, mrr: 0.179, recall5: 0.299, recall20: 0.521 },
-  { workflow: "comment2context", cases: 55, mrr: 0.134, recall5: 0.152, recall20: 0.324 },
+  { workflow: "trace2code", cases: 38, mrr: 0.468, recall5: 0.763, recall20: 0.908 },
+  { workflow: "edit2ripple", cases: 44, mrr: 0.230, recall5: 0.362, recall20: 0.587 },
+  { workflow: "code2test", cases: 83, mrr: 0.179, recall5: 0.287, recall20: 0.521 },
+  { workflow: "comment2context", cases: 55, mrr: 0.134, recall5: 0.170, recall20: 0.324 },
 ] as const;
 
 /* Reranker selection. The larger, code-aware model lost on every axis. */

@@ -84,11 +84,21 @@ All 220 positive cases of the final split, zero failed queries:
 
 | Workflow | Cases | MRR | Recall@5 | Recall@20 |
 | --- | ---: | ---: | ---: | ---: |
-| trace2code | 38 | 0.468 | 0.737 | 0.908 |
-| edit2ripple | 44 | 0.230 | 0.356 | 0.587 |
-| code2test | 83 | 0.179 | 0.299 | 0.521 |
-| comment2context | 55 | 0.134 | 0.152 | 0.324 |
-| **overall** | **220** | **0.228** | **0.349** | **0.552** |
+| trace2code | 38 | 0.468 | 0.763 | 0.908 |
+| edit2ripple | 44 | 0.230 | 0.362 | 0.587 |
+| code2test | 83 | 0.179 | 0.287 | 0.521 |
+| comment2context | 55 | 0.134 | 0.170 | 0.324 |
+| **overall** | **220** | **0.241** | **0.355** | **0.579** |
+
+Queries about a code index are usually written in English while the index is
+written in code, so Delphi can embed a hypothetical code snippet alongside the
+question (`SYNSC_QUERY_EXPANSION=true`). On the held-out split that moves every
+metric:
+
+| Configuration | MRR | Recall@5 | Recall@20 | Latency |
+| --- | ---: | ---: | ---: | ---: |
+| Retrieval only | 0.228 | 0.349 | 0.552 | 1.96 s |
+| + hypothetical document | **0.241** | **0.355** | **0.579** | 4.11 s |
 
 The spread matters more than the average. A failure trace hands the retriever
 real symbols and stack frames, and Delphi finds the root-cause file in the top
@@ -99,8 +109,8 @@ and one that does not.
 ### Scope and limits
 
 - The held-out split is reported at full scope: all 220 positive cases, every
-  corpus provisioned, zero failed queries. Delphi scores 0.228 MRR / 0.349
-  Recall@5 / 0.552 Recall@20 at 1.96 s mean latency — slightly ahead of the
+  corpus provisioned, zero failed queries. Delphi scores 0.241 MRR / 0.355
+  Recall@5 / 0.579 Recall@20 with query expansion enabled — ahead of the
   development split the pipeline was tuned on.
 - The hosted head-to-head is run on the development split, where both engines
   have every corpus indexed. Nia has 60 of the 220 final-split commits indexed

@@ -19,6 +19,7 @@ import {
   HEAD_TO_HEAD,
   HELD_OUT,
   HELD_OUT_WORKFLOWS,
+  QUERY_EXPANSION,
   RETRIEVAL_COMPARISON,
 } from "@/lib/evidence";
 
@@ -359,12 +360,68 @@ export default function ContextEngineArticle() {
             <p>
               A failure trace hands the retriever real symbols, real file
               names, real stack frames, and Delphi finds the root-cause file in
-              the top five 74% of the time. A review comment hands it English —
+              the top five 76% of the time. A review comment hands it English —
               &ldquo;this should probably be extracted&rdquo; — and the same
-              engine manages 15%. The gap between those two rows is not a
+              engine manages 17%. The gap between those two rows is not a
               ranking problem. It is the difference between a query that
               contains evidence and one that does not, and no amount of fusion
               tuning closes it.
+            </p>
+
+            <p>
+              What does close some of it is giving the embedding something in
+              its own vocabulary to match. A code index is written in code; the
+              question is written in English. Asking a small model to draft the
+              code it thinks the answer looks like, and embedding that
+              alongside the question, moves every metric on the held-out split:
+            </p>
+
+            <div className="not-prose mt-8">
+              <div className="figure-heading">
+                <span>Hypothetical-document expansion</span>
+                <span>held-out, {HELD_OUT.scored} cases</span>
+              </div>
+              <div className="divide-y divide-[var(--line)]">
+                <div className="grid grid-cols-[1fr_60px_60px_64px_64px] gap-3 py-3 font-mono text-[9px] uppercase tracking-[0.12em] text-[var(--fg-mute)]">
+                  <span>Configuration</span>
+                  <span className="text-right">MRR</span>
+                  <span className="text-right">R@5</span>
+                  <span className="text-right">R@20</span>
+                  <span className="text-right">Latency</span>
+                </div>
+                {QUERY_EXPANSION.map((row) => (
+                  <div
+                    className="grid grid-cols-[1fr_60px_60px_64px_64px] gap-3 py-4 text-[14px]"
+                    key={row.label}
+                  >
+                    <span>{row.label}</span>
+                    <span className="text-right font-mono text-[var(--fg-strong)]">
+                      {row.mrr.toFixed(3)}
+                    </span>
+                    <span className="text-right font-mono text-[var(--fg-mute)]">
+                      {row.recall5.toFixed(3)}
+                    </span>
+                    <span className="text-right font-mono text-[var(--fg-mute)]">
+                      {row.recall20.toFixed(3)}
+                    </span>
+                    <span className="text-right font-mono text-[var(--fg-mute)]">
+                      {(row.latencyMs / 1000).toFixed(1)}s
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <p>
+              The snippet does not have to be right. It has to be written the
+              way the corpus is written, which is enough to land the query
+              vector in the right neighbourhood. Only the vector branch sees
+              it — BM25, symbol, and path still receive the caller&apos;s
+              literal words, because inventing terms for an exact-match branch
+              manufactures precision that is not there. Queries already full of
+              identifiers are skipped entirely, and their scores are unchanged,
+              which is the shape you would expect if the mechanism works for
+              the reason claimed.
             </p>
 
             <p>
