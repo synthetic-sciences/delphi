@@ -22,6 +22,7 @@ and four did not survive it.
 | **Fusion weight rebalancing** — 5 configurations including lexical-heavy and vector-heavy | Existing defaults already at or near optimum; spread across the top three inside noise. Lexical-heavy was clearly worse once embeddings were aligned. |
 | **Reverse-dependency branch at a global weight** | Real capability, wrong mechanism. edit2ripple R@5 0.238 → 0.381 at w=0.3, but overall MRR 0.193 → 0.163: the three workflows whose answer is not a dependent pay for it. Kept, defaulted off, needs query-intent gating. See PR #77. |
 | **File path prepended to rerank passages** | Looked like a win on development (R@5 0.327 → 0.333) and lost on held-out (0.355 → 0.346, trace2code 0.763 → 0.697). Discarded. |
+| **Cascade listwise: second pass over the top 6 with 1200-char excerpts** | Aimed squarely at MRR, which is decided by rank 1. Bought +0.001 MRR on held-out and cost 0.036 Recall@5, 0.017 Recall@20, and a second per query. Re-reading a head the model has already ordered shuffles it without improving the first decision. |
 | **Listwise rerank tuning: shallower window, longer excerpts** | k=12 with 700-char excerpts looked best on development (R@5 0.411 vs 0.391) and lost on held-out (0.378 vs 0.419, MRR 0.260 vs 0.285). Shipped defaults k=20 / 280 chars unchanged. Longer excerpts at k=20 were clearly worse on both splits. |
 
 ## What did work
