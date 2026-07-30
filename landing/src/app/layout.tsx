@@ -15,21 +15,30 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://delphi.syntheticsciences.ai"),
-  title: "Delphi · Synthetic Sciences",
+  metadataBase: new URL("https://trydelphi.ai"),
+  title: {
+    default: "Delphi · Context for agents that have to get the code right",
+    template: "%s",
+  },
   description:
-    "An open-source MCP context engine. Indexes code, docs, papers, and datasets. Serves agents the right context, ranked. Built by Synthetic Sciences.",
+    "Open-source context infrastructure for agents working across code, documentation, papers, and datasets. Self-hosted and built by Synthetic Sciences.",
   openGraph: {
-    title: "Delphi · Synthetic Sciences",
+    title: "Delphi · Context for agents that have to get the code right",
     description:
-      "An open-source MCP context engine for AI-native research.",
+      "Open-source context infrastructure for agents working across real software and research.",
     type: "website",
+    url: "https://trydelphi.ai",
+    siteName: "Delphi",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Delphi · Synthetic Sciences",
+    title: "Delphi · Context for agents that have to get the code right",
     description:
-      "An open-source MCP context engine for AI-native research.",
+      "Open-source context infrastructure for agents working across real software and research.",
+  },
+  robots: {
+    index: true,
+    follow: true,
   },
 };
 

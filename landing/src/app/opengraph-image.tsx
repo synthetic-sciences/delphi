@@ -1,6 +1,7 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "Delphi. An open-source MCP context engine, by Synthetic Sciences.";
+export const alt =
+  "Delphi. The context engine for agents that have to get the code right.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -52,9 +53,8 @@ export default function OG() {
               maxWidth: 900,
             }}
           >
-            An open-source MCP context engine. It indexes code, docs,
-            papers, and datasets, then serves your agents the right
-            context, ranked.
+            The context engine for agents that have to get the code right.
+            Open source, self-hosted, and built by Synthetic Sciences.
           </div>
         </div>
 
@@ -68,9 +68,11 @@ export default function OG() {
           }}
         >
           <div style={{ display: "flex" }}>
-            delphi.syntheticsciences.ai
+            trydelphi.ai
           </div>
-          <div style={{ display: "flex" }}>Apache 2.0 · Self-host</div>
+          <div style={{ display: "flex" }}>
+            0.528 recall@20 · 6.5x faster · self-hosted
+          </div>
         </div>
       </div>
     ),

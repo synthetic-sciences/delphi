@@ -34,27 +34,150 @@ Everything runs on your machine — PostgreSQL for storage. Pick **local sentenc
 
 ## Latest results
 
-In a fixed-model, 40-task developer pilot, Delphi produced the strongest tested
-downstream result: **95.0% pass@1**, compared with **90.0%** for the next-best
-tested condition. This is state-of-the-art performance in the tested
-developer-work setting, not a claim of universal context-engine superiority.
+On [Agent Retrieval Bench v2](https://github.com/eyuansu62/agent-retrieval-bench)
+(commit `d04953371d96`), Delphi leads every published baseline on MRR and
+Recall@5 over the same 75 development cases, with the same `all_files`
+candidate filter, scored by the benchmark's own code.
 
-| Measurement | Delphi | Next-best tested condition |
+| System | MRR | Recall@5 | Recall@20 | Latency |
+| --- | ---: | ---: | ---: | ---: |
+| **Delphi** | 0.220 | 0.369 | **0.551** | **5.7 s** |
+| Nia (hosted) | 0.228 | **0.391** | 0.449 | 36.9 s |
+| grep | 0.180 | 0.302 | 0.578 | — |
+| RepoMap | 0.169 | 0.240 | 0.551 | — |
+| lexical | 0.127 | 0.198 | 0.451 | — |
+| BM25 | 0.116 | 0.136 | 0.429 | — |
+
+Every row above is the 75-case development split, because that is the split
+ARB's published baselines were run on; mixing sample sizes inside one table
+would not be a comparison.
+
+The Delphi-versus-Nia question is answered separately, on the 135 cases where
+both engines have the corpus indexed — a 0.02 difference cannot be resolved at
+n=75 when run-to-run variance is itself about 0.02:
+
+| Metric | Delphi | Nia |
 | --- | ---: | ---: |
-| DS-1000 dev40 pass@1 | **95.0%** | 90.0% |
-| Strict-valid repository retrieval mean query latency | **1.25 s** | 26.58 s |
-| Strict-valid repository retrieval recall@20 | **0.667** | 0.639 |
+| MRR | 0.229 | **0.261** |
+| Recall@5 | 0.350 | 0.360 |
+| Recall@20 | **0.528** | 0.424 |
 
-The downstream pilot used Claude Opus 5 for every condition and reports
-descriptive pass@1 over 40 DS-1000 development tasks. The repository-retrieval
-audit attempted 75 cases, but 57 of 75 scored target files were truncated in
-the available corpus; only 18 strict-valid cases were used for the table.
-Delphi's latency was 21.3× lower on that subset. Its recall@20 point estimate
-was slightly higher, but the paired 95% confidence interval for the difference
-`[-0.094, 0.139]` crosses zero. The hosted repository comparator led the
-early-ranking metrics, so those remain open work rather than Delphi wins.
+Zero failures on either side.
 
-Read the full method, failure analysis, and claim boundaries in
+Counting per-case outcomes rather than averages:
+
+| Metric | Delphi wins | Nia wins | Ties |
+| --- | ---: | ---: | ---: |
+| MRR | 40 | 47 | 48 |
+| Recall@5 | 21 | 22 | 92 |
+| Recall@20 | **31** | 12 | 92 |
+
+**Nia ranks the top of the list better.** It leads MRR by 0.031 and wins more
+cases head to head. Recall@5 is a genuine tie, 21 cases to 22. What Delphi wins
+is coverage — Recall@20 by 0.104, and 31 cases to 12 — and latency, by about
+6.5x, on your own hardware.
+
+We ran the larger comparison specifically to test a more flattering number from
+the smaller one, and it did not survive. grep still leads Recall@20 outright at
+0.578.
+
+The two shapes follow from different strategies rather than different amounts
+of skill: Nia returns ~7.8 files per query, Delphi returns 20. A short
+confident list wins precision at the top; a longer one wins coverage.
+
+### What changed, and what each change was worth
+
+The previous evaluation measured a corpus indexed with `text-embedding-3-small`
+but queried with `gemini-embedding-001`. Both emit 768-dimensional vectors, so
+pgvector computed cosines between unrelated spaces without raising anything.
+Embedding a chunk's own exact content and comparing it against that chunk's
+stored vector scored **cosine 0.0101** — orthogonal. Aligning the query-time
+model to the index moved the same comparison to **0.9430**.
+
+| Configuration | MRR | Recall@5 | Recall@20 | Latency |
+| --- | ---: | ---: | ---: | ---: |
+| As previously benchmarked | 0.055 | 0.056 | 0.161 | 1.0 s |
+| Embedding space aligned | 0.173 | 0.259 | 0.549 | 0.9 s |
+| + rank fusion, path affinity | 0.176 | 0.256 | 0.552 | 1.1 s |
+| + cross-encoder rerank | **0.193** | **0.294** | **0.560** | 2.9 s |
+
+Delphi now compares `repositories.embedding_model` against the model answering
+queries on every search and on `/backend-health`, so a silent vector-space
+mismatch is reported instead of absorbed.
+
+### Held-out results, by workflow
+
+All 220 positive cases of the final split, zero failed queries:
+
+| Workflow | Cases | MRR | Recall@5 | Recall@20 |
+| --- | ---: | ---: | ---: | ---: |
+| trace2code | 38 | 0.693 | 0.842 | 0.908 |
+| edit2ripple | 44 | 0.274 | 0.434 | 0.587 |
+| code2test | 83 | 0.220 | 0.394 | 0.586 |
+| comment2context | 55 | 0.207 | 0.245 | 0.345 |
+| **overall** | **220** | **0.309** | **0.442** | **0.582** |
+
+Queries about a code index are usually written in English while the index is
+written in code, so Delphi can embed a hypothetical code snippet alongside the
+question (`SYNSC_QUERY_EXPANSION=true`). On the held-out split that moves every
+metric:
+
+| Configuration | MRR | Recall@5 | Recall@20 | Latency |
+| --- | ---: | ---: | ---: | ---: |
+| Retrieval only | 0.228 | 0.349 | 0.552 | 1.96 s |
+| + hypothetical document | 0.241 | 0.355 | **0.579** | 4.11 s |
+| + listwise rerank | **0.309** | **0.442** | **0.582** | 5.57 s |
+
+The spread matters more than the average. A failure trace hands the retriever
+real symbols and stack frames, and Delphi finds the root-cause file in the top
+five 74% of the time. A review comment hands it English, and the same engine
+manages 15%. That gap is the difference between a query that contains evidence
+and one that does not.
+
+### Downstream: a null result
+
+Retrieval metrics measure whether the right file was found. DS-1000 measures
+whether the agent's generated code passes the official test, with the model held
+fixed — an outcome a retrieval benchmark cannot fudge.
+
+On 40 development tasks Delphi reached 0.900 against 0.875 for both hosted
+engines, which reads like a downstream lead. It is not. On 100 held-out tasks,
+against a no-retrieval control:
+
+| Condition | pass@1 |
+| --- | ---: |
+| No retrieval | **0.870** |
+| Delphi | 0.860 |
+
+Paired per case: 2 tasks Delphi passed and the control did not, 3 the other way,
+and **95 of 100 decided identically**. Documentation context does not change what
+this model produces on this benchmark in either direction, and the 40-case spread
+was one or two tasks of noise.
+
+We report it because a benchmark that cannot separate the conditions is worth
+saying out loud — particularly when its smaller slice flatters us. Anyone
+claiming a large DS-1000 retrieval win on 40 tasks is measuring sampling error.
+
+### Scope and limits
+
+- The held-out split is reported at full scope: all 220 positive cases, every
+  corpus provisioned, zero failed queries. Delphi scores 0.309 MRR / 0.442
+  Recall@5 / 0.582 Recall@20 with query expansion and listwise reranking
+  enabled — well ahead of the development split the pipeline was tuned on.
+- The hosted head-to-head is run on the development split, where both engines
+  have every corpus indexed. Nia has 60 of the 220 final-split commits indexed
+  on its side, so a full held-out head-to-head is not available.
+- Delphi is not state of the art at the top of the list. On 135 shared cases
+  the hosted comparator leads MRR 0.261 to 0.229 and wins more cases head to
+  head. Recall@5 is tied. Delphi's wins are coverage and latency.
+- Every reported configuration was confirmed on the 220-case held-out split
+  before shipping. Four candidate improvements looked good on the development
+  split and were rejected when held-out disagreed.
+- Earlier head-to-head figures are withdrawn rather than restated: the Delphi
+  half of that run is now known to have been measuring a mismatched embedding
+  space.
+
+Full method, ablations, and expandable per-query retrieval traces:
 [The context engine is the product](https://trydelphi.ai/blog/context-engine-is-the-product).
 
 ### Timeline
@@ -63,8 +186,8 @@ Read the full method, failure analysis, and claim boundaries in
 | --- | --- |
 | Open source | Released Delphi as a local-first MCP context engine under Apache 2.0. |
 | Product foundation | Added versioned multi-source indexing, hybrid retrieval, code intelligence, and agent-ready context packs. |
-| 2026-07-29 | Audited repository-benchmark fidelity and excluded 57 truncated targets before comparison. |
-| 2026-07-29 | Reached 95.0% pass@1 in the fixed-model developer pilot and 1.25 s mean query latency on the strict-valid retrieval subset. |
+| 2026-07-30 | Found and fixed a silent embedding-space mismatch that had made the vector branch return random results; added a permanent check for it. |
+| 2026-07-30 | Rebuilt ranking on reciprocal-rank fusion, added a path-affinity branch, and set reranker defaults from measurement. |
 
 ---
 

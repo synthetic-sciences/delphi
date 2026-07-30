@@ -3,7 +3,11 @@ import { useEffect, useState } from "react";
 
 type Theme = "light" | "dark";
 
-export function ThemeToggle() {
+export function ThemeToggle({
+  tone = "default",
+}: {
+  tone?: "default" | "inverse";
+}) {
   const [theme, setTheme] = useState<Theme | null>(null);
 
   useEffect(() => {
@@ -33,7 +37,11 @@ export function ThemeToggle() {
       aria-label={
         isLight ? "Switch to dark theme" : "Switch to light theme"
       }
-      className="inline-flex items-center justify-center w-8 h-8 rounded-[6px] text-[var(--fg-dim)] hover:text-[var(--fg-strong)] hover:bg-[var(--line)] transition-colors"
+      className={`focus-ring inline-flex h-8 w-8 items-center justify-center transition-colors ${
+        tone === "inverse"
+          ? "text-[#e8deca] hover:bg-white/10 hover:text-white"
+          : "text-[var(--fg-dim)] hover:bg-[var(--line)] hover:text-[var(--fg-strong)]"
+      }`}
     >
       {/* Sun for light, moon for dark — drawn inline so colour follows currentColor */}
       {isLight ? (
