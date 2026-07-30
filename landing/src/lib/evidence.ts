@@ -20,7 +20,7 @@ export const BENCHMARK = {
  * measured in the configuration we recommend running, query expansion
  * included, so the latency column carries its cost rather than hiding it. */
 export const RETRIEVAL_COMPARISON = [
-  { system: "Delphi", mrr: 0.243, recall5: 0.367, recall20: 0.556, latencyMs: 6813, ours: true },
+  { system: "Delphi", mrr: 0.220, recall5: 0.369, recall20: 0.551, latencyMs: 5694, ours: true },
   { system: "Nia", mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, ours: false },
   { system: "grep", mrr: 0.180, recall5: 0.302, recall20: 0.578, latencyMs: null, ours: false },
   { system: "RepoMap", mrr: 0.169, recall5: 0.240, recall20: 0.551, latencyMs: null, ours: false },
@@ -35,9 +35,9 @@ export const HEAD_TO_HEAD = {
   comparator: "Nia",
   cases: 75,
   failures: 0,
-  delphi: { mrr: 0.243, recall5: 0.367, recall20: 0.556, latencyMs: 6813, meanPaths: 20.0 },
+  delphi: { mrr: 0.220, recall5: 0.369, recall20: 0.551, latencyMs: 5694, meanPaths: 20.0 },
   nia: { mrr: 0.228, recall5: 0.391, recall20: 0.449, latencyMs: 36881, meanPaths: 7.8 },
-  latencyRatio: 5.4,
+  latencyRatio: 6.5,
 } as const;
 
 /* What each change was worth, measured one at a time on the same split.
@@ -98,11 +98,11 @@ export const HELD_OUT = {
   split: "final",
   scored: 220,
   skippedUnprovisioned: 0,
-  mrr: 0.285,
-  recall5: 0.419,
-  recall20: 0.567,
-  bcy8k: 0.446,
-  latencyMsMean: 5961,
+  mrr: 0.309,
+  recall5: 0.442,
+  recall20: 0.582,
+  bcy8k: 0.467,
+  latencyMsMean: 5571,
   failures: 0,
 } as const;
 
@@ -112,17 +112,17 @@ export const HELD_OUT = {
 export const QUERY_EXPANSION = [
   { label: "Retrieval only", mrr: 0.228, recall5: 0.349, recall20: 0.552, latencyMs: 1957 },
   { label: "+ hypothetical document", mrr: 0.241, recall5: 0.355, recall20: 0.579, latencyMs: 4110 },
-  { label: "+ listwise rerank", mrr: 0.285, recall5: 0.419, recall20: 0.567, latencyMs: 5961 },
+  { label: "+ listwise rerank", mrr: 0.309, recall5: 0.442, recall20: 0.582, latencyMs: 5571 },
 ] as const;
 
 /* Per-workflow on the held-out split. The spread is the interesting part:
  * a failure trace names symbols that exist in the code, and a review comment
  * names almost nothing a retriever can key on. */
 export const HELD_OUT_WORKFLOWS = [
-  { workflow: "trace2code", cases: 38, mrr: 0.492, recall5: 0.711, recall20: 0.908 },
-  { workflow: "edit2ripple", cases: 44, mrr: 0.300, recall5: 0.369, recall20: 0.587 },
-  { workflow: "code2test", cases: 83, mrr: 0.242, recall5: 0.428, recall20: 0.521 },
-  { workflow: "comment2context", cases: 55, mrr: 0.194, recall5: 0.245, recall20: 0.324 },
+  { workflow: "trace2code", cases: 38, mrr: 0.693, recall5: 0.842, recall20: 0.908 },
+  { workflow: "edit2ripple", cases: 44, mrr: 0.274, recall5: 0.434, recall20: 0.587 },
+  { workflow: "code2test", cases: 83, mrr: 0.220, recall5: 0.394, recall20: 0.586 },
+  { workflow: "comment2context", cases: 55, mrr: 0.207, recall5: 0.245, recall20: 0.345 },
 ] as const;
 
 /* Reranker selection. The larger, code-aware model lost on every axis. */
