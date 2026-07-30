@@ -597,6 +597,140 @@ def path_stems_from_query(query: str, *, limit: int = 4) -> list[str]:
     return stems
 
 
+def anchor_paths_from_query(query: str, *, limit: int = 3) -> list[str]:
+    """Full repository-relative paths the query names, not just their stems.
+
+    ``path_stems_from_query`` answers "what is this query about"; this answers
+    "which exact file is the caller holding", which is what a change-impact
+    question hangs on.
+    """
+    if not query:
+        return []
+    paths: list[str] = []
+    for match in _PATH_EXT_RE.findall(_URL_RE.sub(" ", query)):
+        candidate = match.strip().lstrip("./")
+        # A bare filename is too weak an anchor: many repositories contain
+        # several files with the same basename in different packages.
+        if "/" in candidate and candidate not in paths:
+            paths.append(candidate)
+        if len(paths) >= limit:
+            break
+    return paths
+
+
+def reverse_dependency_search(
+    session: Session,
+    query: str,
+    user_id: str,
+    repo_ids: list[str] | None = None,
+    top_k: int = 20,
+    max_symbols: int = 20,
+) -> list[Candidate]:
+    """Find the files that would be affected by changing a file the query names.
+
+    "If I change this, what breaks?" is a dependency question, and every other
+    branch answers it with similarity instead. Nothing about a caller looks
+    semantically like the function it calls, so vector search cannot see the
+    edge and BM25 only sees it by accident when the names happen to collide.
+
+    The index has no import graph, but it does record which symbols each file
+    defines. Files that mention the anchor's symbols are, in practice, the
+    files that depend on it: callers, tests, re-exports. Scoring by how many
+    *distinct* anchor symbols a file references keeps a file that touches the
+    whole API above one that happens to share a single common word.
+    """
+    anchors = anchor_paths_from_query(query)
+    if not anchors:
+        return []
+
+    params: dict[str, Any] = {
+        "user_id": user_id,
+        "top_k": top_k,
+        "max_symbols": max_symbols,
+        "anchors": anchors,
+    }
+    extra = ""
+    if repo_ids:
+        ph = ", ".join([f":rid_{i}" for i in range(len(repo_ids))])
+        extra += f" AND cc.repo_id IN ({ph})"
+        for i, rid in enumerate(repo_ids):
+            params[f"rid_{i}"] = rid
+
+    # Short names ('id', 'get') match everywhere and carry no dependency
+    # signal, so the anchor set is restricted to names long enough to be
+    # meaningfully specific to this file.
+    sql = text(
+        f"""
+        WITH anchor_symbols AS (
+            SELECT DISTINCT s.name
+            FROM symbols s
+            INNER JOIN repository_files arf ON arf.file_id = s.file_id
+            WHERE arf.file_path = ANY(:anchors)
+              AND length(s.name) >= 4
+            LIMIT :max_symbols
+        ),
+        referencing AS (
+            SELECT
+                cc.chunk_id, cc.repo_id, cc.file_id,
+                cc.content, cc.start_line, cc.end_line,
+                cc.chunk_index, cc.chunk_type, cc.language, cc.symbol_names,
+                rf.file_path,
+                r.owner || '/' || r.name AS repo_name,
+                r.is_public,
+                count(DISTINCT a.name) AS ref_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY cc.file_id ORDER BY cc.chunk_index
+                ) AS chunk_rank
+            FROM code_chunks cc
+            {_user_repo_filter()}
+            INNER JOIN repository_files rf ON cc.file_id = rf.file_id
+            INNER JOIN anchor_symbols a ON cc.content LIKE '%' || a.name || '%'
+            WHERE rf.file_path <> ALL(:anchors)
+            {extra}
+            GROUP BY
+                cc.chunk_id, cc.repo_id, cc.file_id, cc.content,
+                cc.start_line, cc.end_line, cc.chunk_index, cc.chunk_type,
+                cc.language, cc.symbol_names, rf.file_path, repo_name,
+                r.is_public
+        )
+        SELECT * FROM referencing
+        WHERE chunk_rank = 1
+        ORDER BY ref_count DESC, length(file_path)
+        LIMIT :top_k
+        """
+    )
+    try:
+        rows = session.execute(sql, params).mappings().all()
+    except Exception as e:
+        logger.warning("reverse dependency branch failed", error=str(e))
+        return []
+
+    if not rows:
+        return []
+
+    top_refs = max(int(r["ref_count"]) for r in rows) or 1
+    out: list[Candidate] = []
+    for r in rows:
+        c = Candidate(
+            chunk_id=str(r["chunk_id"]),
+            repo_id=str(r["repo_id"]),
+            file_id=str(r["file_id"]),
+            repo_name=r["repo_name"] or "",
+            file_path=r["file_path"] or "",
+            content=r["content"] or "",
+            start_line=r["start_line"],
+            end_line=r["end_line"],
+            chunk_index=r["chunk_index"],
+            chunk_type=r["chunk_type"] or "code",
+            language=r["language"],
+            symbol_names=r["symbol_names"],
+            is_public=bool(r["is_public"]),
+        )
+        c.sources["reverse_dep"] = float(r["ref_count"]) / top_refs
+        out.append(c)
+    return out
+
+
 def path_affinity_search(
     session: Session,
     query: str,
@@ -823,6 +957,20 @@ DEFAULT_WEIGHTS = {
     # when the query actually named a file — so it is weighted alongside the
     # exact-path branch rather than treated as a weak fallback.
     "path_affinity": 0.15,
+    # Reverse dependency is off by default. Measured on the ARB development
+    # split it is a clear win on change-impact queries and a loss everywhere
+    # else, because a global weight injects dependents into workflows whose
+    # answer is not a dependent:
+    #
+    #   weight  edit2ripple R@5   overall MRR   overall R@20
+    #   0.00    0.238             0.193         0.544
+    #   0.15    0.310             0.182         0.527
+    #   0.30    0.381             0.163         0.493
+    #
+    # The branch needs query-intent gating ("here is a diff, what else is
+    # affected") rather than a standing weight. Until that exists, enable it
+    # per-deployment via SYNSC_FUSION_WEIGHTS=reverse_dep=0.3.
+    "reverse_dep": 0.0,
     "trigram": 0.05,
 }
 
@@ -976,6 +1124,17 @@ def hybrid_retrieve(
         )
         timing["path_ms"] = (time.time() - t) * 1000
 
+    # 2c. Reverse dependency — the files that would break if the file this
+    # query names were changed. Similarity cannot see a caller/callee edge.
+    if enable_path:
+        t = time.time()
+        branches.append(
+            reverse_dependency_search(
+                session, query, user_id, repo_ids, top_k=min(top_k, 20)
+            )
+        )
+        timing["reverse_dep_ms"] = (time.time() - t) * 1000
+
     # 2b. Path affinity — fires whenever the query itself names a file, with
     # no explicit glob from the caller. Without it a path mentioned in the
     # query is invisible to retrieval, since BM25 only indexes chunk content.
@@ -1027,6 +1186,7 @@ def hybrid_retrieve(
         "symbol": sum(1 for c in fused if "symbol" in c.sources),
         "path": sum(1 for c in fused if "path" in c.sources),
         "path_affinity": sum(1 for c in fused if "path_affinity" in c.sources),
+        "reverse_dep": sum(1 for c in fused if "reverse_dep" in c.sources),
         "trigram": sum(1 for c in fused if "trigram" in c.sources),
     }
     logger.debug("hybrid_retrieve timing", **timing)

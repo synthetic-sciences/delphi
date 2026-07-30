@@ -350,3 +350,35 @@ def test_path_stems_ignores_filenames_inside_urls():
     )
     assert "grpcproxy" in stems
     assert "contributing" not in stems
+
+
+# ── Reverse dependency ───────────────────────────────────────────────────────
+
+
+def test_anchor_paths_requires_a_directory_component():
+    from synsc.services.hybrid_retrieval import anchor_paths_from_query
+
+    # A bare filename is ambiguous across packages; a full path is an anchor.
+    assert anchor_paths_from_query("look at utils.py") == []
+    assert anchor_paths_from_query("edit binding/form_mapping.go") == [
+        "binding/form_mapping.go"
+    ]
+
+
+def test_anchor_paths_ignores_urls_and_is_bounded():
+    from synsc.services.hybrid_retrieval import anchor_paths_from_query
+
+    q = "see https://github.com/o/r/blob/main/docs/guide.md and pkg/a.go"
+    assert anchor_paths_from_query(q) == ["pkg/a.go"]
+    many = " ".join(f"pkg/mod_{i}.py" for i in range(10))
+    assert len(anchor_paths_from_query(many, limit=3)) == 3
+
+
+def test_reverse_dependency_skips_query_without_an_anchor_path():
+    from synsc.services.hybrid_retrieval import reverse_dependency_search
+
+    class _Session:
+        def execute(self, *a, **k):  # pragma: no cover - must not be reached
+            raise AssertionError("should not query without an anchor path")
+
+    assert reverse_dependency_search(_Session(), "how does auth work", "u") == []
