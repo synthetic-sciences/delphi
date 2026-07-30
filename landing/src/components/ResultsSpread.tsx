@@ -16,7 +16,7 @@ const MEASUREMENTS = [
   {
     value: HEAD_TO_HEAD.delphi.recall20.toFixed(3),
     label: "Recall@20",
-    detail: `hosted comparator ${HEAD_TO_HEAD.nia.recall20.toFixed(3)}`,
+    detail: `${HEAD_TO_HEAD.cases} shared cases · comparator ${HEAD_TO_HEAD.nia.recall20.toFixed(3)}`,
     lead: true,
   },
   {
@@ -32,9 +32,9 @@ const MEASUREMENTS = [
     lead: false,
   },
   {
-    value: `${BENCHMARK.cases}`,
-    label: "Scored cases",
-    detail: `${BENCHMARK.name}, ${BENCHMARK.workflows.length} workflows`,
+    value: `${HELD_OUT.scored}`,
+    label: "Held-out cases",
+    detail: `${HELD_OUT.failures} failed queries`,
     lead: false,
   },
 ] as const;
@@ -54,10 +54,11 @@ export function ResultsSpread() {
             <p className="text-[17px] leading-7 text-[var(--fg-dim)] md:text-[18px] md:leading-8">
               {BENCHMARK.cases} cases from {BENCHMARK.name}, scored by the
               benchmark&apos;s own code — same cases, same candidate filter,
-              same metric implementation, with the hosted comparator re-run
-              live on the same corpora. Delphi leads every published baseline
-              on MRR and Recall@5, and leads on Recall@20 coverage at a
-              twelfth of the comparator&apos;s latency. The comparator still
+              same metric implementation. Delphi leads every published
+              baseline on MRR and Recall@5. Against the hosted comparator, on
+              the {HEAD_TO_HEAD.cases} cases where both engines have the
+              corpus indexed, Delphi leads Recall@20 by a wide margin and runs{" "}
+              {HEAD_TO_HEAD.latencyRatio.toFixed(1)}x faster; the comparator
               ranks the top of the list better.
             </p>
             <Link
