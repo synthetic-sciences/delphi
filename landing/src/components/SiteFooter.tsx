@@ -1,60 +1,90 @@
 import Link from "next/link";
 
+const REPO = "https://github.com/synthetic-sciences/delphi";
+
+const COLUMNS = [
+  {
+    heading: "Project",
+    links: [
+      ["GitHub", REPO],
+      ["npm", "https://www.npmjs.com/package/@synsci/delphi"],
+      ["Releases", `${REPO}/releases`],
+    ],
+  },
+  {
+    heading: "Resources",
+    links: [
+      ["Docs", `${REPO}#quick-start`],
+      ["Benchmarks", "/blog/context-engine-is-the-product"],
+      ["Install", "/#install"],
+      ["Apache 2.0", `${REPO}/blob/master/LICENSE`],
+    ],
+  },
+  {
+    heading: "Company",
+    links: [
+      ["Synthetic Sciences ↗", "https://syntheticsciences.ai"],
+      ["Atlas ↗", "https://tryatlas.sh"],
+      ["OpenScience ↗", "https://openscience.sh"],
+    ],
+  },
+] as const;
+
 export function SiteFooter() {
   return (
-    <footer className="border-t border-[var(--line)] bg-[var(--bg-deep)]">
-      <div className="mx-auto grid w-full max-w-[1240px] gap-12 px-5 py-14 sm:px-8 md:grid-cols-[1.4fr_1fr] md:py-20">
-        <div>
-          <p className="font-serif text-[30px] tracking-[-0.03em] text-[var(--fg-strong)]">
-            delphi
-          </p>
-          <p className="mt-3 max-w-[420px] text-[15px] leading-7 text-[var(--fg-mute)]">
-            Open-source context infrastructure for agents that need to reason
-            over real software and research.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-8 font-mono text-[10px] uppercase tracking-[0.15em] text-[var(--fg-mute)]">
-          <div className="space-y-4">
-            <Link className="footer-link" href="/blog">
-              Research blog
-            </Link>
-            <Link
-              className="footer-link"
-              href="https://github.com/synthetic-sciences/delphi"
-            >
-              GitHub
-            </Link>
-            <Link
-              className="footer-link"
-              href="https://github.com/synthetic-sciences/delphi#quick-start"
-            >
-              Documentation
-            </Link>
+    <footer className="relative overflow-hidden border-t border-[var(--line)] bg-[var(--bg-deep)]">
+      <div className="mx-auto w-full max-w-[1400px] px-6 pb-40 pt-16 sm:px-10 md:pb-48 md:pt-20">
+        <div className="grid gap-12 md:grid-cols-[1.5fr_1fr_1fr_1fr]">
+          <div>
+            <p className="font-serif text-[26px] tracking-[-0.03em] text-[var(--fg-strong)]">
+              delphi
+            </p>
+            <p className="mt-3 max-w-[300px] text-[14px] leading-7 text-[var(--fg-mute)]">
+              The open-source context engine for coding agents, by Synthetic
+              Sciences.
+            </p>
           </div>
-          <div className="space-y-4">
-            <Link
-              className="footer-link"
-              href="https://github.com/synthetic-sciences/delphi/blob/master/LICENSE"
-            >
-              Apache 2.0
-            </Link>
-            <Link
-              className="footer-link"
-              href="mailto:hello@syntheticsciences.ai"
-            >
-              Contact
-            </Link>
-            <Link
-              className="footer-link"
-              href="https://syntheticsciences.ai"
-            >
-              Synthetic Sciences
-            </Link>
-          </div>
+
+          {COLUMNS.map((column) => (
+            <div key={column.heading}>
+              <p className="text-[14px] text-[var(--fg-dim)]">
+                {column.heading}
+              </p>
+              <ul className="mt-5 space-y-3">
+                {column.links.map(([label, href]) => (
+                  <li key={label}>
+                    <Link
+                      className="text-[14px] text-[var(--fg-mute)] transition-colors hover:text-[var(--fg-strong)]"
+                      href={href}
+                    >
+                      {label}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
-        <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-[var(--fg-mute)] md:col-span-2">
-          © 2026 Synthetic Sciences · Built in the open
-        </p>
+
+        <div className="mt-16 flex flex-wrap items-center justify-between gap-4 border-t border-[var(--line)] pt-6">
+          <p className="text-[13px] text-[var(--fg-mute)]">
+            © 2026 Synthetic Sciences. Apache 2.0.
+          </p>
+          <Link
+            className="text-[13px] text-[var(--fg-mute)] transition-colors hover:text-[var(--fg-strong)]"
+            href="#top"
+          >
+            Back to top ↑
+          </Link>
+        </div>
+      </div>
+
+      {/* Bleeds off the bottom edge; the footer's own overflow does the crop. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 bottom-[-0.3em] h-[190px]"
+      >
+        <span className="footer-watermark">delphi</span>
       </div>
     </footer>
   );

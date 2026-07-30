@@ -108,7 +108,7 @@ a, button { -webkit-tap-highlight-color: transparent; }
  * image, the sentence is not. */
 .hero-title {
   font-family: var(--font-serif), Georgia, serif;
-  font-size: clamp(2.15rem, 4.4vw, 3.5rem);
+  font-size: clamp(34px, 4.6vw, 62px);
   font-weight: 400;
   letter-spacing: -0.028em;
   line-height: 1.06;
@@ -122,27 +122,77 @@ a, button { -webkit-tap-highlight-color: transparent; }
  * arrives whole and the copy is placed relative to where it actually ends. */
 .hero-plate {
   position: absolute;
-  inset: 0 0 auto 0;
-  -webkit-mask-image: linear-gradient(to bottom, #000 52%, rgba(0, 0, 0, 0.4) 78%, transparent 97%);
-  mask-image: linear-gradient(to bottom, #000 52%, rgba(0, 0, 0, 0.4) 78%, transparent 97%);
+  inset: 0;
 }
 
-/* A 1.83:1 plate laid out at natural width is only ~210px tall on a phone,
- * which leaves a dead black band between the engraving and the copy. Narrow
- * screens get a vertical crop instead: the frame is held at 56% of the
- * viewport and the plate fills it, anchored left-of-centre so the temple and
- * the figure on the Sacred Way both survive the crop. */
-@media (max-width: 640px) {
-  .hero-plate {
-    height: 56%;
-  }
+.hero-plate img {
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+  object-position: 42% center;
+}
 
+/* Phones are much taller than the 1.83:1 plate, so the crop tightens onto the
+ * temple and the figure on the Sacred Way rather than the empty sky. */
+@media (max-width: 640px) {
   .hero-plate img {
-    height: 100%;
-    width: 100%;
-    object-fit: cover;
     object-position: 38% center;
   }
+}
+
+/* Printed engravings sit oddly flat behind digital type. A little film grain
+ * over the top puts the plate and the page on the same surface. */
+.hero-grain {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 0.3;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
+/* Rather than fading the whole plate out behind the copy, the engraving stays
+ * fully visible and only the two corners the type occupies are darkened. The
+ * wordmark sits in the first, the headline and buttons in the second. */
+.hero-vignette {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(9, 8, 6, 0.2), rgba(9, 8, 6, 0.2)),
+    radial-gradient(58% 46% at 4% 4%, rgba(9, 8, 6, 0.86) 0%, rgba(9, 8, 6, 0) 72%),
+    radial-gradient(72% 58% at 92% 98%, rgba(9, 8, 6, 0.92) 0%, rgba(9, 8, 6, 0) 74%);
+}
+
+/* A short landing strip so the plate meets the next section cleanly. */
+.hero-fade {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 4;
+  height: 150px;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--bg) 0%, rgba(9, 8, 6, 0) 100%);
+}
+
+/* Oversized wordmark bled off the bottom of the footer, clipped by the
+ * footer's own overflow. Set in the page colour at a few percent so it reads
+ * as texture rather than text. */
+.footer-watermark {
+  position: absolute;
+  left: 50%;
+  top: 0.04em;
+  transform: translateX(-50%);
+  font-family: var(--font-serif), Georgia, serif;
+  font-size: clamp(96px, 15vw, 200px);
+  line-height: 0.82;
+  letter-spacing: -0.045em;
+  white-space: nowrap;
+  color: rgba(238, 233, 221, 0.05);
+  pointer-events: none;
+  user-select: none;
 }
 
 /* Scrim from solid page colour up to nothing. It reaches full opacity by the
