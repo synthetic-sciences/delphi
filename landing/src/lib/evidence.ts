@@ -145,6 +145,21 @@ export const RERANKER_CHOICE = [
   { model: "ms-marco-MiniLM-L-6", params: "22M", mrr: 0.193, recall5: 0.294, recall20: 0.560, latencyMs: 2903 },
 ] as const;
 
+/* DS-1000: a second axis, and the one that ties retrieval to an outcome a
+ * benchmark cannot fudge — does the generated code pass the official test.
+ * Model held fixed across every condition. */
+export const DOWNSTREAM = {
+  benchmark: "DS-1000",
+  tasks: 40,
+  model: "Claude Opus 5",
+  rows: [
+    { condition: "Delphi", passAtOne: 0.900, ours: true },
+    { condition: "No retrieval", passAtOne: 0.900, ours: false },
+    { condition: "Nia", passAtOne: 0.875, ours: false },
+    { condition: "Context7", passAtOne: 0.875, ours: false },
+  ],
+} as const;
+
 export const ARTICLE = {
   slug: "context-engine-is-the-product",
   href: "/blog/context-engine-is-the-product",
