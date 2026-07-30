@@ -66,8 +66,8 @@ export function ComparisonFigure() {
       </div>
       <figcaption>
         Baselines are the benchmark&apos;s own published runs on the same split
-        and candidate filter, scored by the same code. Gold marks the leader per
-        column — grep still holds Recall@20.
+        and candidate filter, scored by the same code. Gold marks the leader in
+        each column. grep still holds Recall@20.
       </figcaption>
     </figure>
   );

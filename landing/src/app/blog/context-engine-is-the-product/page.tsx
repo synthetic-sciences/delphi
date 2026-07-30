@@ -88,61 +88,54 @@ export default function ContextEngineArticle() {
 
           <article className="article-prose min-w-0">
             <p className="mt-0 text-[1.2em] leading-[1.7] text-[var(--fg-strong)]">
-              We spent a week trying to work out why Delphi kept losing a
-              retrieval benchmark it had no business losing. The answer was that
-              the benchmark had not been measuring retrieval at all. The corpus
-              had been indexed by one embedding model and queried by another,
-              both of which happen to emit 768-dimensional vectors, so every
-              cosine was computed between unrelated spaces and every score was
-              noise. Nothing raised. Nothing logged. The results looked entirely
-              plausible.
+              Delphi kept losing a retrieval benchmark it had no business
+              losing. It took us a week to work out why, and the answer was
+              stupid. The corpus had been indexed with one embedding model and
+              queried with another. Both produce 768-dimensional vectors, so
+              Postgres compared them happily and returned noise. No error, no
+              warning, no log line. Just wrong answers that looked fine.
             </p>
 
             <h2 id="result">The result</h2>
 
             <p>
-              After fixing that and rebuilding the ranking pipeline on top of
-              it, Delphi leads every published baseline on {BENCHMARK.name} for
-              MRR and Recall@5, on the same {BENCHMARK.cases} cases, with the
-              same candidate filter, scored by the benchmark&apos;s own code.
-              We also re-ran the hosted comparator live against the same
-              corpora on the same day, with no failures on either side.
+              With that fixed and the ranking rebuilt on top of it, Delphi
+              beats every published baseline on {BENCHMARK.name} for MRR and
+              Recall@5. Same {BENCHMARK.cases} cases, same candidate filter,
+              scored by the benchmark&apos;s own code. We also re-ran the
+              hosted comparator live against the same corpora that day. No
+              failures on either side.
             </p>
 
             <ComparisonFigure />
 
             <p>
-              The honest reading is a split decision. The comparator ranks the
-              top of the list better — {HEAD_TO_HEAD.nia.mrr.toFixed(3)} MRR
-              and {HEAD_TO_HEAD.nia.recall5.toFixed(3)} Recall@5 against
-              Delphi&apos;s {DELPHI.mrr.toFixed(3)} and{" "}
-              {DELPHI.recall5.toFixed(3)}. Delphi covers more of the answer
-              set, {HEAD_TO_HEAD.delphi.recall20.toFixed(3)} Recall@20 against{" "}
-              {HEAD_TO_HEAD.nia.recall20.toFixed(3)}, and returns it in{" "}
-              {(HEAD_TO_HEAD.delphi.latencyMs / 1000).toFixed(1)}s against{" "}
-              {(HEAD_TO_HEAD.nia.latencyMs / 1000).toFixed(0)}s — roughly{" "}
-              {HEAD_TO_HEAD.latencyRatio.toFixed(0)}× faster.
+              It is a split decision. The comparator ranks the top of the list
+              better, {HEAD_TO_HEAD.nia.mrr.toFixed(3)} MRR and{" "}
+              {HEAD_TO_HEAD.nia.recall5.toFixed(3)} Recall@5 against Delphi at{" "}
+              {DELPHI.mrr.toFixed(3)} and {DELPHI.recall5.toFixed(3)}. Delphi
+              finds more of the answer set, {HEAD_TO_HEAD.delphi.recall20.toFixed(3)}{" "}
+              Recall@20 against {HEAD_TO_HEAD.nia.recall20.toFixed(3)}, and
+              returns it in {(HEAD_TO_HEAD.delphi.latencyMs / 1000).toFixed(1)}s
+              instead of {(HEAD_TO_HEAD.nia.latencyMs / 1000).toFixed(0)}s.
             </p>
 
             <p>
-              Those two shapes come from different strategies rather than
-              different amounts of skill. The comparator returns about{" "}
-              {HEAD_TO_HEAD.nia.meanPaths.toFixed(0)} files per query and
-              Delphi returns {HEAD_TO_HEAD.delphi.meanPaths.toFixed(0)}: a
-              short confident list wins precision at the top, a longer one
-              wins coverage. Neither number subsumes the other, and which one
-              matters depends on whether an agent gets one shot or can read
-              further down.
+              That gap is a strategy difference, not a skill one. The
+              comparator returns about {HEAD_TO_HEAD.nia.meanPaths.toFixed(0)}{" "}
+              files per query. Delphi returns {HEAD_TO_HEAD.delphi.meanPaths.toFixed(0)}.
+              Short lists win at the top, long lists win on coverage. Which you
+              want depends on whether your agent gets one shot or can keep
+              reading.
             </p>
 
             <p>
-              Delphi also does not lead Recall@20 outright — plain grep reaches{" "}
-              {GREP.recall20.toFixed(3)}. We would rather print that than
-              quietly drop the column. A system that finds the right file
-              somewhere in twenty results is not obviously better than{" "}
-              <code>grep -r</code>; the argument for a context engine has to be
-              made at the top of the list, and that is exactly where we still
-              have work to do.
+              Delphi does not lead Recall@20 outright either. Plain grep gets{" "}
+              {GREP.recall20.toFixed(3)}. We would rather print that than drop
+              the column. If your engine finds the right file somewhere in
+              twenty results, you have not beaten <code>grep -r</code>. The
+              argument has to be won at the top of the list, and that is where
+              we still have work to do.
             </p>
 
             <ScopeStatement />
@@ -150,38 +143,36 @@ export default function ContextEngineArticle() {
             <h2 id="orthogonal">A corpus orthogonal to itself</h2>
 
             <p>
-              The symptom was that semantic queries returned nonsense. Asking a
-              68-repository corpus about TLS configuration in a gRPC proxy
-              returned an interval-tree implementation, a systemd journal
-              wrapper, and three file-locking utilities. Asking it for an exact
-              symbol name worked perfectly. Lexical retrieval was fine; anything
-              that went through the embedding was not.
+              The symptom was that semantic queries returned nonsense. We asked
+              a 68-repository corpus about TLS configuration in a gRPC proxy and
+              got back an interval tree, a systemd journal wrapper, and some
+              file-locking utilities. Exact symbol lookups worked perfectly.
+              Anything that went through the embedding did not.
             </p>
 
             <p>
               Two embedding models can produce vectors of the same width. When
               they do, pgvector will compute a cosine between them without
-              complaint. The query succeeds, results come back ranked, and the
-              ranking is noise, because the two spaces have no relationship to
-              each other. There is no error to catch and no log line to grep
-              for. The only thing wrong is the answer.
+              complaining. The query succeeds, results come back ranked, and the
+              ranking is noise, because the two spaces have nothing to do with
+              each other. There is no error to catch. The only thing wrong is
+              the answer.
             </p>
 
             <h2 id="check">The check that found it</h2>
 
             <p>
-              The check is almost embarrassingly simple. Take a chunk out of the
-              index. Embed its own exact content with whatever model is
-              answering queries today. Compare that fresh vector against the one
-              stored for that chunk. If the index and the query path agree, a
-              chunk must be nearly identical to itself.
+              The check is embarrassingly simple. Take a chunk out of the index.
+              Embed its own content with whatever model answers queries today.
+              Compare that vector against the one already stored. If the two
+              sides agree, a chunk has to be nearly identical to itself.
             </p>
 
             <MismatchFigure />
 
             <p>
-              It scored {EMBEDDING_MISMATCH.cosineBefore.toFixed(4)} —
-              orthogonal, which is what you get from two random vectors.
+              It scored {EMBEDDING_MISMATCH.cosineBefore.toFixed(4)}. That is
+              orthogonal, the number you get from two random vectors.
               Pointing the query path at{" "}
               <code>{EMBEDDING_MISMATCH.indexedWith}</code>, the model that had
               actually built the index, moved the same comparison to{" "}
@@ -206,9 +197,8 @@ export default function ContextEngineArticle() {
               With the embedding fixed, a second problem surfaced. Delphi fans a
               query out across vector, BM25, symbol, path, and trigram branches,
               then fuses the results. Each branch normalised its own scores by
-              dividing by that branch&apos;s top score — so the best hit of
-              every branch was pinned to exactly 1.0, no matter how bad it was
-              in absolute terms.
+              dividing by that branch&apos;s top score. So the best hit of every
+              branch got pinned to exactly 1.0, however bad it was.
             </p>
 
             <p>
@@ -221,10 +211,10 @@ export default function ContextEngineArticle() {
             </p>
 
             <p>
-              Reciprocal rank fusion exists precisely because ranks are
-              comparable across branches and raw scores are not. A cosine and a{" "}
-              <code>ts_rank_cd</code> are not the same unit and never were.
-              Fusion now scores position rather than magnitude.
+              Reciprocal rank fusion exists for this reason. Ranks compare
+              across branches. Raw scores do not. A cosine and a{" "}
+              <code>ts_rank_cd</code> were never the same unit. Fusion now
+              scores position instead of magnitude.
             </p>
 
             <h2 id="paths">The path nobody indexed</h2>
@@ -233,7 +223,7 @@ export default function ContextEngineArticle() {
               The third problem was the most mundane. BM25 indexes chunk
               content. Nothing indexed <code>file_path</code>. A query naming a
               file could not retrieve that file&apos;s neighbours lexically at
-              all — searching for <code>etcd_grpcproxy_test</code> returned{" "}
+              all. Searching for <code>etcd_grpcproxy_test</code> returned{" "}
               <code>fileutil.go</code>, because the filename existed nowhere in
               the searchable text.
             </p>
@@ -244,8 +234,8 @@ export default function ContextEngineArticle() {
               <code>tokens.py</code> change”. Delphi now has a path-affinity
               branch that matches on separator-stripped lowercase, so an anchor
               of <code>grpc_proxy</code> reaches{" "}
-              <code>etcd_grpcproxy_test.go</code> — a match ordinary
-              underscore-sensitive comparison misses. Results are capped per
+              <code>etcd_grpcproxy_test.go</code>, which underscore-sensitive
+              comparison misses. Results are capped per
               directory, because a stem like <code>grpc_proxy</code> matches
               thirty sibling files at a perfect score and would otherwise fill
               the branch before the one test in <code>tests/e2e/</code> ever
@@ -274,8 +264,8 @@ export default function ContextEngineArticle() {
               The 22M-parameter <code>ms-marco-MiniLM</code> model beats
               278M-parameter <code>bge-reranker-base</code> on every metric while
               running about seven times faster. Preferring the larger,
-              code-aware model — which is what the default did — cost latency
-              and quality simultaneously. Reranking depth behaves the same way:
+              code-aware model, which is what the default did, cost latency and
+              quality at the same time. Reranking depth behaves the same way:
               at a window of 100 with the cross-encoder deciding the order
               outright, Recall@20 collapses to 0.444, because the model
               confidently promotes plausible-looking files from the tail.
@@ -304,9 +294,9 @@ export default function ContextEngineArticle() {
             <p>
               On {BENCHMARK.name}, {BENCHMARK.cases} development cases: Delphi
               leads every published baseline on MRR and Recall@5, and trails
-              grep on Recall@20. On the held-out split — all{" "}
-              {HELD_OUT.scored} positive cases, every corpus provisioned,{" "}
-              {HELD_OUT.failures} failed queries — it scores{" "}
+              grep on Recall@20. On the held-out split, all {HELD_OUT.scored}{" "}
+              positive cases with every corpus provisioned and{" "}
+              {HELD_OUT.failures} failed queries, it scores{" "}
               {HELD_OUT.mrr.toFixed(3)} MRR, {HELD_OUT.recall5.toFixed(3)}{" "}
               Recall@5 and {HELD_OUT.recall20.toFixed(3)} Recall@20 at{" "}
               {(HELD_OUT.latencyMsMean / 1000).toFixed(2)}s mean latency. Those
@@ -360,9 +350,9 @@ export default function ContextEngineArticle() {
             <p>
               A failure trace hands the retriever real symbols, real file
               names, real stack frames, and Delphi finds the root-cause file in
-              the top five 76% of the time. A review comment hands it English —
-              &ldquo;this should probably be extracted&rdquo; — and the same
-              engine manages 17%. The gap between those two rows is not a
+              the top five 76% of the time. A review comment hands it English,
+              something like &ldquo;this should probably be extracted&rdquo;, and
+              the same engine manages 17%. The gap between those two rows is not a
               ranking problem. It is the difference between a query that
               contains evidence and one that does not, and no amount of fusion
               tuning closes it.
@@ -416,8 +406,8 @@ export default function ContextEngineArticle() {
               The snippet does not have to be right. It has to be written the
               way the corpus is written, which is enough to land the query
               vector in the right neighbourhood. Only the vector branch sees
-              it — BM25, symbol, and path still receive the caller&apos;s
-              literal words, because inventing terms for an exact-match branch
+              it. BM25, symbol, and path still get the caller&apos;s literal
+              words, because inventing terms for an exact-match branch
               manufactures precision that is not there. Queries already full of
               identifiers are skipped entirely, and their scores are unchanged,
               which is the shape you would expect if the mechanism works for
@@ -429,10 +419,9 @@ export default function ContextEngineArticle() {
               top of the list. On this benchmark it is not: the hosted
               comparator ranks better at MRR and Recall@5, and we publish that
               alongside the metrics we do lead. The claim we can defend is
-              narrower and, we think, more useful — Delphi retrieves more of
-              the answer set than the comparator, beats every published
-              baseline on early precision, and does it an order of magnitude
-              faster and entirely on your own hardware.
+              narrower. Delphi finds more of the answer set than the comparator,
+              beats every published baseline on early precision, and does it
+              much faster, on your own hardware.
             </p>
 
             <p>

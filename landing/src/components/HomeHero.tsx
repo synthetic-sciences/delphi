@@ -26,8 +26,8 @@ export function HomeHero() {
         </h1>
 
         <p className="mt-6 max-w-[54ch] text-[16px] leading-[1.65] text-[#ddd2ba] sm:text-[17px]">
-          Delphi indexes your code, docs, and papers, then assembles the
-          evidence an agent needs — locally, with provenance.
+          Delphi indexes your code, docs, and papers, then hands an agent the
+          evidence it needs. Runs locally. Every answer traceable.
         </p>
 
         <div className="mt-8 flex flex-wrap items-center gap-3">

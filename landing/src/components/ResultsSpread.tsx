@@ -53,10 +53,10 @@ export function ResultsSpread() {
           <div className="max-w-[680px] md:pt-9">
             <p className="text-[17px] leading-7 text-[var(--fg-dim)] md:text-[18px] md:leading-8">
               {BENCHMARK.cases} cases from {BENCHMARK.name}, scored by the
-              benchmark&apos;s own code. Delphi leads every published baseline
-              on MRR and Recall@5, and leads the hosted comparator on coverage
+              benchmark&apos;s own code. Delphi beats every published baseline
+              on MRR and Recall@5, and beats the hosted comparator on coverage
               at {HEAD_TO_HEAD.latencyRatio.toFixed(1)}x lower latency. The
-              comparator ranks the top of the list better.
+              comparator still ranks the top of the list better.
             </p>
             <Link
               href="/blog/context-engine-is-the-product"
@@ -109,7 +109,7 @@ export function ResultsSpread() {
           </p>
           <p>
             Held out: {HELD_OUT.scored} cases, {HELD_OUT.failures} failures,{" "}
-            {HELD_OUT.mrr.toFixed(3)} MRR — ahead of the split it was tuned on.
+            {HELD_OUT.mrr.toFixed(3)} MRR, ahead of the split it was tuned on.
           </p>
         </div>
       </div>

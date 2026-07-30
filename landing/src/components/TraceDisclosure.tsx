@@ -12,7 +12,7 @@ import { useState } from "react";
 export type RankedFile = {
   path: string;
   score: number;
-  /** Retrieval branches that surfaced this file: vector, bm25, symbol, … */
+  /** Retrieval branches that surfaced this file: vector, bm25, symbol. */
   branches?: string[];
 };
 
@@ -133,7 +133,7 @@ export function QueryTrace({
               <span className="font-mono trace-branches">
                 {(file.branches ?? [])
                   .map((branch) => BRANCH_LABEL[branch] ?? branch)
-                  .join(" ") || "—"}
+                  .join(" ") || "none"}
               </span>
               <span className="font-mono">{file.score.toFixed(3)}</span>
             </div>
