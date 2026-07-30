@@ -74,8 +74,12 @@ export function ClosingImage({
   return (
     <div className="relative min-h-[72vh] overflow-hidden border-t border-[var(--line)] bg-[#070605] text-[#f7f0dc]">
       <ThemedImage variant={variant} />
-      <div className="absolute inset-0 bg-[rgba(4,4,3,0.58)]" />
-      <div className="absolute inset-0 bg-gradient-to-b from-[var(--bg)] via-transparent to-[#070605]" />
+      {/* A flat 58% wash over the whole plate used to be the only overlay,
+          which muddied the engraving and still left the headline sitting on
+          the busiest part of it. Now the wash is light, and a bottom scrim
+          carries the copy band to solid instead. */}
+      <div className="absolute inset-0 bg-[rgba(4,4,3,0.3)]" />
+      <div className="hero-scrim" />
       {children && (
         <div className="relative z-10 mx-auto flex min-h-[72vh] w-full max-w-[1240px] items-end px-5 py-14 sm:px-8 md:py-20">
           {children}

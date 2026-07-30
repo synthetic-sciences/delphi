@@ -21,8 +21,10 @@ export default function Home() {
         <ClosingImage variant="archive">
           <div className="w-full">
             <p className="eyebrow text-[#bd9555]">Delphi · Synthetic Sciences</p>
-            <div className="mt-5 grid gap-8 md:grid-cols-[1.25fr_0.75fr] md:items-end">
-              <h2 className="max-w-[720px] font-serif text-[clamp(2.3rem,4.6vw,3.9rem)] leading-[1.04] tracking-[-0.032em] text-[#fff8e8]">
+            <div className="mt-5 grid gap-8 md:grid-cols-[1.15fr_0.85fr] md:items-end">
+              {/* Was clamp(2.3rem,4.6vw,3.9rem), which rendered at 62px and
+                  ran three lines across the middle of the archive plate. */}
+              <h2 className="max-w-[24ch] font-serif text-[clamp(1.9rem,3.2vw,2.9rem)] leading-[1.06] tracking-[-0.03em] text-[#fff8e8]">
                 Give the agent the evidence. Keep the record.
               </h2>
               <div className="flex flex-wrap gap-3 md:justify-end">
