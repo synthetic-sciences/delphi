@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from synsc.services.embedding_consistency import (
+    SOURCE_TABLES,
     EmbeddingMismatch,
     find_embedding_mismatches,
 )
@@ -19,51 +20,90 @@ class _Rows:
 
 
 class _Session:
-    def __init__(self, rows):
-        self._rows = rows
-        self.params = None
+    """Returns rows for one named table and nothing for the others."""
 
-    def execute(self, _statement, params):
-        self.params = params
-        return _Rows(self._rows)
+    def __init__(self, rows_by_table=None):
+        self._rows_by_table = rows_by_table or {}
+        self.calls: list[tuple[str, dict]] = []
+
+    def execute(self, statement, params):
+        sql = str(statement)
+        table = next(
+            (t for t, _, _ in SOURCE_TABLES if f"FROM {t}" in sql), "unknown"
+        )
+        self.calls.append((table, params))
+        return _Rows(self._rows_by_table.get(table, []))
 
 
-def test_reports_repository_indexed_by_another_model():
-    session = _Session([
-        {
-            "repo_id": "r1",
-            "repo_name": "etcd-io/etcd",
+def test_reports_a_repository_indexed_by_another_model():
+    session = _Session({
+        "repositories": [{
+            "source_id": "r1",
+            "source_name": "etcd-io/etcd",
             "embedding_model": "text-embedding-3-small",
-        }
-    ])
+        }]
+    })
     found = find_embedding_mismatches(session, "gemini-embedding-001")
     assert len(found) == 1
+    assert found[0].source_type == "repositories"
     assert found[0].indexed_with == "text-embedding-3-small"
-    assert found[0].querying_with == "gemini-embedding-001"
 
 
-def test_scopes_the_check_to_requested_repositories():
-    session = _Session([])
+def test_reports_a_documentation_source_too():
+    """A docs corpus in the wrong space is just as invisible as a repo."""
+    session = _Session({
+        "documentation_sources": [{
+            "source_id": "d1",
+            "source_name": "numpy docs",
+            "embedding_model": "gemini-embedding-001",
+        }]
+    })
+    found = find_embedding_mismatches(session, "text-embedding-3-small")
+    assert [m.source_type for m in found] == ["documentation_sources"]
+
+
+def test_checks_every_source_table():
+    session = _Session()
+    find_embedding_mismatches(session, "model-a")
+    assert {table for table, _ in session.calls} == {t for t, _, _ in SOURCE_TABLES}
+
+
+def test_repo_ids_scope_only_the_repository_check():
+    # Other source types are not named by repository id, so scoping them
+    # would silently skip the very sources a search still touches.
+    session = _Session()
     find_embedding_mismatches(session, "model-a", repo_ids=["r1", "r2"])
-    assert session.params["rid_0"] == "r1"
-    assert session.params["rid_1"] == "r2"
+    by_table = dict(session.calls)
+    assert by_table["repositories"]["rid_0"] == "r1"
+    assert "rid_0" not in by_table["documentation_sources"]
+
+
+def test_a_missing_table_does_not_break_the_check():
+    class _PartlyBroken(_Session):
+        def execute(self, statement, params):
+            if "FROM papers" in str(statement):
+                raise RuntimeError('relation "papers" does not exist')
+            return super().execute(statement, params)
+
+    session = _PartlyBroken({
+        "repositories": [{
+            "source_id": "r1", "source_name": "x", "embedding_model": "other",
+        }]
+    })
+    assert len(find_embedding_mismatches(session, "model-a")) == 1
 
 
 def test_no_active_model_means_nothing_to_compare():
-    session = _Session([{"repo_id": "r1", "repo_name": "x", "embedding_model": "m"}])
+    session = _Session({"repositories": [
+        {"source_id": "r1", "source_name": "x", "embedding_model": "m"}
+    ]})
     assert find_embedding_mismatches(session, "") == []
 
 
-def test_a_failing_check_never_breaks_search():
-    class _Broken:
-        def execute(self, *a, **k):
-            raise RuntimeError("database is down")
-
-    assert find_embedding_mismatches(_Broken(), "model-a") == []
-
-
-def test_message_names_both_models_and_the_remedy():
-    message = EmbeddingMismatch("r1", "etcd-io/etcd", "openai-x", "gemini-y").message()
-    assert "openai-x" in message
-    assert "gemini-y" in message
+def test_message_names_the_source_type_and_both_models():
+    message = EmbeddingMismatch(
+        "d1", "numpy docs", "openai-x", "gemini-y", "documentation_sources"
+    ).message()
+    assert "documentation_sources" in message
+    assert "openai-x" in message and "gemini-y" in message
     assert "re-index" in message
