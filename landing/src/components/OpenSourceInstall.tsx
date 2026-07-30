@@ -14,9 +14,9 @@ export function OpenSourceInstall() {
             Your index. Your source. Your deployment.
           </h2>
           <p className="mt-8 max-w-[640px] text-[17px] leading-8 text-[var(--fg-dim)]">
-            Run Delphi locally or inside your own infrastructure. Use local
-            sentence-transformers with no model API key, or connect hosted
-            embeddings when your workload calls for them.
+            Run it on your laptop or inside your own infrastructure. Local
+            sentence-transformers need no API key. Point it at hosted
+            embeddings when you want them.
           </p>
         </div>
 

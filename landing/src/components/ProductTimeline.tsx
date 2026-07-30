@@ -35,7 +35,7 @@ export function ProductTimeline() {
                   </p>
                   {index === TIMELINE.length - 1 && (
                     <p className="mt-4 font-mono text-[9px] uppercase tracking-[0.13em] text-[var(--fg-dim)]">
-                      State of the art in the tested developer-work setting.
+                      Every number held out and re-measured before publishing.
                     </p>
                   )}
                 </div>

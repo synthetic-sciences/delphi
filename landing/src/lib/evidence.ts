@@ -174,7 +174,7 @@ export const ARTICLE = {
   slug: "context-engine-is-the-product",
   href: "/blog/context-engine-is-the-product",
   title: "The context engine is the product",
-  dek: "A retrieval benchmark that measured nothing, the one-line check that caught it, and what an honest rebuild of the ranking pipeline was actually worth.",
+  dek: "Our benchmark was comparing vectors from two different embedding models. Here is how we found it, and what fixing it was actually worth.",
   published: "July 30, 2026",
   publishedIso: "2026-07-30",
   readingTime: "12 min read",

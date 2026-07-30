@@ -71,7 +71,7 @@ export default function OG() {
             trydelphi.ai
           </div>
           <div style={{ display: "flex" }}>
-            95.0% pass@1 · fixed-model developer pilot
+            0.528 recall@20 · 6.5x faster · self-hosted
           </div>
         </div>
       </div>

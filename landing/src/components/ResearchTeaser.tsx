@@ -13,8 +13,9 @@ export function ResearchTeaser() {
         </div>
         <div>
           <blockquote className="max-w-[840px] font-serif text-[clamp(1.6rem,2.9vw,2.4rem)] leading-[1.22] tracking-[-0.022em] text-[var(--fg-strong)]">
-            “Before asking who won retrieval, we had to ask whether the
-            benchmark still contained the files it said it was scoring.”
+            “Two embedding models, same vector width. Postgres compared them
+            happily and returned noise. No error. Just wrong answers that
+            looked fine.”
           </blockquote>
           <p className="mt-9 max-w-[690px] text-[17px] leading-8 text-[var(--fg-dim)]">
             {ARTICLE.dek}
