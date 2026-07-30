@@ -115,10 +115,12 @@ export function ResultsSpread() {
             {RIVALS.find((r) => r.system === "grep")!.recall20.toFixed(3)}.
           </p>
           <p>
-            The held-out split is reported at partial scope. {HELD_OUT.scored}{" "}
-            of its cases are scored and {HELD_OUT.skippedUnprovisioned} are
-            skipped, because those cases reach the same repositories at commits
-            that were never indexed. Provisioning them is in progress.
+            The held-out split is now reported at full scope: all{" "}
+            {HELD_OUT.scored} positive cases, every corpus provisioned,{" "}
+            {HELD_OUT.failures} failed queries. Delphi scores{" "}
+            {HELD_OUT.mrr.toFixed(3)} MRR and{" "}
+            {HELD_OUT.recall20.toFixed(3)} Recall@20 there — slightly ahead of
+            the split it was tuned on.
           </p>
         </div>
       </div>

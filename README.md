@@ -78,11 +78,33 @@ Delphi now compares `repositories.embedding_model` against the model answering
 queries on every search and on `/backend-health`, so a silent vector-space
 mismatch is reported instead of absorbed.
 
+### Held-out results, by workflow
+
+All 220 positive cases of the final split, zero failed queries:
+
+| Workflow | Cases | MRR | Recall@5 | Recall@20 |
+| --- | ---: | ---: | ---: | ---: |
+| trace2code | 38 | 0.468 | 0.737 | 0.908 |
+| edit2ripple | 44 | 0.230 | 0.356 | 0.587 |
+| code2test | 83 | 0.179 | 0.299 | 0.521 |
+| comment2context | 55 | 0.134 | 0.152 | 0.324 |
+| **overall** | **220** | **0.228** | **0.349** | **0.552** |
+
+The spread matters more than the average. A failure trace hands the retriever
+real symbols and stack frames, and Delphi finds the root-cause file in the top
+five 74% of the time. A review comment hands it English, and the same engine
+manages 15%. That gap is the difference between a query that contains evidence
+and one that does not.
+
 ### Scope and limits
 
-- The held-out split is reported at partial scope: 60 of its cases are scored
-  and 160 are skipped, because they reach the same repositories at commits that
-  were never indexed. Provisioning the remaining corpus is in progress.
+- The held-out split is reported at full scope: all 220 positive cases, every
+  corpus provisioned, zero failed queries. Delphi scores 0.228 MRR / 0.349
+  Recall@5 / 0.552 Recall@20 at 1.96 s mean latency — slightly ahead of the
+  development split the pipeline was tuned on.
+- The hosted head-to-head is run on the development split, where both engines
+  have every corpus indexed. Nia has 60 of the 220 final-split commits indexed
+  on its side, so a full held-out head-to-head is not available.
 - Delphi is not state of the art at the top of the list. On this benchmark the
   hosted comparator leads MRR and Recall@5, and that is published alongside the
   metrics Delphi does lead rather than omitted.

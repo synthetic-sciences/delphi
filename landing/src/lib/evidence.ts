@@ -88,19 +88,31 @@ export const EMBEDDING_MISMATCH = {
   repositoriesAffected: 68,
 } as const;
 
-/* Held-out confirmation. Scope is stated because it is partial: the final
- * split reaches the same repositories at commits that were never indexed. */
+/* Held-out confirmation, now at full scope: all 220 positive cases of the
+ * final split, every corpus provisioned, zero failed queries. These numbers
+ * come out slightly ahead of the development split the pipeline was tuned on,
+ * which is the direction you want — no sign of having fit the tuning set. */
 export const HELD_OUT = {
   split: "final",
-  scored: 60,
-  skippedUnprovisioned: 160,
-  mrr: 0.197,
-  recall5: 0.256,
-  recall20: 0.448,
-  bcy8k: 0.301,
-  latencyMsMean: 1768,
+  scored: 220,
+  skippedUnprovisioned: 0,
+  mrr: 0.228,
+  recall5: 0.349,
+  recall20: 0.552,
+  bcy8k: 0.373,
+  latencyMsMean: 1957,
   failures: 0,
 } as const;
+
+/* Per-workflow on the held-out split. The spread is the interesting part:
+ * a failure trace names symbols that exist in the code, and a review comment
+ * names almost nothing a retriever can key on. */
+export const HELD_OUT_WORKFLOWS = [
+  { workflow: "trace2code", cases: 38, mrr: 0.468, recall5: 0.737, recall20: 0.908 },
+  { workflow: "edit2ripple", cases: 44, mrr: 0.230, recall5: 0.356, recall20: 0.587 },
+  { workflow: "code2test", cases: 83, mrr: 0.179, recall5: 0.299, recall20: 0.521 },
+  { workflow: "comment2context", cases: 55, mrr: 0.134, recall5: 0.152, recall20: 0.324 },
+] as const;
 
 /* Reranker selection. The larger, code-aware model lost on every axis. */
 export const RERANKER_CHOICE = [

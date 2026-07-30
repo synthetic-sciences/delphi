@@ -18,6 +18,7 @@ import {
   EMBEDDING_MISMATCH,
   HEAD_TO_HEAD,
   HELD_OUT,
+  HELD_OUT_WORKFLOWS,
   RETRIEVAL_COMPARISON,
 } from "@/lib/evidence";
 
@@ -302,14 +303,68 @@ export default function ContextEngineArticle() {
             <p>
               On {BENCHMARK.name}, {BENCHMARK.cases} development cases: Delphi
               leads every published baseline on MRR and Recall@5, and trails
-              grep on Recall@20. On the held-out split it scores{" "}
-              {HELD_OUT.mrr.toFixed(3)} MRR at{" "}
-              {(HELD_OUT.latencyMsMean / 1000).toFixed(2)}s mean latency with
-              zero failures — over {HELD_OUT.scored} of its cases, with{" "}
-              {HELD_OUT.skippedUnprovisioned} skipped because they reach the
-              same repositories at commits that were never indexed. That is a
-              partial result and we report it as one; provisioning the remaining
-              corpus is in progress.
+              grep on Recall@20. On the held-out split — all{" "}
+              {HELD_OUT.scored} positive cases, every corpus provisioned,{" "}
+              {HELD_OUT.failures} failed queries — it scores{" "}
+              {HELD_OUT.mrr.toFixed(3)} MRR, {HELD_OUT.recall5.toFixed(3)}{" "}
+              Recall@5 and {HELD_OUT.recall20.toFixed(3)} Recall@20 at{" "}
+              {(HELD_OUT.latencyMsMean / 1000).toFixed(2)}s mean latency. Those
+              come out slightly ahead of the split the pipeline was tuned on,
+              which is the direction you want: no sign of having fit the
+              tuning set.
+            </p>
+
+            <p>
+              The per-workflow spread says more than the average does.
+              Retrieval is close to solved when the query names things that
+              exist in the code, and barely works when it does not.
+            </p>
+
+            <div className="not-prose mt-8">
+              <div className="figure-heading">
+                <span>Held-out, by workflow</span>
+                <span>{HELD_OUT.scored} cases</span>
+              </div>
+              <div className="divide-y divide-[var(--line)]">
+                <div className="grid grid-cols-[1fr_44px_60px_60px_64px] gap-3 py-3 font-mono text-[9px] uppercase tracking-[0.12em] text-[var(--fg-mute)]">
+                  <span>Workflow</span>
+                  <span className="text-right">n</span>
+                  <span className="text-right">MRR</span>
+                  <span className="text-right">R@5</span>
+                  <span className="text-right">R@20</span>
+                </div>
+                {HELD_OUT_WORKFLOWS.map((row) => (
+                  <div
+                    className="grid grid-cols-[1fr_44px_60px_60px_64px] gap-3 py-4 text-[14px]"
+                    key={row.workflow}
+                  >
+                    <span className="font-mono">{row.workflow}</span>
+                    <span className="text-right font-mono text-[var(--fg-mute)]">
+                      {row.cases}
+                    </span>
+                    <span className="text-right font-mono text-[var(--fg-strong)]">
+                      {row.mrr.toFixed(3)}
+                    </span>
+                    <span className="text-right font-mono text-[var(--fg-mute)]">
+                      {row.recall5.toFixed(3)}
+                    </span>
+                    <span className="text-right font-mono text-[var(--fg-mute)]">
+                      {row.recall20.toFixed(3)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <p>
+              A failure trace hands the retriever real symbols, real file
+              names, real stack frames, and Delphi finds the root-cause file in
+              the top five 74% of the time. A review comment hands it English —
+              &ldquo;this should probably be extracted&rdquo; — and the same
+              engine manages 15%. The gap between those two rows is not a
+              ranking problem. It is the difference between a query that
+              contains evidence and one that does not, and no amount of fusion
+              tuning closes it.
             </p>
 
             <p>
