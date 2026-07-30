@@ -134,28 +134,29 @@ five 74% of the time. A review comment hands it English, and the same engine
 manages 15%. That gap is the difference between a query that contains evidence
 and one that does not.
 
-### Downstream: does the code actually run
+### Downstream: a null result
 
 Retrieval metrics measure whether the right file was found. DS-1000 measures
 whether the agent's generated code passes the official test, with the model held
-fixed across every condition — an outcome a retrieval benchmark cannot fudge.
+fixed — an outcome a retrieval benchmark cannot fudge.
+
+On 40 development tasks Delphi reached 0.900 against 0.875 for both hosted
+engines, which reads like a downstream lead. It is not. On 100 held-out tasks,
+against a no-retrieval control:
 
 | Condition | pass@1 |
 | --- | ---: |
-| **Delphi** | **0.900** |
-| No retrieval | 0.900 |
-| Nia | 0.875 |
-| Context7 | 0.875 |
+| No retrieval | **0.870** |
+| Delphi | 0.860 |
 
-40 tasks, Claude Opus 5, zero generation errors. Delphi's context matches the
-best result and beats both hosted comparators.
+Paired per case: 2 tasks Delphi passed and the control did not, 3 the other way,
+and **95 of 100 decided identically**. Documentation context does not change what
+this model produces on this benchmark in either direction, and the 40-case spread
+was one or two tasks of noise.
 
-The honest reading is that **no retrieval also reaches 0.900**. On this slice the
-model already knows these libraries well enough that documentation context does
-not change the outcome, and any engine claiming a large downstream win here is
-measuring noise. What the number establishes is that Delphi's context does not
-*hurt* — worth stating, because 0.875 for the two hosted engines means theirs
-does.
+We report it because a benchmark that cannot separate the conditions is worth
+saying out loud — particularly when its smaller slice flatters us. Anyone
+claiming a large DS-1000 retrieval win on 40 tasks is measuring sampling error.
 
 ### Scope and limits
 

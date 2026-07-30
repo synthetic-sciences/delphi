@@ -145,19 +145,29 @@ export const RERANKER_CHOICE = [
   { model: "ms-marco-MiniLM-L-6", params: "22M", mrr: 0.193, recall5: 0.294, recall20: 0.560, latencyMs: 2903 },
 ] as const;
 
-/* DS-1000: a second axis, and the one that ties retrieval to an outcome a
- * benchmark cannot fudge — does the generated code pass the official test.
- * Model held fixed across every condition. */
+/* DS-1000, and the reason it is reported as a null result rather than a win.
+ *
+ * On 40 development tasks Delphi reached 0.900 against 0.875 for both hosted
+ * engines, which looks like a downstream lead. On 100 held-out tasks the same
+ * comparison against a no-retrieval control comes out at 0.860 to 0.870, with
+ * 95 of 100 cases decided identically. Documentation context does not change
+ * what this model produces on this benchmark, in either direction, and the
+ * 40-case spread was one or two tasks of noise.
+ *
+ * Published because a benchmark that cannot separate the conditions is worth
+ * saying out loud, especially when the smaller slice of it flatters us. */
 export const DOWNSTREAM = {
   benchmark: "DS-1000",
-  tasks: 40,
+  tasks: 100,
   model: "Claude Opus 5",
+  verdict: "no measurable effect",
   rows: [
-    { condition: "Delphi", passAtOne: 0.900, ours: true },
-    { condition: "No retrieval", passAtOne: 0.900, ours: false },
-    { condition: "Nia", passAtOne: 0.875, ours: false },
-    { condition: "Context7", passAtOne: 0.875, ours: false },
+    { condition: "No retrieval", passAtOne: 0.870, ours: false },
+    { condition: "Delphi", passAtOne: 0.860, ours: true },
   ],
+  pairedDelphiOnlyPasses: 2,
+  pairedControlOnlyPasses: 3,
+  pairedIdentical: 95,
 } as const;
 
 export const ARTICLE = {
