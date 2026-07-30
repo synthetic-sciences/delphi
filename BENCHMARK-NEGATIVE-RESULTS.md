@@ -39,6 +39,21 @@ and four did not survive it.
 | Listwise reranking of the retrieved head | Held-out MRR 0.241 → 0.285, R@5 0.355 → 0.419, BCY@8k 0.376 → 0.446. Worth more than everything else combined. |
 
 
+| **Reverse dependency, gated on query intent** | The fix the un-gated version was said to need, built and measured: fire only when the query carries a diff or an explicit ripple question *and* names a path. Gating removed the harm — the other three workflows stopped paying — but the gain came with it. Held-out MRR +0.004, Recall@5 -0.007. |
+
+## Why the gated version won only noise
+
+Worth stating, because it changes what the earlier result meant. The un-gated
+branch's headline gain — change-impact Recall@5 0.238 to 0.381 — was measured
+against a pipeline whose reranker was a 22M cross-encoder. By the time the
+gated version was tested, the listwise stage was a much stronger model, and it
+already promotes the dependents the branch was there to surface. The branch and
+the reranker were solving the same problem, and only one of them is needed.
+
+That is a general caution about ablations: a component's measured value is
+relative to everything else in the stack at the time, and a gain measured
+against a weak neighbour can evaporate when the neighbour improves.
+
 ## Where the remaining gap is
 
 The hosted comparator leads MRR by 0.031 on 135 shared cases. Everything above
