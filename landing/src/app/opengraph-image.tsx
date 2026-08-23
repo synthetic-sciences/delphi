@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt = "Delphi. Local context for coding agents.";
+export const alt = "Delphi. Context before code.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -14,15 +14,15 @@ export default function OG() {
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          padding: "84px 96px",
-          background: "#0a0908",
-          color: "#f4ecd6",
-          fontFamily: "serif",
+          padding: "72px 82px",
+          background: "#111110",
+          color: "#f3f3ef",
+          fontFamily: "sans-serif",
         }}
       >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
-          <div style={{ display: "flex", fontSize: 36, color: "#fbf5e3" }}>
-            delphi
+        <div style={{ display: "flex", alignItems: "baseline", gap: 18 }}>
+          <div style={{ display: "flex", fontSize: 38, color: "#f3f3ef" }}>
+            Delphi
           </div>
           <div style={{ display: "flex", fontSize: 18, color: "#8e8773" }}>
             by Synthetic Sciences
@@ -33,14 +33,14 @@ export default function OG() {
           <div
             style={{
               display: "flex",
-              fontSize: 96,
-              lineHeight: 1.04,
+              fontSize: 104,
+              lineHeight: 0.98,
               letterSpacing: -2,
-              color: "#fbf5e3",
+              color: "#f3f3ef",
               maxWidth: 920,
             }}
           >
-            Your agent should read the repo first.
+            Context before code.
           </div>
           <div
             style={{
@@ -51,7 +51,7 @@ export default function OG() {
               maxWidth: 900,
             }}
           >
-            Delphi searches your sources before the agent answers.
+            Find the right source files before your coding agent answers.
           </div>
         </div>
 
@@ -67,7 +67,7 @@ export default function OG() {
           <div style={{ display: "flex" }}>
             trydelphi.ai
           </div>
-          <div style={{ display: "flex" }}>open source · self-hosted</div>
+          <div style={{ display: "flex" }}>open source / self-hosted</div>
         </div>
       </div>
     ),

@@ -1,6 +1,12 @@
 import type { Metadata } from "next";
-import { Source_Serif_4, JetBrains_Mono } from "next/font/google";
+import { Geist, JetBrains_Mono, Source_Serif_4 } from "next/font/google";
 import "./globals.css";
+
+const sans = Geist({
+  variable: "--font-sans",
+  subsets: ["latin"],
+  display: "swap",
+});
 
 const serif = Source_Serif_4({
   variable: "--font-serif",
@@ -17,24 +23,24 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL("https://trydelphi.ai"),
   title: {
-    default: "Delphi · Local context for agents",
+    default: "Delphi | Context before code",
     template: "%s",
   },
   description:
-    "Delphi searches your sources before your coding agent answers.",
+    "Delphi finds the right source files before your coding agent answers.",
   openGraph: {
-    title: "Delphi · Local context for agents",
+    title: "Delphi | Context before code",
     description:
-      "Search your sources before the coding agent answers.",
+      "Find the right source files before the coding agent answers.",
     type: "website",
     url: "https://trydelphi.ai",
     siteName: "Delphi",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Delphi · Local context for agents",
+    title: "Delphi | Context before code",
     description:
-      "Search your sources before the coding agent answers.",
+      "Find the right source files before the coding agent answers.",
   },
   robots: {
     index: true,
@@ -60,7 +66,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${serif.variable} ${mono.variable}`}
+      className={`${sans.variable} ${serif.variable} ${mono.variable}`}
       suppressHydrationWarning
     >
       <head>
