@@ -1,7 +1,6 @@
 import { ImageResponse } from "next/og";
 
-export const alt =
-  "Delphi. Local context for agents.";
+export const alt = "Delphi. Local context for coding agents.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -21,12 +20,12 @@ export default function OG() {
           fontFamily: "serif",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-          <div style={{ display: "flex", fontSize: 36, color: "#d5a15d" }}>
-            ⚛
+        <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
+          <div style={{ display: "flex", fontSize: 36, color: "#fbf5e3" }}>
+            delphi
           </div>
-          <div style={{ display: "flex", fontSize: 28, color: "#fbf5e3" }}>
-            Delphi
+          <div style={{ display: "flex", fontSize: 18, color: "#8e8773" }}>
+            by Synthetic Sciences
           </div>
         </div>
 
@@ -34,13 +33,14 @@ export default function OG() {
           <div
             style={{
               display: "flex",
-              fontSize: 168,
-              lineHeight: 1,
-              letterSpacing: -3,
+              fontSize: 96,
+              lineHeight: 1.04,
+              letterSpacing: -2,
               color: "#fbf5e3",
+              maxWidth: 920,
             }}
           >
-            Give your agent the right files.
+            Your agent should read the repo first.
           </div>
           <div
             style={{
@@ -51,7 +51,7 @@ export default function OG() {
               maxWidth: 900,
             }}
           >
-            Code, docs, and papers. Indexed locally.
+            Delphi searches your sources before the agent answers.
           </div>
         </div>
 

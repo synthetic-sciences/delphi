@@ -21,11 +21,11 @@ export const metadata: Metadata = {
     template: "%s",
   },
   description:
-    "Delphi indexes code, docs, and papers locally, then gives agents the files they need.",
+    "Delphi searches your sources before your coding agent answers.",
   openGraph: {
     title: "Delphi · Local context for agents",
     description:
-      "Code, docs, and papers. Indexed locally for your agents.",
+      "Search your sources before the coding agent answers.",
     type: "website",
     url: "https://trydelphi.ai",
     siteName: "Delphi",
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Delphi · Local context for agents",
     description:
-      "Code, docs, and papers. Indexed locally for your agents.",
+      "Search your sources before the coding agent answers.",
   },
   robots: {
     index: true,
