@@ -87,7 +87,13 @@ print_centered() {
     printf "%*s%b%s%b\n" "$padding" "" "$color" "$text" "$NC"
 }
 
-print_centered "⚛  Delphi" "$ORANGE" 9
+DELPHI_ART_WIDTH=43
+print_centered "██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "██║  ██║█████╗  ██║     ██████╔╝███████║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "██████╔╝███████╗███████╗██║     ██║  ██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
+print_centered "╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝" "$ORANGE" "$DELPHI_ART_WIDTH"
 echo ""
 
 # Cleanup function

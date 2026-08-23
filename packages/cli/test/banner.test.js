@@ -10,9 +10,22 @@ import { banner } from "../src/log.js";
 const ANSI = /\u001b\[[0-9;]*m/g;
 const CLI_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PROJECT_ROOT = path.resolve(CLI_ROOT, "../..");
-const BRAND = "⚛  Delphi";
+const ART = [
+  "██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗",
+  "██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║",
+  "██║  ██║█████╗  ██║     ██████╔╝███████║██║",
+  "██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║",
+  "██████╔╝███████╗███████╗██║     ██║  ██║██║",
+  "╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝",
+];
 
-test("banner uses the Synthetic Sciences mark with the Delphi name", () => {
+function assertCentered(line, width) {
+  const leadingSpaces = line.length - line.trimStart().length;
+  const centeredWidth = leadingSpaces * 2 + line.trimStart().length;
+  assert.ok(Math.abs(centeredWidth - width) <= 1, `"${line}" is not centered`);
+}
+
+test("banner uses the centered Delphi ASCII art", () => {
   const lines = [];
   const originalLog = console.log;
   const originalColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
@@ -35,11 +48,16 @@ test("banner uses the Synthetic Sciences mark with the Delphi name", () => {
   }
 
   const output = lines.map((line) => line.replace(ANSI, ""));
-  assert.equal(output[1].trim(), BRAND);
-  assert.equal(output.filter((line) => line.trim()).length, 1);
+  assert.deepEqual(
+    output.slice(1, 7).map((line) => line.trimStart()),
+    ART,
+  );
+  for (const line of output.slice(1, 7)) {
+    assertCentered(line, 100);
+  }
 });
 
-test("README and launcher use the same compact branding", async () => {
+test("README stays compact and launcher uses the Delphi ASCII art", async () => {
   const [readme, launcher] = await Promise.all([
     fs.readFile(path.join(PROJECT_ROOT, "README.md"), "utf8"),
     fs.readFile(path.join(PROJECT_ROOT, "scripts", "launch_app.sh"), "utf8"),
@@ -63,5 +81,12 @@ test("README and launcher use the same compact branding", async () => {
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), BRAND);
+  const output = result.stdout.split("\n").filter((line) => line.trim());
+  assert.deepEqual(
+    output.map((line) => line.trimStart()),
+    ART,
+  );
+  for (const line of output) {
+    assertCentered(line, 100);
+  }
 });

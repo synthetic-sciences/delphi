@@ -10,9 +10,16 @@ export const log = {
   raw: (msg) => console.log(msg),
 };
 
-const BRAND = "⚛  Delphi";
-const BRAND_WIDTH = 9;
-const FRAMES = ["⚛"];
+const ART = [
+  "██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗",
+  "██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║",
+  "██║  ██║█████╗  ██║     ██████╔╝███████║██║",
+  "██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║",
+  "██████╔╝███████╗███████╗██║     ██║  ██║██║",
+  "╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝",
+];
+const ART_WIDTH = 43;
+const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 export function banner() {
   const center = (line, displayWidth = line.length) => {
@@ -21,7 +28,9 @@ export function banner() {
   };
 
   console.log();
-  console.log(pc.cyan(center(BRAND, BRAND_WIDTH)));
+  for (const line of ART) {
+    console.log(pc.cyan(center(line, ART_WIDTH)));
+  }
   console.log();
 }
 
