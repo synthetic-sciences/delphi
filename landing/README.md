@@ -2,8 +2,7 @@
 
 This is the public website for Delphi. It lives in the main
 [`synthetic-sciences/delphi`](https://github.com/synthetic-sciences/delphi)
-repository so product code, benchmarks, documentation, and the site change
-together.
+repository so product code, documentation, and the site change together.
 
 ## Local development
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { isAuthenticated } from "@/lib/api";
 
@@ -72,9 +73,12 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-[#f7f0e8] flex items-center justify-center">
       <div className="w-full max-w-sm p-8 rounded-xl bg-[#faf5ef] border border-[#dfcdbf]">
-        <h1 className="text-sm font-semibold text-[#2e2522] tracking-tight mb-1">
-          delphi
-        </h1>
+        <div className="mb-2 flex items-center gap-2.5">
+          <Image aria-hidden="true" alt="" height={24} src="/icon.svg" width={24} />
+          <h1 className="text-sm font-semibold text-[#2e2522] tracking-tight">
+            Delphi
+          </h1>
+        </div>
         <p className="text-[11px] text-[#8a7a72] mb-6">
           Sign in to access your context server.
         </p>

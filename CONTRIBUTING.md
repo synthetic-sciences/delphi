@@ -90,31 +90,13 @@ Small, reviewable pull requests are easier to validate and ship. Avoid mixing
 formatting sweeps, dependency upgrades, and product changes unless they are
 inseparable.
 
-## Benchmark and Performance Claims
-
-Treat evaluation code and methodology as product code. A new benchmark claim
-must state:
-
-- the dataset and exact task slice;
-- the model, prompt, and inference settings held fixed;
-- the comparator conditions;
-- exclusions, retries, provider failures, and corpus-integrity checks;
-- the metric definition and whether the result is descriptive or supported by
-  an uncertainty estimate;
-- the command or procedure required to reproduce the result.
-
-Do not optimize against a public evaluation slice and then describe it as a
-held-out result. Do not publish a universal state-of-the-art claim from a small
-or task-specific pilot. Raw benchmark outputs containing source content, user
-data, credentials, or provider responses must not be committed.
-
 ## Documentation and Style
 
 - Prefer plain language and concrete examples.
 - Keep Markdown links relative when they point inside this repository.
 - Follow the existing Python and TypeScript conventions in the component you
   change.
-- Never add secrets, private source material, generated benchmark outputs, or
+- Never add secrets, private source material, generated provider output, or
   local environment files.
 
 ## Community

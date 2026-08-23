@@ -10,17 +10,9 @@ export const log = {
   raw: (msg) => console.log(msg),
 };
 
-const ART = [
-  "██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗",
-  "██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║",
-  "██║  ██║█████╗  ██║     ██████╔╝███████║██║",
-  "██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║",
-  "██████╔╝███████╗███████╗██║     ██║  ██║██║",
-  "╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝",
-];
-const ART_WIDTH = 43;
-
-const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const BRAND = "⚛  Delphi";
+const BRAND_WIDTH = 9;
+const FRAMES = ["⚛"];
 
 export function banner() {
   const center = (line, displayWidth = line.length) => {
@@ -28,12 +20,8 @@ export function banner() {
     return `${" ".repeat(Math.max(0, Math.floor((columns - displayWidth) / 2)))}${line}`;
   };
 
-  // Color each line individually so terminals don't reset color mid-glyph.
   console.log();
-  for (const line of ART) {
-    console.log(pc.cyan(center(line, ART_WIDTH)));
-  }
-  console.log(pc.dim(center("semantic context for AI coding agents")));
+  console.log(pc.cyan(center(BRAND, BRAND_WIDTH)));
   console.log();
 }
 

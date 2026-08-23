@@ -1,7 +1,7 @@
 import { ImageResponse } from "next/og";
 
 export const alt =
-  "Delphi. The context engine for agents that have to get the code right.";
+  "Delphi. Local context for agents.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -21,15 +21,13 @@ export default function OG() {
           fontFamily: "serif",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            fontSize: 17,
-            color: "#8e8773",
-            fontStyle: "italic",
-          }}
-        >
-          A Synthetic Sciences project
+        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <div style={{ display: "flex", fontSize: 36, color: "#d5a15d" }}>
+            ⚛
+          </div>
+          <div style={{ display: "flex", fontSize: 28, color: "#fbf5e3" }}>
+            Delphi
+          </div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
@@ -42,7 +40,7 @@ export default function OG() {
               color: "#fbf5e3",
             }}
           >
-            Delphi.
+            Give your agent the right files.
           </div>
           <div
             style={{
@@ -53,8 +51,7 @@ export default function OG() {
               maxWidth: 900,
             }}
           >
-            The context engine for agents that have to get the code right.
-            Open source, self-hosted, and built by Synthetic Sciences.
+            Code, docs, and papers. Indexed locally.
           </div>
         </div>
 
@@ -70,9 +67,7 @@ export default function OG() {
           <div style={{ display: "flex" }}>
             trydelphi.ai
           </div>
-          <div style={{ display: "flex" }}>
-            0.528 recall@20 · 6.5x faster · self-hosted
-          </div>
+          <div style={{ display: "flex" }}>open source · self-hosted</div>
         </div>
       </div>
     ),

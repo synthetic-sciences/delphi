@@ -137,9 +137,9 @@ def log_chunk_used(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
-# Stable failure-mode codes. Agents (or the human running a benchmark) call
-# ``classify_failure`` with a description and we tag it. The codes are
-# stable so we can aggregate over time.
+# Stable failure-mode codes. Agents call ``classify_failure`` with a
+# description and we tag it. The codes are stable so we can aggregate over
+# time.
 FAILURE_MODES = {
     "no_hits": "search_returned_zero_results",
     "wrong_repo": "answer_came_from_unindexed_repo",

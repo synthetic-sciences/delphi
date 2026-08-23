@@ -35,11 +35,9 @@ Setting `EMBEDDING_PROVIDER=hash` swaps the neural embedder for a deterministic
 needs no model and no network, and it produces a 768-dim unit vector whose
 cosine similarity reflects shared-token overlap.
 
-Crucially, Delphi's retrieval is **hybrid** — vector + BM25 + exact-symbol +
-exact-path + trigram. The lexical and symbol branches don't depend on the neural
-model at all, and the benchmark (`bench/`) shows they already carry most of the
-quality (BM25 recall@5 ≈ 0.92; symbol retrieval is the most precise and
-token-efficient). The hash vector adds a cheap lexical-overlap signal on top.
+Delphi's retrieval is **hybrid**: vector + BM25 + exact-symbol + exact-path +
+trigram. The lexical and symbol branches do not depend on the neural model. The
+hash vector adds a cheap lexical-overlap signal on top.
 
 What you give up: true **semantic** recall (matching intent when the words
 differ — "auth" finding "login"). When you want that, flip the provider back:

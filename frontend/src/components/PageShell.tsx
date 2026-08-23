@@ -2,6 +2,7 @@
 
 import Sidebar from "./Sidebar";
 import { Command, Search } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
@@ -38,13 +39,8 @@ export default function PageShell({ children }: { children: React.ReactNode }) {
             <div className="flex items-center gap-2 w-48">
               {isDocsPage && (
                 <Link href="/overview" className="flex items-center gap-2">
-                  <svg aria-hidden="true" width="20" height="20" viewBox="0 0 100 100" fill="none">
-                    <circle cx="50" cy="50" r="8" fill="#b58a73"/>
-                    <ellipse cx="50" cy="50" rx="35" ry="12" stroke="#b58a73" strokeWidth="2.5" fill="none"/>
-                    <ellipse cx="50" cy="50" rx="35" ry="12" stroke="#b58a73" strokeWidth="2.5" fill="none" transform="rotate(60 50 50)"/>
-                    <ellipse cx="50" cy="50" rx="35" ry="12" stroke="#b58a73" strokeWidth="2.5" fill="none" transform="rotate(120 50 50)"/>
-                  </svg>
-                  <span className="text-sm font-medium">Synthetic Sciences</span>
+                  <Image aria-hidden="true" alt="" height={20} src="/icon.svg" width={20} />
+                  <span className="text-sm font-medium">Delphi</span>
                 </Link>
               )}
             </div>

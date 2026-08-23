@@ -40,7 +40,6 @@ RUN set -eux; \
     find .venv -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete ; \
     rm -rf .venv/lib/python*/site-packages/torch/test \
            .venv/lib/python*/site-packages/torch/include \
-           .venv/lib/python*/site-packages/torch/utils/benchmark/utils/valgrind_wrapper \
            .venv/lib/python*/site-packages/functorch/test \
            .venv/lib/python*/site-packages/torch/onnx/_internal/fx/passes/_tests ; \
     true

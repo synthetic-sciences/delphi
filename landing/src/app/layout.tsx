@@ -17,24 +17,24 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL("https://trydelphi.ai"),
   title: {
-    default: "Delphi · Context for agents that have to get the code right",
+    default: "Delphi · Local context for agents",
     template: "%s",
   },
   description:
-    "Open-source context infrastructure for agents working across code, documentation, papers, and datasets. Self-hosted and built by Synthetic Sciences.",
+    "Delphi indexes code, docs, and papers locally, then gives agents the files they need.",
   openGraph: {
-    title: "Delphi · Context for agents that have to get the code right",
+    title: "Delphi · Local context for agents",
     description:
-      "Open-source context infrastructure for agents working across real software and research.",
+      "Code, docs, and papers. Indexed locally for your agents.",
     type: "website",
     url: "https://trydelphi.ai",
     siteName: "Delphi",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Delphi · Context for agents that have to get the code right",
+    title: "Delphi · Local context for agents",
     description:
-      "Open-source context infrastructure for agents working across real software and research.",
+      "Code, docs, and papers. Indexed locally for your agents.",
   },
   robots: {
     index: true,
@@ -42,8 +42,6 @@ export const metadata: Metadata = {
   },
 };
 
-// Inline init script: read localStorage and set data-theme before React mounts,
-// so first paint never flashes the wrong theme.
 const THEME_INIT = `
 (function(){try{
   var t=localStorage.getItem('delphi-theme');

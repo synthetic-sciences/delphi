@@ -166,7 +166,6 @@ class GitConfig(BaseModel):
             "test_*.py", "conftest.py",
             "fixtures/", "examples/", "example/",
             "*.txt",
-            "benchmarks/", "benchmark/",
             "__mocks__/", "__snapshots__/",
             "e2e/", "cypress/", "playwright/",
             ".storybook/", "stories/",
@@ -579,8 +578,7 @@ class SynscConfig(BaseModel):
         if min_score := os.getenv("SYNSC_MIN_SIMILARITY_SCORE"):
             config.search.min_similarity_score = float(min_score)
 
-        # Quality mode + indexing overrides — agents can override per-process
-        # without a code change. Useful for benchmarks and ad-hoc reindexing.
+        # Quality mode + indexing overrides for ad-hoc reindexing.
         if qmode := os.getenv("SYNSC_QUALITY_MODE"):
             qm = qmode.lower().strip()
             if qm in ("fast", "balanced", "agent"):

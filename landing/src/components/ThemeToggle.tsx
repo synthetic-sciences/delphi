@@ -3,11 +3,7 @@ import { useEffect, useState } from "react";
 
 type Theme = "light" | "dark";
 
-export function ThemeToggle({
-  tone = "default",
-}: {
-  tone?: "default" | "inverse";
-}) {
+export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme | null>(null);
 
   useEffect(() => {
@@ -26,8 +22,6 @@ export function ThemeToggle({
     } catch {}
   }
 
-  // Render a placeholder during SSR + first mount to avoid hydration mismatch.
-  // (The button is always the same width; just the icon swaps.)
   const isLight = theme === "light";
 
   return (
@@ -37,13 +31,10 @@ export function ThemeToggle({
       aria-label={
         isLight ? "Switch to dark theme" : "Switch to light theme"
       }
-      className={`focus-ring inline-flex h-8 w-8 items-center justify-center transition-colors ${
-        tone === "inverse"
-          ? "text-[#e8deca] hover:bg-white/10 hover:text-white"
-          : "text-[var(--fg-dim)] hover:bg-[var(--line)] hover:text-[var(--fg-strong)]"
-      }`}
+      aria-pressed={isLight}
+      className="theme-toggle"
+      title={isLight ? "Use dark theme" : "Use light theme"}
     >
-      {/* Sun for light, moon for dark — drawn inline so colour follows currentColor */}
       {isLight ? (
         <svg
           width="15"
@@ -55,8 +46,7 @@ export function ThemeToggle({
           strokeLinecap="round"
           aria-hidden
         >
-          <circle cx="12" cy="12" r="4" />
-          <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4" />
+          <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z" />
         </svg>
       ) : (
         <svg
@@ -70,7 +60,8 @@ export function ThemeToggle({
           strokeLinejoin="round"
           aria-hidden
         >
-          <path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5z" />
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4" />
         </svg>
       )}
     </button>

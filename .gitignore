@@ -106,8 +106,6 @@ CLAUDE.md
 ignore/
 delphi.md
 
-# Local benchmark workspace. Evaluation runs materialise corpora, snapshots,
-# and provider outputs here — tens of gigabytes that must never enter the
-# repository, per the evaluation source-lock policy of keeping benchmark data
-# and outputs out of Delphi.
+# Local evaluation workspace. Runs materialise corpora, snapshots, and provider
+# outputs here. They must not enter the repository.
 new/

@@ -3,8 +3,8 @@ import "./globals.css";
 import { UserProfileProvider } from "@/contexts/UserProfileContext";
 
 export const metadata: Metadata = {
-  title: "Synthetic Sciences",
-  description: "Synthetic Sciences Dashboard",
+  title: "Delphi",
+  description: "Local context for agents",
   icons: {
     icon: "/icon.png",
   },

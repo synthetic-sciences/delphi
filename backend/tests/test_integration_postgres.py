@@ -372,7 +372,7 @@ def test_atlas_artifact_ingest_and_search(user_id, monkeypatch):
     ingest_node(
         user_id=user_id, workspace_id=ws["workspace_id"],
         external_id="n1", node_type="run",
-        title="Eval run on benchmark X",
+        title="Evaluation run X",
     )
     ingest_artifact(
         user_id=user_id, workspace_id=ws["workspace_id"],
@@ -382,7 +382,7 @@ def test_atlas_artifact_ingest_and_search(user_id, monkeypatch):
     )
 
     artifacts = find_relevant_artifacts(
-        user_id=user_id, query="accuracy benchmark",
+        user_id=user_id, query="accuracy evaluation",
         workspace_ids=[ws["workspace_id"]], top_k=5,
     )
     assert len(artifacts) >= 1
