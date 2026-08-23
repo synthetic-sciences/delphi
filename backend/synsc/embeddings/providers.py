@@ -202,9 +202,8 @@ class HashEmbeddingProvider:
     The point is footprint: ``EMBEDDING_PROVIDER=hash`` skips the ~1.2 GB
     sentence-transformers model download and its RAM, so Delphi boots in seconds
     on a laptop, in CI, or air-gapped. You trade embedding-level semantic recall
-    for zero setup; BM25 + exact-symbol + trigram retrieval still carry most of
-    the quality (see bench/). Switch to a real model when you want semantic
-    recall.
+    for zero setup. BM25 + exact-symbol + trigram retrieval remain available.
+    Switch to a real model when you want semantic recall.
     """
 
     name = "hash"

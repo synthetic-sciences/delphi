@@ -87,14 +87,7 @@ print_centered() {
     printf "%*s%b%s%b\n" "$padding" "" "$color" "$text" "$NC"
 }
 
-DELPHI_ART_WIDTH=43
-print_centered "██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗" "$ORANGE" "$DELPHI_ART_WIDTH"
-print_centered "██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
-print_centered "██║  ██║█████╗  ██║     ██████╔╝███████║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
-print_centered "██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
-print_centered "██████╔╝███████╗███████╗██║     ██║  ██║██║" "$ORANGE" "$DELPHI_ART_WIDTH"
-print_centered "╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝" "$ORANGE" "$DELPHI_ART_WIDTH"
-print_centered "open-source MCP server for AI agents" "$DIM"
+print_centered "⚛  Delphi" "$ORANGE" 9
 echo ""
 
 # Cleanup function

@@ -48,7 +48,7 @@ For interactive editing of the install-time choices (provider, model, keys, dash
 | Var | Default | Description |
 |---|---|---|
 | `OPENAI_API_KEY` | — | Required when `EMBEDDING_PROVIDER=openai`. |
-| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Override the OpenAI embedding model. `text-embedding-3-large` is ~6× more expensive but a few percentage points better on retrieval benchmarks. |
+| `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | Override the OpenAI embedding model. `text-embedding-3-large` costs more and may improve retrieval quality. |
 
 ### Google Gemini
 

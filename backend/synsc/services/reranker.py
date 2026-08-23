@@ -179,11 +179,10 @@ def is_reranker_ready() -> bool:
 
 
 def reranker_status() -> dict[str, object]:
-    """Readiness snapshot for health endpoints and benchmark preflight.
+    """Readiness snapshot for health endpoints.
 
-    Callers that need reranking to be *consistently* applied — a benchmark
-    run, most obviously — should wait for ``ready`` before issuing queries.
-    Otherwise the first few results are ranked differently from the rest.
+    Callers that need consistent reranking should wait for ``ready`` before
+    issuing queries. Otherwise the first few results may use fused ranking.
     """
     loading = _warm_thread is not None and _warm_thread.is_alive()
     return {

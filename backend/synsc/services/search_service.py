@@ -671,8 +671,7 @@ _DEMOTE_PATTERNS = re.compile(
     r"(?:test_|tests/|__tests__/|spec/|specs/|"
     r"docs_src/|docs/|doc/|examples?/|"
     r"fixtures?/|mocks?/|__mocks__/|__snapshots__/|"
-    r"storybook/|stories/|e2e/|cypress/|playwright/|"
-    r"benchmarks?/|sandbox/|demo/)",
+    r"storybook/|stories/|e2e/|cypress/|playwright/|sandbox/|demo/)",
     re.IGNORECASE,
 )
 
@@ -734,8 +733,7 @@ _DOCS_PATH_PATTERN = re.compile(
 )
 
 _EXAMPLE_PATH_PATTERN = re.compile(
-    r"(?:^|/)(?:examples?/|storybook/|stories/|demo/|sandbox/|benchmarks?/)",
-    re.IGNORECASE,
+    r"(?:^|/)(?:examples?/|storybook/|stories/|demo/|sandbox/)", re.IGNORECASE,
 )
 
 

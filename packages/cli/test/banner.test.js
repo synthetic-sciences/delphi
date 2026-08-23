@@ -10,22 +10,9 @@ import { banner } from "../src/log.js";
 const ANSI = /\u001b\[[0-9;]*m/g;
 const CLI_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PROJECT_ROOT = path.resolve(CLI_ROOT, "../..");
-const ART = [
-  "██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗",
-  "██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║",
-  "██║  ██║█████╗  ██║     ██████╔╝███████║██║",
-  "██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║",
-  "██████╔╝███████╗███████╗██║     ██║  ██║██║",
-  "╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝",
-];
+const BRAND = "⚛  Delphi";
 
-function assertCentered(line, width) {
-  const leadingSpaces = line.length - line.trimStart().length;
-  const centeredWidth = leadingSpaces * 2 + line.trimStart().length;
-  assert.ok(Math.abs(centeredWidth - width) <= 1, `"${line}" is not centered`);
-}
-
-test("banner contains only centered Delphi branding", () => {
+test("banner uses the Synthetic Sciences mark with the Delphi name", () => {
   const lines = [];
   const originalLog = console.log;
   const originalColumns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
@@ -48,27 +35,18 @@ test("banner contains only centered Delphi branding", () => {
   }
 
   const output = lines.map((line) => line.replace(ANSI, ""));
-  assert.doesNotMatch(output.join("\n"), /synsci/i);
-  assert.deepEqual(
-    output.slice(1, 7).map((line) => line.trimStart()),
-    ART,
-  );
-
-  for (const line of output.slice(1, 8)) {
-    assertCentered(line, 100);
-  }
+  assert.equal(output[1].trim(), BRAND);
+  assert.equal(output.filter((line) => line.trim()).length, 1);
 });
 
-test("README and C-locale launcher use the same centered Delphi art", async () => {
+test("README and launcher use the same compact branding", async () => {
   const [readme, launcher] = await Promise.all([
     fs.readFile(path.join(PROJECT_ROOT, "README.md"), "utf8"),
     fs.readFile(path.join(PROJECT_ROOT, "scripts", "launch_app.sh"), "utf8"),
   ]);
 
-  const readmeBanner = readme.match(/<pre align="center">\n([\s\S]*?)\n<\/pre>/);
-  assert.ok(readmeBanner);
-  assert.deepEqual(readmeBanner[1].split("\n"), ART);
-  assert.doesNotMatch(readmeBanner[0], /synsci/i);
+  assert.match(readme, /frontend\/public\/icon\.svg/);
+  assert.match(readme, /> Delphi\s*<\/h1>/);
 
   const launcherBanner = launcher.match(/# Banner\n([\s\S]*?)\n# Cleanup function/);
   assert.ok(launcherBanner);
@@ -76,22 +54,14 @@ test("README and C-locale launcher use the same centered Delphi art", async () =
     encoding: "utf8",
     env: {
       COLUMNS: "100",
-      LC_ALL: "C",
+      LC_ALL: "C.UTF-8",
       NC: "",
       ORANGE: "",
       DIM: "",
       PATH: "",
     },
   });
-  assert.equal(result.status, 0, result.stderr);
 
-  const output = result.stdout.split("\n").filter((line) => line.trim());
-  assert.doesNotMatch(output.join("\n"), /synsci/i);
-  assert.deepEqual(
-    output.slice(0, 6).map((line) => line.trimStart()),
-    ART,
-  );
-  for (const line of output) {
-    assertCentered(line, 100);
-  }
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), BRAND);
 });

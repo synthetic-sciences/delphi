@@ -3,8 +3,8 @@
 # Postgres + API only. No worker, no frontend, and EMBEDDING_PROVIDER=hash so
 # there is NO ~1.2 GB model download and no heavy RAM at boot — it comes up in
 # seconds. Retrieval falls back to the lexical + exact-symbol + trigram branches
-# of hybrid search (which already carry most of the quality; see bench/), plus a
-# zero-cost feature-hash vector. Switch EMBEDDING_PROVIDER back to `local`
+# of hybrid search, plus a zero-cost feature-hash vector. Switch
+# EMBEDDING_PROVIDER back to `local`
 # (or wire up gemini/openai) when you want full semantic recall.
 #
 #   docker compose -f docker-compose.lite.yml up --build

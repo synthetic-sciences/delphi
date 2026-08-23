@@ -713,7 +713,7 @@ def find_relevant_artifacts(
     "did this hypothesis pan out?".
 
     Multi-word queries: every word longer than 2 chars is OR'd together,
-    so a query like "accuracy benchmark" matches an artifact named
+    so a query like "accuracy evaluation" matches an artifact named
     ``accuracy_results.csv`` (via the word "accuracy") instead of the
     naive whole-string ILIKE that the first version did.
     """

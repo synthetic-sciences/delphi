@@ -153,8 +153,8 @@ def _any_looks_like_uuid(ids: list[str] | None) -> bool:
 # whatever it has now, and queues the missing repo for background indexing so
 # the *next* query against the same library lands fresh hits.
 #
-# The registry is intentionally small — the top public Python libs that show
-# up in benchmarks and in real research sessions. Easy to grow over time.
+# The registry is intentionally small: common public Python libraries that
+# appear in research sessions. It is easy to grow over time.
 
 LIBRARY_REGISTRY: dict[str, str] = {
     # name (lowercase) → canonical GitHub HTTPS URL

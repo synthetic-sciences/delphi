@@ -861,9 +861,8 @@ def create_app() -> FastAPI:
 
         # Warm the cross-encoder reranker on the same principle. Left lazy, the
         # first search to request reranking pays a multi-hundred-megabyte
-        # download inline; under a benchmark that means the opening queries are
-        # ranked differently from the rest of the run. Readiness is reported on
-        # /health so callers that need consistent ranking can wait for it.
+        # download inline. Readiness is reported on /health so callers that
+        # need consistent ranking can wait for it.
         if config.search.enable_reranker or config.quality.quality_mode == "agent":
             from synsc.services.reranker import warm_reranker
 
@@ -1031,9 +1030,7 @@ def create_app() -> FastAPI:
 
         # 2b. Cross-encoder reranker — warmed in the background at startup.
         # "Still loading" is not a failure, but it is worth reporting: until
-        # it is ready, searches silently fall back to fused ranking, so a
-        # benchmark started too early measures a different pipeline than the
-        # one it is trying to measure.
+        # it is ready, searches silently fall back to fused ranking.
         try:
             from synsc.services.reranker import reranker_status
             checks["reranker"] = {"ok": True, **reranker_status()}
