@@ -1,6 +1,11 @@
-<h1 align="center">
-  <img src="frontend/public/icon.svg" width="44" alt="" align="absmiddle"> Delphi
-</h1>
+<pre align="center">
+██████╗ ███████╗██╗     ██████╗ ██╗  ██╗██╗
+██╔══██╗██╔════╝██║     ██╔══██╗██║  ██║██║
+██║  ██║█████╗  ██║     ██████╔╝███████║██║
+██║  ██║██╔══╝  ██║     ██╔═══╝ ██╔══██║██║
+██████╔╝███████╗███████╗██║     ██║  ██║██║
+╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝
+</pre>
 
 <p align="center">Local search for your agent's code, docs, and papers.</p>
 

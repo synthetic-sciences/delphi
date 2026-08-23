@@ -57,14 +57,15 @@ test("banner uses the centered Delphi ASCII art", () => {
   }
 });
 
-test("README stays compact and launcher uses the Delphi ASCII art", async () => {
+test("README and launcher use the Delphi ASCII art", async () => {
   const [readme, launcher] = await Promise.all([
     fs.readFile(path.join(PROJECT_ROOT, "README.md"), "utf8"),
     fs.readFile(path.join(PROJECT_ROOT, "scripts", "launch_app.sh"), "utf8"),
   ]);
 
-  assert.match(readme, /frontend\/public\/icon\.svg/);
-  assert.match(readme, /> Delphi\s*<\/h1>/);
+  const readmeBanner = readme.match(/<pre align="center">\n([\s\S]*?)\n<\/pre>/);
+  assert.ok(readmeBanner);
+  assert.deepEqual(readmeBanner[1].split("\n"), ART);
 
   const launcherBanner = launcher.match(/# Banner\n([\s\S]*?)\n# Cleanup function/);
   assert.ok(launcherBanner);
