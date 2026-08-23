@@ -4,17 +4,17 @@ import { ThemedImage } from "@/components/HeroImage";
 import { InstallChip } from "@/components/InstallChip";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-const SOURCE_TYPES = [
-  ["Repositories", "Symbols, callers, tests, and the code between them."],
-  ["Documentation", "Reference pages kept with their heading structure."],
-  ["Papers", "Methods, equations, citations, and implementation notes."],
-  ["Datasets", "Cards, configs, and the details that shape a result."],
-  ["Local folders", "Private notes and internal material on your machine."],
+const SOURCES = [
+  "Repositories",
+  "Documentation",
+  "Papers",
+  "Datasets",
+  "Local folders",
 ] as const;
 
 const CONTEXT_FILES = [
   ["backend/synsc/auth/sessions.py", "cookie validation"],
-  ["backend/synsc/api/http_server.py", "request handling"],
+  ["backend/synsc/api/http_server.py", "request path"],
   ["backend/tests/test_auth.py", "expected behavior"],
 ] as const;
 
@@ -22,8 +22,8 @@ const FOOTER_COLUMNS = [
   {
     title: "Product",
     links: [
-      ["Sources", "#sources"],
       ["Context", "#context"],
+      ["Sources", "#sources"],
       ["Local stack", "#local"],
       ["Install", "#install"],
     ],
@@ -56,146 +56,176 @@ export default function Home() {
       </a>
 
       <main id="main-content">
-        <section className="heritage-hero" id="top">
-          <div className="hero-art">
+        <section className="atlas-hero" id="top">
+          <div className="hero-media">
             <ThemedImage variant="sacred-way" priority />
           </div>
-          <div className="hero-image-wash" aria-hidden="true" />
+          <div className="hero-wash" aria-hidden="true" />
 
-          <header className="hero-nav">
-            <Link className="brand-lockup" href="/" aria-label="Delphi home">
-              <BrandMark className="brand-lockup-mark" />
-              <span>Delphi</span>
-            </Link>
-
-            <nav aria-label="Primary navigation">
-              <Link href="https://github.com/synthetic-sciences/delphi">GitHub</Link>
-              <Link href="#install">Install</Link>
+          <div className="page-shell hero-shell">
+            <div className="hero-identity hero-rise">
               <ThemeToggle />
-            </nav>
-          </header>
+              <div>
+                <Link className="brand-lockup" href="/" aria-label="Delphi home">
+                  <BrandMark className="brand-lockup-mark" />
+                  <span>Delphi</span>
+                </Link>
+                <Link className="made-by" href="https://syntheticsciences.ai">
+                  by Synthetic Sciences
+                </Link>
+              </div>
+            </div>
 
-          <div className="hero-copy-card">
-            <p className="eyebrow">Context for coding agents</p>
-            <h1>Context before code.</h1>
-            <p className="hero-dek">
-              Delphi finds the right source files before your coding agent answers.
-            </p>
-            <div className="hero-actions">
-              <InstallChip />
-              <Link className="text-action" href="https://github.com/synthetic-sciences/delphi">
-                View source <span aria-hidden="true">↗</span>
-              </Link>
+            <div className="hero-copy">
+              <h1 className="hero-rise hero-rise-one">
+                The right context,
+                <br />
+                before the code.
+              </h1>
+              <p className="hero-rise hero-rise-two">
+                Delphi finds the files your coding agent needs and returns precise, cited context.
+              </p>
+              <div className="hero-actions hero-rise hero-rise-three">
+                <InstallChip />
+                <Link className="secondary-action" href="https://github.com/synthetic-sciences/delphi">
+                  GitHub
+                </Link>
+              </div>
             </div>
           </div>
         </section>
 
-        <section className="source-ribbon" aria-label="Supported sources">
-          <p>Search across</p>
-          <div>
-            {SOURCE_TYPES.slice(0, 4).map(([name]) => (
-              <span key={name}>{name}</span>
-            ))}
-          </div>
-        </section>
-
-        <section className="source-section reveal" id="sources">
-          <div className="section-intro">
-            <p className="eyebrow">One local index</p>
-            <h2>Your work, in one place.</h2>
-            <p>
-              Connect the sources an agent needs. Delphi keeps every answer tied to the files that support it.
-            </p>
-          </div>
-
-          <div className="source-ledger">
-            {SOURCE_TYPES.map(([name, description]) => (
-              <article key={name}>
-                <h3>{name}</h3>
-                <p>{description}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="context-section" id="context">
-          <div className="context-heading reveal">
-            <h2>Ask once. Get the files.</h2>
-            <p>
-              Delphi searches across source types, then returns a compact context pack with citations.
-            </p>
-          </div>
-
-          <figure className="context-example reveal">
-            <blockquote>Where is session expiry enforced?</blockquote>
-            <figcaption>
-              {CONTEXT_FILES.map(([path, note]) => (
-                <div key={path}>
-                  <code>{path}</code>
-                  <span>{note}</span>
-                </div>
-              ))}
-            </figcaption>
-          </figure>
-        </section>
-
-        <section className="local-section reveal" id="local">
-          <div>
-            <h2>Run Delphi where your sources live.</h2>
-            <p>
-              Start the stack locally, index a source, and connect any MCP client.
-            </p>
-          </div>
-
-          <div className="local-steps">
-            <div><span>Install</span><code>npx @synsci/delphi</code></div>
-            <div><span>Index</span><p>Add a repository, doc site, paper, or folder.</p></div>
-            <div><span>Connect</span><p>Use Delphi from Codex, Claude Code, Cursor, or another MCP client.</p></div>
-          </div>
-        </section>
-
-        <section className="closing-plate" id="install">
-          <div className="closing-art">
-            <ThemedImage variant="archive" />
-          </div>
-          <div className="closing-wash" aria-hidden="true" />
-          <div className="closing-card reveal">
-            <h2>Keep the source close.</h2>
-            <p>Open source. Self-hosted. Ready in one command.</p>
+        <section className="source-strip" aria-label="Supported source types">
+          <div className="page-shell source-strip-inner">
+            <p>Indexes</p>
             <div>
-              <InstallChip />
-              <Link className="text-action" href="https://github.com/synthetic-sciences/delphi#readme">
-                Read the README <span aria-hidden="true">↗</span>
-              </Link>
+              {SOURCES.map((source) => (
+                <span key={source}>{source}</span>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="statement-section" id="context">
+          <div className="page-shell statement-grid">
+            <div className="statement-copy section-reveal">
+              <p className="section-label">Delphi context</p>
+              <h2>See what the agent should see.</h2>
+              <p>
+                Search code, docs, papers, and local folders as one corpus. Every result links back to its source.
+              </p>
+            </div>
+
+            <figure className="engraving-frame section-reveal">
+              <ThemedImage variant="archive" />
+            </figure>
+          </div>
+        </section>
+
+        <section className="detail-section" id="sources">
+          <div className="page-shell">
+            <div className="section-heading section-reveal">
+              <h2>Ask once. Get the files.</h2>
+              <p>A compact context pack, ready for the next tool call.</p>
+            </div>
+
+            <div className="context-grid">
+              <article className="context-card query-card section-reveal">
+                <p className="card-kicker">Example query</p>
+                <blockquote>Where is session expiry enforced?</blockquote>
+                <div className="context-files">
+                  {CONTEXT_FILES.map(([path, note]) => (
+                    <div key={path}>
+                      <code>{path}</code>
+                      <span>{note}</span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="context-card source-card section-reveal">
+                <div>
+                  <p className="card-kicker">One index</p>
+                  <h3>Every source stays distinct.</h3>
+                </div>
+                <ul>
+                  {SOURCES.map((source) => (
+                    <li key={source}>{source}</li>
+                  ))}
+                </ul>
+              </article>
+
+              <article className="context-card local-card section-reveal" id="local">
+                <div>
+                  <p className="card-kicker">Local by default</p>
+                  <h3>Your sources stay where they live.</h3>
+                  <p>Run the stack on your machine and choose exactly what gets indexed.</p>
+                </div>
+                <code>npx @synsci/delphi</code>
+              </article>
+
+              <article className="context-card mcp-card section-reveal">
+                <div>
+                  <p className="card-kicker">MCP</p>
+                  <h3>Works with the agent you already use.</h3>
+                </div>
+                <p>Connect Delphi to Codex, Claude Code, Cursor, or any MCP client.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section className="install-section" id="install">
+          <div className="page-shell">
+            <div className="install-panel section-reveal">
+              <div>
+                <h2>Source first.</h2>
+                <p>Open source, self-hosted, and ready in one command.</p>
+              </div>
+              <div className="install-actions">
+                <InstallChip />
+                <Link className="secondary-action" href="https://github.com/synthetic-sciences/delphi#readme">
+                  Read the README
+                </Link>
+              </div>
             </div>
           </div>
         </section>
       </main>
 
       <footer className="site-footer">
-        <div className="footer-grid">
-          <div className="footer-intro">
-            <div className="footer-brand"><BrandMark className="footer-mark" /><span>Delphi</span></div>
-            <p>Local context for coding agents, by Synthetic Sciences.</p>
+        <div className="page-shell footer-shell">
+          <div className="footer-grid">
+            <div className="footer-intro">
+              <div className="footer-brand">
+                <BrandMark className="footer-mark" />
+                <span>Delphi</span>
+              </div>
+              <p>Local context for coding agents, by Synthetic Sciences.</p>
+            </div>
+
+            {FOOTER_COLUMNS.map((column) => (
+              <div className="footer-column" key={column.title}>
+                <h3>{column.title}</h3>
+                <ul>
+                  {column.links.map(([label, href]) => (
+                    <li key={label}>
+                      <Link href={href}>{label}</Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
 
-          {FOOTER_COLUMNS.map((column) => (
-            <div className="footer-column" key={column.title}>
-              <h3>{column.title}</h3>
-              <ul>
-                {column.links.map(([label, href]) => (
-                  <li key={label}><Link href={href}>{label}</Link></li>
-                ))}
-              </ul>
-            </div>
-          ))}
+          <div className="footer-meta">
+            <span>© {new Date().getFullYear()} InkVell Inc. Delphi is a Synthetic Sciences product.</span>
+            <Link href="#top">Back to top</Link>
+          </div>
         </div>
-
-        <div className="footer-meta">
-          <span>© {new Date().getFullYear()} InkVell Inc. Delphi is a Synthetic Sciences product.</span>
-          <Link href="#top">Back to top ↑</Link>
+        <div className="footer-wordmark" aria-hidden="true">
+          delphi
         </div>
-        <div className="footer-wordmark" aria-hidden="true">delphi</div>
       </footer>
     </>
   );

@@ -1,15 +1,9 @@
 import type { Metadata } from "next";
-import { Geist, JetBrains_Mono, Source_Serif_4 } from "next/font/google";
+import { Geist, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
 const sans = Geist({
   variable: "--font-sans",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const serif = Source_Serif_4({
-  variable: "--font-serif",
   subsets: ["latin"],
   display: "swap",
 });
@@ -66,11 +60,43 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${sans.variable} ${serif.variable} ${mono.variable}`}
+      className={`${sans.variable} ${mono.variable}`}
       suppressHydrationWarning
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
+        <link
+          as="image"
+          fetchPriority="high"
+          href="/img/heroes/sacred-way-light-mobile.webp"
+          media="(max-width: 640px) and (prefers-color-scheme: light)"
+          rel="preload"
+          type="image/webp"
+        />
+        <link
+          as="image"
+          fetchPriority="high"
+          href="/img/heroes/sacred-way-mobile.webp"
+          media="(max-width: 640px) and (prefers-color-scheme: dark)"
+          rel="preload"
+          type="image/webp"
+        />
+        <link
+          as="image"
+          fetchPriority="high"
+          href="/img/heroes/sacred-way-light.webp"
+          media="(min-width: 641px) and (prefers-color-scheme: light)"
+          rel="preload"
+          type="image/webp"
+        />
+        <link
+          as="image"
+          fetchPriority="high"
+          href="/img/heroes/sacred-way.webp"
+          media="(min-width: 641px) and (prefers-color-scheme: dark)"
+          rel="preload"
+          type="image/webp"
+        />
       </head>
       <body className="min-h-full">{children}</body>
     </html>

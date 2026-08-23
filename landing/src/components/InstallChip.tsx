@@ -9,7 +9,6 @@ export function InstallChip({ className = "" }: { className?: string }) {
 
   return (
     <button
-      aria-label={`Copy install command: ${COMMAND}`}
       className={`install-chip ${className}`}
       onClick={() => {
         navigator.clipboard?.writeText(COMMAND).catch(() => {});
