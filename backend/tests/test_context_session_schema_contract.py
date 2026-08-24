@@ -57,7 +57,7 @@ def test_context_session_models_are_registered() -> None:
         assert column in ContextRevision.__table__.columns
 
 
-def test_context_session_migration_is_current_head() -> None:
+def test_context_session_migration_chains_before_file_okapi_head() -> None:
     migration = _load_migration(MIGRATION, "context_session_migration")
     assert migration.revision == "018_context_sessions"
     assert migration.down_revision == "017_connector_sync"

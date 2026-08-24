@@ -310,3 +310,123 @@ def test_diff_reindex_deletions_only_recounts_okapi_documents() -> None:
     assert existing.file_okapi_index_version is None
     assert existing.file_okapi_documents_count == 0
     assert existing.commit_sha == "new-sha"
+
+
+def test_diff_reindex_null_content_hash_skips_okapi_but_indexes_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: null content_hash must not skip ordinary chunk indexing."""
+    from pathlib import Path
+
+    from synsc.database.models import CodeChunk, Repository, RepositoryFile
+
+    service = IndexingService()
+    okapi_calls: list[dict[str, object]] = []
+    content = "def hello():\n    return 1\n"
+    modified_file = {
+        "path": "src/example.py",
+        "name": "example.py",
+        "size_bytes": len(content),
+        "content": content,
+    }
+    unchanged_file = {
+        "path": "README.md",
+        "name": "README.md",
+        "size_bytes": 8,
+        "content": "# readme\n",
+    }
+    existing = Repository(
+        repo_id="repo-1",
+        url="https://github.com/acme/example",
+        owner="acme",
+        name="example",
+        branch="main",
+        commit_sha="old-sha",
+        files_count=1,
+        chunks_count=1,
+        symbols_count=0,
+    )
+    null_hash_file = RepositoryFile(
+        file_id="file-1",
+        repo_id="repo-1",
+        file_path="src/example.py",
+        file_name="example.py",
+        language="python",
+        content_hash=None,
+    )
+
+    class _FileQuery:
+        def __init__(self, db_file: RepositoryFile | None) -> None:
+            self._db_file = db_file
+
+        def filter(self, *_args: object, **_kwargs: object) -> _FileQuery:
+            return self
+
+        def first(self) -> RepositoryFile | None:
+            return self._db_file
+
+        def count(self) -> int:
+            return 1 if self._db_file is not None else 0
+
+    class _CountQuery:
+        def filter(self, *_args: object, **_kwargs: object) -> _CountQuery:
+            return self
+
+        def count(self) -> int:
+            return 1
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.added: list[object] = []
+
+        def add(self, obj: object) -> None:
+            self.added.append(obj)
+
+        def flush(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def execute(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def query(self, model: type[object]) -> object:
+            if model is RepositoryFile:
+                return _FileQuery(null_hash_file)
+            return _CountQuery()
+
+    class _FixedEmbeddingGenerator:
+        batch_size = 64
+        model_name = "test-fixed-768"
+
+        def generate(self, texts: list[str]) -> np.ndarray:
+            vectors = np.zeros((len(texts), 768), dtype=np.float32)
+            vectors[:, 0] = 1.0
+            return vectors
+
+    service._embedding_generator = _FixedEmbeddingGenerator()
+    monkeypatch.setattr(
+        service,
+        "_compute_file_diff",
+        lambda *_args, **_kwargs: ([], [modified_file], []),
+    )
+    monkeypatch.setattr(service, "_delete_file_data", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        service,
+        "_add_file_okapi_rows",
+        lambda *_args, **kwargs: okapi_calls.append(kwargs) or 0,
+    )
+    monkeypatch.setattr(service, "_build_code_graph_safe", lambda *_args: None)
+    monkeypatch.setattr(service.vector_store, "add", lambda **_kwargs: None)
+
+    session = _FakeSession()
+    result = service._diff_reindex(
+        session,
+        existing,
+        Path("/tmp/example"),
+        [modified_file, unchanged_file],
+        "new-sha",
+        quality_mode="agent",
+    )
+
+    assert result is not None
+    assert okapi_calls == []
+    assert any(isinstance(obj, CodeChunk) for obj in session.added)

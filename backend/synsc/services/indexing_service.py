@@ -1447,19 +1447,17 @@ class IndexingService:
             if not db_file:
                 continue
 
-            content_hash = db_file.content_hash
-            if content_hash is None:
-                continue
-
-            self._add_file_okapi_rows(
-                session,
-                repo_id=str(repo_id),
-                repository_file=db_file,
-                file_path=file_path,
-                content=content,
-                content_hash=content_hash,
-                staged=diff_okapi_staged,
-            )
+            file_content_hash = db_file.content_hash
+            if file_content_hash is not None:
+                self._add_file_okapi_rows(
+                    session,
+                    repo_id=str(repo_id),
+                    repository_file=db_file,
+                    file_path=file_path,
+                    content=content,
+                    content_hash=file_content_hash,
+                    staged=diff_okapi_staged,
+                )
 
             # Doc files
             is_doc_file = language in ("markdown", "restructuredtext") or (

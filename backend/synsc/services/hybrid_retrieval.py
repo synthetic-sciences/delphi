@@ -874,7 +874,7 @@ def path_token_search(
         logger.warning("path-token chunk lookup failed", error=str(exc))
         return []
 
-    chunks_by_file = {str(row["file_id"]): row for row in chunk_rows}
+    chunks_by_file: dict[str, Any] = {str(row["file_id"]): row for row in chunk_rows}
     candidates: list[Candidate] = []
     for file_row in ranked_files:
         chunk_row = chunks_by_file.get(str(file_row["file_id"]))

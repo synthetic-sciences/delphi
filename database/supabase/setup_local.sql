@@ -244,7 +244,7 @@ CREATE INDEX IF NOT EXISTS idx_files_language ON repository_files(language);
 -- PART 6A: FILE-LEVEL OKAPI LEXICAL STATISTICS
 -- ============================================================================
 -- Bootstrap uses UUID FK columns (consistent with repository_files/repos).
--- Alembic migration 019 uses VARCHAR(36) for the same logical identifiers.
+-- Alembic migration 019 uses UUID for the same logical identifiers.
 
 CREATE TABLE IF NOT EXISTS repository_file_lexical_documents (
     file_id UUID PRIMARY KEY
