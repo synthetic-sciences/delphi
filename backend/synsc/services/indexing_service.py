@@ -1447,13 +1447,17 @@ class IndexingService:
             if not db_file:
                 continue
 
+            content_hash = db_file.content_hash
+            if content_hash is None:
+                continue
+
             self._add_file_okapi_rows(
                 session,
                 repo_id=str(repo_id),
                 repository_file=db_file,
                 file_path=file_path,
                 content=content,
-                content_hash=db_file.content_hash,
+                content_hash=content_hash,
                 staged=diff_okapi_staged,
             )
 
@@ -2009,15 +2013,17 @@ class IndexingService:
                     file_path = file_info["path"]
                     language = db_file.language
 
-                    file_okapi_documents_count += self._add_file_okapi_rows(
-                        session,
-                        repo_id=str(repo.repo_id),
-                        repository_file=db_file,
-                        file_path=file_path,
-                        content=content,
-                        content_hash=db_file.content_hash,
-                        staged=batch_okapi_staged,
-                    )
+                    file_content_hash = db_file.content_hash
+                    if file_content_hash is not None:
+                        file_okapi_documents_count += self._add_file_okapi_rows(
+                            session,
+                            repo_id=str(repo.repo_id),
+                            repository_file=db_file,
+                            file_path=file_path,
+                            content=content,
+                            content_hash=file_content_hash,
+                            staged=batch_okapi_staged,
+                        )
 
                     # Documentation files (markdown, rst) — paragraph-based chunking
                     is_doc_file = language in ("markdown", "restructuredtext") or (
