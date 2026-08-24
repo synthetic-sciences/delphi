@@ -1,15 +1,19 @@
 import type { Metadata } from "next";
-import { Geist, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
+import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const sans = Geist({
-  variable: "--font-sans",
-  subsets: ["latin"],
+const cmu = localFont({
+  variable: "--font-cmu",
   display: "swap",
+  src: [
+    { path: "../../public/fonts/cmu-concrete-roman.woff", weight: "400", style: "normal" },
+    { path: "../../public/fonts/cmu-concrete-bold.woff", weight: "700", style: "normal" },
+  ],
 });
 
 const mono = JetBrains_Mono({
-  variable: "--font-mono",
+  variable: "--font-jbmono",
   subsets: ["latin"],
   display: "swap",
 });
@@ -17,24 +21,24 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL("https://trydelphi.ai"),
   title: {
-    default: "Delphi | Context before code",
+    default: "Delphi. The right context, before the code.",
     template: "%s",
   },
   description:
-    "Delphi finds the right source files before your coding agent answers.",
+    "Delphi indexes your repos, docs, papers, and datasets, then hands your coding agent precise, cited context over MCP. Open source and local first.",
   openGraph: {
-    title: "Delphi | Context before code",
+    title: "Delphi. The right context, before the code.",
     description:
-      "Find the right source files before the coding agent answers.",
+      "Local search for your agent's code, docs, and papers. Open source, self-hosted, MCP native.",
     type: "website",
     url: "https://trydelphi.ai",
     siteName: "Delphi",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Delphi | Context before code",
+    title: "Delphi. The right context, before the code.",
     description:
-      "Find the right source files before the coding agent answers.",
+      "Local search for your agent's code, docs, and papers. Open source, self-hosted, MCP native.",
   },
   robots: {
     index: true,
@@ -42,63 +46,16 @@ export const metadata: Metadata = {
   },
 };
 
-const THEME_INIT = `
-(function(){try{
-  var t=localStorage.getItem('delphi-theme');
-  if(t!=='light'&&t!=='dark'){
-    t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';
-  }
-  document.documentElement.setAttribute('data-theme',t);
-}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();
-`;
-
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${sans.variable} ${mono.variable}`}
-      suppressHydrationWarning
-    >
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} />
-        <link
-          as="image"
-          fetchPriority="high"
-          href="/img/heroes/sacred-way-light-mobile.webp"
-          media="(max-width: 640px) and (prefers-color-scheme: light)"
-          rel="preload"
-          type="image/webp"
-        />
-        <link
-          as="image"
-          fetchPriority="high"
-          href="/img/heroes/sacred-way-mobile.webp"
-          media="(max-width: 640px) and (prefers-color-scheme: dark)"
-          rel="preload"
-          type="image/webp"
-        />
-        <link
-          as="image"
-          fetchPriority="high"
-          href="/img/heroes/sacred-way-light.webp"
-          media="(min-width: 641px) and (prefers-color-scheme: light)"
-          rel="preload"
-          type="image/webp"
-        />
-        <link
-          as="image"
-          fetchPriority="high"
-          href="/img/heroes/sacred-way.webp"
-          media="(min-width: 641px) and (prefers-color-scheme: dark)"
-          rel="preload"
-          type="image/webp"
-        />
-      </head>
-      <body className="min-h-full">{children}</body>
+    <html lang="en" className={`${cmu.variable} ${mono.variable}`}>
+      <body className="min-h-full bg-background text-foreground antialiased">
+        {children}
+      </body>
     </html>
   );
 }
