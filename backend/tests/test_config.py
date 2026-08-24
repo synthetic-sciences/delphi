@@ -148,6 +148,16 @@ def test_path_token_search_is_opt_in(monkeypatch):
     assert SynscConfig.from_env().search.enable_path_token_search is True
 
 
+def test_file_okapi_is_opt_in(monkeypatch):
+    from synsc.config import SynscConfig
+
+    monkeypatch.delenv("SYNSC_FILE_OKAPI", raising=False)
+    assert SynscConfig.from_env().search.enable_file_okapi is False
+
+    monkeypatch.setenv("SYNSC_FILE_OKAPI", "true")
+    assert SynscConfig.from_env().search.enable_file_okapi is True
+
+
 def test_provider_policy_model_contains_no_credential_fields():
     from synsc.config import ProviderPolicyConfig
 

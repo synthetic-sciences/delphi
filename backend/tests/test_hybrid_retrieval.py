@@ -775,6 +775,225 @@ def test_zero_hit_path_token_branch_does_not_rescale_fusion(monkeypatch):
     assert calls == 1
 
 
+def test_hybrid_retrieve_runs_opt_in_file_okapi_branch(monkeypatch):
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    called = {}
+
+    def fake_file_okapi_search(*args, **kwargs):
+        called["args"] = args
+        called.update(kwargs)
+        candidate = Candidate(
+            chunk_id="file-okapi",
+            file_path="src/user_service.py",
+        )
+        candidate.sources["file_okapi"] = 1.0
+        return [candidate]
+
+    monkeypatch.setattr(
+        hybrid_module,
+        "file_okapi_search",
+        fake_file_okapi_search,
+    )
+
+    results = hybrid_module.hybrid_retrieve(
+        session=object(),
+        query="user service",
+        query_embedding=object(),
+        vector_search_fn=lambda **kwargs: [],
+        user_id="user-id",
+        repo_ids=["repo-id"],
+        top_k=20,
+        enable_bm25=False,
+        enable_trigram=False,
+        enable_symbol=False,
+        enable_path=False,
+        enable_file_okapi=True,
+    )
+
+    assert [candidate.chunk_id for candidate in results] == ["file-okapi"]
+    assert called["args"][3] == ["repo-id"]
+    assert called["top_k"] == 20
+
+
+def test_hybrid_retrieve_aligns_file_okapi_onto_strongest_existing_chunk(
+    monkeypatch,
+):
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    def fake_file_okapi_search(*args, **kwargs):
+        aligned = Candidate(chunk_id="lexical-a", file_id="file-a")
+        aligned.sources["file_okapi"] = 4.0
+        novel = Candidate(chunk_id="lexical-c", file_id="file-c")
+        novel.sources["file_okapi"] = 3.0
+        return [aligned, novel]
+
+    monkeypatch.setattr(
+        hybrid_module,
+        "file_okapi_search",
+        fake_file_okapi_search,
+    )
+
+    def vector_search(**kwargs):
+        return [
+            {
+                "chunk_id": "shared-a",
+                "file_id": "file-a",
+                "file_path": "src/a.py",
+                "similarity": 0.8,
+            },
+        ]
+
+    results = hybrid_module.hybrid_retrieve(
+        session=object(),
+        query="user service",
+        query_embedding=object(),
+        vector_search_fn=vector_search,
+        user_id="user-id",
+        repo_ids=["repo-id"],
+        top_k=20,
+        enable_bm25=False,
+        enable_trigram=False,
+        enable_symbol=False,
+        enable_path=False,
+        enable_file_okapi=True,
+    )
+
+    by_id = {candidate.chunk_id: candidate for candidate in results}
+    assert by_id["shared-a"].sources["file_okapi"] == 4.0
+    assert by_id["lexical-c"].sources["file_okapi"] == 3.0
+
+
+def test_zero_hit_file_okapi_branch_does_not_rescale_fusion(monkeypatch):
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    calls = 0
+
+    def empty_file_okapi_search(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(
+        hybrid_module,
+        "file_okapi_search",
+        empty_file_okapi_search,
+    )
+
+    def vector_search(**kwargs):
+        return [
+            {
+                "chunk_id": "vector-1",
+                "file_id": "file-1",
+                "file_path": "src/vector.py",
+                "similarity": 0.9,
+            }
+        ]
+
+    common = {
+        "session": object(),
+        "query": "user service",
+        "query_embedding": object(),
+        "vector_search_fn": vector_search,
+        "user_id": "user-id",
+        "repo_ids": ["repo-id"],
+        "top_k": 20,
+        "enable_bm25": False,
+        "enable_trigram": False,
+        "enable_symbol": False,
+        "enable_path": False,
+    }
+    disabled = hybrid_module.hybrid_retrieve(
+        **common,
+        enable_file_okapi=False,
+    )
+    enabled_without_hits = hybrid_module.hybrid_retrieve(
+        **common,
+        enable_file_okapi=True,
+    )
+
+    assert enabled_without_hits[0].fused_score == disabled[0].fused_score
+    assert calls == 1
+
+
+def test_disabled_file_okapi_does_not_call_search(monkeypatch):
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    calls = 0
+
+    def counting_file_okapi_search(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(
+        hybrid_module,
+        "file_okapi_search",
+        counting_file_okapi_search,
+    )
+
+    hybrid_module.hybrid_retrieve(
+        session=object(),
+        query="user service",
+        query_embedding=object(),
+        vector_search_fn=lambda **kwargs: [],
+        user_id="user-id",
+        repo_ids=["repo-id"],
+        top_k=20,
+        enable_bm25=False,
+        enable_trigram=False,
+        enable_symbol=False,
+        enable_path=False,
+        enable_file_okapi=False,
+    )
+
+    assert calls == 0
+
+
+def test_unscoped_file_okapi_does_not_fuse_branch(monkeypatch):
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    calls = 0
+
+    def counting_file_okapi_search(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(
+        hybrid_module,
+        "file_okapi_search",
+        counting_file_okapi_search,
+    )
+
+    def vector_search(**kwargs):
+        return [
+            {
+                "chunk_id": "vector-1",
+                "file_id": "file-1",
+                "file_path": "src/vector.py",
+                "similarity": 0.9,
+            }
+        ]
+
+    hybrid_module.hybrid_retrieve(
+        session=object(),
+        query="user service",
+        query_embedding=object(),
+        vector_search_fn=vector_search,
+        user_id="user-id",
+        repo_ids=None,
+        top_k=20,
+        enable_bm25=False,
+        enable_trigram=False,
+        enable_symbol=False,
+        enable_path=False,
+        enable_file_okapi=True,
+    )
+
+    assert calls == 0
+
+
 # ── File-level Okapi ─────────────────────────────────────────────────────────
 
 

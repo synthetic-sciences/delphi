@@ -1633,6 +1633,7 @@ def hybrid_retrieve(
     enable_bm25: bool = True,
     enable_file_diverse_bm25: bool = False,
     enable_path_token_search: bool = False,
+    enable_file_okapi: bool = False,
     enable_trigram: bool = True,
     enable_symbol: bool = True,
     enable_path: bool = True,
@@ -1647,6 +1648,7 @@ def hybrid_retrieve(
     branches: list[list[Candidate]] = []
     file_bm25_candidates: list[Candidate] = []
     path_token_candidates: list[Candidate] = []
+    file_okapi_candidates: list[Candidate] = []
     timing: dict[str, Any] = {}
 
     # 1. Vector (always — it's the baseline)
@@ -1715,6 +1717,19 @@ def hybrid_retrieve(
         )
         timing["file_bm25_ms"] = (time.time() - t) * 1000
 
+    # 3c. File-level Okapi — repository-scoped, opt-in until ablation is complete.
+    if enable_file_okapi and repo_ids:
+        t = time.time()
+        file_okapi_candidates = file_okapi_search(
+            session,
+            query,
+            user_id,
+            repo_ids,
+            language,
+            top_k=min(top_k, FILE_OKAPI_CANDIDATES),
+        )
+        timing["file_okapi_ms"] = (time.time() - t) * 1000
+
     # 4. Exact symbol — biggest precision win for identifier queries
     if enable_symbol:
         t = time.time()
@@ -1758,6 +1773,17 @@ def hybrid_retrieve(
         )
     else:
         weights.pop("path_token", None)
+    if enable_file_okapi and file_okapi_candidates:
+        weights.setdefault("file_okapi", FILE_OKAPI_WEIGHT)
+        branches.append(
+            _align_file_level_candidates(
+                branches,
+                file_okapi_candidates,
+                weights,
+            )
+        )
+    else:
+        weights.pop("file_okapi", None)
     fused = fuse_candidates(branches, weights=weights)
     timing["total_ms"] = (time.time() - t_start) * 1000
     timing["candidates"] = len(fused)
@@ -1769,6 +1795,7 @@ def hybrid_retrieve(
         "path": sum(1 for c in fused if "path" in c.sources),
         "path_affinity": sum(1 for c in fused if "path_affinity" in c.sources),
         "path_token": sum(1 for c in fused if "path_token" in c.sources),
+        "file_okapi": sum(1 for c in fused if "file_okapi" in c.sources),
         "trigram": sum(1 for c in fused if "trigram" in c.sources),
     }
     logger.debug("hybrid_retrieve timing", **timing)

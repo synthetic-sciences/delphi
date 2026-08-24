@@ -252,6 +252,48 @@ def test_source_diversity_preserves_path_token_branch() -> None:
     ]
 
 
+def test_source_diversity_preserves_file_okapi_branch() -> None:
+    ranked = [
+        _result("vector-1", "src/vector_1.py", 0.9),
+        _result("vector-2", "src/vector_2.py", 0.8),
+        _result("vector-3", "src/vector_3.py", 0.7),
+        _result("bm25-1", "src/bm25.py", 0.6),
+        _result("trigram-1", "src/trigram.py", 0.5),
+        _result("file-okapi-1", "src/user_service.py", 0.4),
+    ]
+    for row in ranked[:3]:
+        row["candidate_sources"] = {"vector": 1.0}
+    ranked[3]["candidate_sources"] = {"bm25": 1.0}
+    ranked[4]["candidate_sources"] = {"trigram": 1.0}
+    ranked[5]["candidate_sources"] = {"file_okapi": 1.0}
+
+    selected = _select_source_diverse_results(ranked, top_k=3)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "vector-1",
+        "trigram-1",
+        "file-okapi-1",
+    ]
+
+
+def test_source_diversity_preserves_novel_file_okapi_file() -> None:
+    ranked = [
+        _result("aligned-1", "src/types.py", 0.9),
+        _result("vector-2", "src/vector_2.py", 0.8),
+        _result("file-okapi-only", "src/default_types.py", 0.2),
+    ]
+    ranked[0]["candidate_sources"] = {"vector": 1.0, "file_okapi": 0.9}
+    ranked[1]["candidate_sources"] = {"vector": 0.8}
+    ranked[2]["candidate_sources"] = {"file_okapi": 0.7}
+
+    selected = _select_source_diverse_results(ranked, top_k=2)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "aligned-1",
+        "file-okapi-only",
+    ]
+
+
 def test_source_diversity_preserves_novel_path_token_file() -> None:
     ranked = [
         _result("aligned-1", "src/types.py", 0.9),
@@ -435,6 +477,113 @@ def test_agent_search_reports_serving_retrieval_configuration(monkeypatch) -> No
     assert result["retrieval_config"]["fusion_weights"]["file_bm25"] == 0.17
     assert result["retrieval_config"]["path_token_search"] is True
     assert result["retrieval_config"]["fusion_weights"]["path_token"] == 0.11
+
+
+def test_agent_search_reports_file_okapi_serving_configuration(monkeypatch) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    monkeypatch.delenv("SYNSC_FUSION_WEIGHTS", raising=False)
+
+    service = search_module.SearchService(user_id="user-id")
+    monkeypatch.setattr(service.config.search, "enable_reranker", False)
+    monkeypatch.setattr(service.config.search, "enable_file_okapi", True)
+    result = service.search_code(
+        query="find the user service implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    config = result["retrieval_config"]
+    assert config["file_okapi"] is True
+    assert config["fusion_weights"]["file_okapi"] == 0.15
+    assert config["file_okapi_candidates"] == 50
+    assert config["file_okapi_index_version"] == "v1"
+    assert config["file_okapi_k1"] == 1.2
+    assert config["file_okapi_b"] == 0.75
+
+
+def test_serving_configuration_marks_file_okapi_inactive_when_disabled(
+    monkeypatch,
+) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    monkeypatch.setenv("SYNSC_FUSION_WEIGHTS", "file_okapi=0.17")
+
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.config.search.enable_file_okapi = False
+    result = service.search_code(
+        query="find the user service implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    config = result["retrieval_config"]
+    assert config["file_okapi"] is False
+    assert "file_okapi" not in config["fusion_weights"]
+
+
+def test_serving_configuration_marks_file_okapi_inactive_without_scope(
+    monkeypatch,
+) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.config.search.enable_file_okapi = True
+    result = service.search_code(
+        query="find the user service implementation",
+        repo_ids=None,
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    config = result["retrieval_config"]
+    assert config["file_okapi"] is False
+    assert "file_okapi" not in config["fusion_weights"]
+
+
+def test_agent_search_passes_file_okapi_flag(monkeypatch) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    captured: dict[str, object] = {}
+
+    def capture_hybrid(**kwargs):
+        captured.update(kwargs)
+        return _agent_candidates()
+
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    monkeypatch.setattr(hybrid_module, "hybrid_retrieve", capture_hybrid)
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.config.search.enable_file_okapi = True
+    result = service.search_code(
+        query="find user service",
+        repo_ids=["repo-id"],
+        top_k=2,
+        quality_mode="agent",
+    )
+
+    assert result["success"] is True
+    assert captured["enable_file_okapi"] is True
+
+
+def test_agent_search_reports_file_okapi_branch_coverage(monkeypatch) -> None:
+    candidates = _agent_candidates()
+    candidates[2].sources["file_okapi"] = 0.75
+    search_module = _stub_agent_search(monkeypatch, candidates)
+
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    result = service.search_code(
+        query="find user service",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    assert result["success"] is True
+    assert result["hybrid"]["sources_hit"]["file_okapi"] == 1
 
 
 def test_path_token_default_fusion_weight_is_point_one(monkeypatch) -> None:
