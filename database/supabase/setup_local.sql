@@ -157,6 +157,8 @@ CREATE TABLE IF NOT EXISTS repositories (
     symbols_count INTEGER DEFAULT 0,
     total_lines INTEGER DEFAULT 0,
     total_tokens INTEGER DEFAULT 0,
+    file_okapi_index_version VARCHAR(32),
+    file_okapi_documents_count INTEGER NOT NULL DEFAULT 0,
     languages JSONB DEFAULT '{}',
 
     -- Optional metadata
@@ -183,6 +185,10 @@ WHERE visibility IS NULL;
 ALTER TABLE repositories
     ALTER COLUMN visibility SET DEFAULT 'public',
     ALTER COLUMN visibility SET NOT NULL;
+ALTER TABLE repositories
+    ADD COLUMN IF NOT EXISTS file_okapi_index_version VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS file_okapi_documents_count
+        INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_repos_public ON repositories(is_public);
 CREATE INDEX IF NOT EXISTS idx_repositories_visibility ON repositories(visibility);
@@ -236,6 +242,34 @@ CREATE TABLE IF NOT EXISTS repository_files (
 
 CREATE INDEX IF NOT EXISTS idx_files_repo ON repository_files(repo_id);
 CREATE INDEX IF NOT EXISTS idx_files_language ON repository_files(language);
+
+
+-- ============================================================================
+-- PART 6A: FILE-LEVEL OKAPI LEXICAL STATISTICS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS repository_file_lexical_documents (
+    file_id UUID PRIMARY KEY
+        REFERENCES repository_files(file_id) ON DELETE CASCADE,
+    repo_id UUID NOT NULL
+        REFERENCES repositories(repo_id) ON DELETE CASCADE,
+    document_length INTEGER NOT NULL CHECK (document_length > 0),
+    content_hash VARCHAR(64) NOT NULL,
+    index_version VARCHAR(32) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS repository_file_lexical_terms (
+    file_id UUID NOT NULL
+        REFERENCES repository_files(file_id) ON DELETE CASCADE,
+    repo_id UUID NOT NULL
+        REFERENCES repositories(repo_id) ON DELETE CASCADE,
+    term VARCHAR(128) NOT NULL,
+    term_frequency INTEGER NOT NULL CHECK (term_frequency > 0),
+    PRIMARY KEY (file_id, term)
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_lexical_terms_scope
+    ON repository_file_lexical_terms(repo_id, term, file_id);
 
 
 -- ============================================================================

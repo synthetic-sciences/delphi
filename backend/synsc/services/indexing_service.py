@@ -35,12 +35,15 @@ from synsc.database.models import (
     CodeChunk,
     Repository,
     RepositoryFile,
+    RepositoryFileLexicalDocument,
+    RepositoryFileLexicalTerm,
     Symbol,
     UserRepository,
 )
 from synsc.embeddings.generator import EmbeddingProvider, get_embedding_generator
 from synsc.indexing.vector_store import VectorStore, get_vector_store
 from synsc.parsing.registry import get_parser_registry
+from synsc.services.file_okapi import FILE_OKAPI_INDEX_VERSION, build_file_okapi_document
 
 logger = structlog.get_logger(__name__)
 
@@ -554,6 +557,9 @@ class IndexingService:
                                             "files_indexed": diff_result["files_count"],
                                             "chunks_created": diff_result["chunks_count"],
                                             "symbols_extracted": diff_result.get("symbols_count", 0),
+                                            "file_okapi_documents_count": diff_result.get(
+                                                "file_okapi_documents_count", 0
+                                            ),
                                             "is_public": True,
                                             "is_shared": True,
                                             "diff_stats": diff_result.get("diff_stats"),
@@ -805,6 +811,7 @@ class IndexingService:
                 "files_indexed": result["files_count"],
                 "chunks_created": result["chunks_count"],
                 "symbols_extracted": result.get("symbols_count", 0),
+                "file_okapi_documents_count": result.get("file_okapi_documents_count", 0),
                 "is_public": is_public,
                 "is_shared": False,
                 "indexing_time_ms": elapsed_time,
@@ -1007,6 +1014,7 @@ class IndexingService:
                 "files_indexed": result["files_count"],
                 "chunks_created": result["chunks_count"],
                 "symbols_extracted": result.get("symbols_count", 0),
+                "file_okapi_documents_count": result.get("file_okapi_documents_count", 0),
                 "is_public": False,
                 "indexing_time_ms": elapsed_time,
                 "message": f"Local folder indexed successfully ({result['files_count']} files).",
@@ -1045,6 +1053,48 @@ class IndexingService:
             })
         except Exception:
             logger.warning("Failed to build code graph (non-critical)", exc_info=True)
+
+    def _add_file_okapi_rows(
+        self,
+        session: Session,
+        *,
+        repo_id: str,
+        repository_file: RepositoryFile,
+        file_path: str,
+        content: str,
+        content_hash: str,
+    ) -> int:
+        """Persist file-level Okapi lexical statistics for one indexed file."""
+        try:
+            document = build_file_okapi_document(file_path, content)
+        except ValueError as exc:
+            logger.warning(
+                "skipping file-level okapi document",
+                repo_id=repo_id,
+                file_path=file_path,
+                reason=str(exc),
+            )
+            return 0
+
+        session.add(
+            RepositoryFileLexicalDocument(
+                file_id=repository_file.file_id,
+                repo_id=repo_id,
+                document_length=document.document_length,
+                content_hash=content_hash,
+                index_version=FILE_OKAPI_INDEX_VERSION,
+            )
+        )
+        for term, term_frequency in document.term_frequencies.items():
+            session.add(
+                RepositoryFileLexicalTerm(
+                    file_id=repository_file.file_id,
+                    repo_id=repo_id,
+                    term=term,
+                    term_frequency=term_frequency,
+                )
+            )
+        return 1
 
     # ── Diff-aware re-indexing ─────────────────────────────────────────────
 
@@ -1265,12 +1315,23 @@ class IndexingService:
             existing.files_count = remaining_files
             existing.chunks_count = remaining_chunks
             existing.symbols_count = remaining_symbols
+            existing.file_okapi_documents_count = (
+                session.query(RepositoryFileLexicalDocument)
+                .filter(RepositoryFileLexicalDocument.repo_id == repo_id)
+                .count()
+            )
+            existing.file_okapi_index_version = (
+                FILE_OKAPI_INDEX_VERSION
+                if existing.file_okapi_documents_count > 0
+                else None
+            )
 
             return {
                 "repo_id": str(repo_id),
                 "files_count": remaining_files,
                 "chunks_count": remaining_chunks,
                 "symbols_count": remaining_symbols,
+                "file_okapi_documents_count": existing.file_okapi_documents_count,
                 "diff_stats": existing.last_diff_stats,
             }
 
@@ -1366,6 +1427,15 @@ class IndexingService:
             )
             if not db_file:
                 continue
+
+            self._add_file_okapi_rows(
+                session,
+                repo_id=str(repo_id),
+                repository_file=db_file,
+                file_path=file_path,
+                content=content,
+                content_hash=db_file.content_hash,
+            )
 
             # Doc files
             is_doc_file = language in ("markdown", "restructuredtext") or (
@@ -1593,6 +1663,16 @@ class IndexingService:
             .filter(Symbol.repo_id == repo_id)
             .count()
         )
+        existing.file_okapi_documents_count = (
+            session.query(RepositoryFileLexicalDocument)
+            .filter(RepositoryFileLexicalDocument.repo_id == repo_id)
+            .count()
+        )
+        existing.file_okapi_index_version = (
+            FILE_OKAPI_INDEX_VERSION
+            if existing.file_okapi_documents_count > 0
+            else None
+        )
 
         logger.info(
             "Diff-aware re-index complete",
@@ -1607,6 +1687,7 @@ class IndexingService:
             "files_count": existing.files_count,
             "chunks_count": existing.chunks_count,
             "symbols_count": existing.symbols_count,
+            "file_okapi_documents_count": existing.file_okapi_documents_count,
             "diff_stats": diff_stats,
         }
 
@@ -1706,6 +1787,7 @@ class IndexingService:
         total_lines = 0
         total_tokens = 0
         total_symbols = 0
+        file_okapi_documents_count = 0
         language_lines: Counter[str] = Counter[str]()
         chunks_to_embed: list[tuple[CodeChunk, str]] = []  # (db_chunk, content)
         
@@ -1903,6 +1985,15 @@ class IndexingService:
                 for db_file, file_info, content in current_batch_files:
                     file_path = file_info["path"]
                     language = db_file.language
+
+                    file_okapi_documents_count += self._add_file_okapi_rows(
+                        session,
+                        repo_id=str(repo.repo_id),
+                        repository_file=db_file,
+                        file_path=file_path,
+                        content=content,
+                        content_hash=db_file.content_hash,
+                    )
 
                     # Documentation files (markdown, rst) — paragraph-based chunking
                     is_doc_file = language in ("markdown", "restructuredtext") or (
@@ -2192,6 +2283,10 @@ class IndexingService:
         repo.total_tokens = total_tokens
         repo.set_languages(languages)
         repo.embedding_model = self.embedding_generator.model_name
+        repo.file_okapi_documents_count = file_okapi_documents_count
+        repo.file_okapi_index_version = (
+            FILE_OKAPI_INDEX_VERSION if file_okapi_documents_count > 0 else None
+        )
         if deep_index:
             repo.deep_indexed = True
 
@@ -2213,6 +2308,7 @@ class IndexingService:
             "files_count": repo.files_count,
             "chunks_count": repo.chunks_count,
             "symbols_count": total_symbols,
+            "file_okapi_documents_count": file_okapi_documents_count,
             "total_lines": total_lines,
             "total_tokens": total_tokens,
             "languages": languages,
@@ -2514,6 +2610,8 @@ class IndexingService:
                     "symbols_count": repo.symbols_count,
                     "total_lines": repo.total_lines,
                     "total_tokens": repo.total_tokens,
+                    "file_okapi_index_version": repo.file_okapi_index_version,
+                    "file_okapi_documents_count": repo.file_okapi_documents_count,
                 },
                 "languages": repo.get_languages(),
                 # New fields for deduplication awareness

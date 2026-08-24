@@ -170,6 +170,40 @@ def seeded_repository():
         session.execute(
             text(
                 """
+                UPDATE repositories
+                SET file_okapi_index_version = 'v1',
+                    file_okapi_documents_count = 1
+                WHERE repo_id = :repo_id
+                """
+            ),
+            {"repo_id": repo_id},
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO repository_file_lexical_documents
+                    (file_id, repo_id, document_length, content_hash, index_version)
+                VALUES
+                    (:file_id, :repo_id, 3, 'old-hash', 'v1')
+                """
+            ),
+            {"file_id": file_id, "repo_id": repo_id},
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO repository_file_lexical_terms
+                    (file_id, repo_id, term, term_frequency)
+                VALUES
+                    (:file_id, :repo_id, 'old', 2),
+                    (:file_id, :repo_id, 'index', 1)
+                """
+            ),
+            {"file_id": file_id, "repo_id": repo_id},
+        )
+        session.execute(
+            text(
+                """
                 INSERT INTO user_repositories (user_id, repo_id)
                 VALUES (:user_id, :repo_id)
                 """
@@ -293,17 +327,27 @@ def test_failed_full_reindex_restores_last_good_index(
             text(
                 """
                 SELECT r.commit_sha,
+                       r.file_okapi_index_version,
+                       r.file_okapi_documents_count,
                        COUNT(DISTINCT f.file_id) AS files,
                        COUNT(DISTINCT c.chunk_id) AS chunks,
                        COUNT(DISTINCT ur.id) AS user_links,
                        MIN(f.file_path) AS file_path,
-                       MIN(c.content) AS content
+                       MIN(c.content) AS content,
+                       COUNT(DISTINCT d.file_id) AS lexical_docs,
+                       COUNT(DISTINCT t.file_id || ':' || t.term) AS lexical_terms
                 FROM repositories r
                 LEFT JOIN repository_files f ON f.repo_id = r.repo_id
                 LEFT JOIN code_chunks c ON c.repo_id = r.repo_id
                 LEFT JOIN user_repositories ur ON ur.repo_id = r.repo_id
+                LEFT JOIN repository_file_lexical_documents d
+                    ON d.repo_id = r.repo_id
+                LEFT JOIN repository_file_lexical_terms t
+                    ON t.repo_id = r.repo_id
                 WHERE r.repo_id = :repo_id
-                GROUP BY r.commit_sha
+                GROUP BY r.commit_sha,
+                         r.file_okapi_index_version,
+                         r.file_okapi_documents_count
                 """
             ),
             {"repo_id": seeded_repository["repo_id"]},
@@ -315,6 +359,10 @@ def test_failed_full_reindex_restores_last_good_index(
     assert row.user_links == 1
     assert row.file_path == "old.py"
     assert row.content == "old index"
+    assert row.file_okapi_index_version == "v1"
+    assert row.file_okapi_documents_count == 1
+    assert row.lexical_docs == 1
+    assert row.lexical_terms == 2
 
 
 def test_failed_diff_reindex_preserves_last_good_index_and_reports_failure(

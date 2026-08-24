@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from synsc.database.connection import EXPECTED_ALEMBIC_REVISION
+
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
@@ -97,6 +99,43 @@ def test_research_jobs_migration_exists():
     assert "create_table" in content
     assert "research_jobs" in content
     assert "drop_table" in content  # downgrade is wired
+
+
+def test_file_okapi_migration_is_latest_revision():
+    path = PROJECT_ROOT / "alembic" / "versions" / "019_file_okapi.py"
+    content = path.read_text()
+    assert 'revision: str = "019_file_okapi"' in content
+    assert 'down_revision: Union[str, None] = "018_context_sessions"' in content
+    assert EXPECTED_ALEMBIC_REVISION == "019_file_okapi"
+
+
+def test_file_okapi_migration_defines_persistent_schema():
+    path = PROJECT_ROOT / "alembic" / "versions" / "019_file_okapi.py"
+    content = " ".join(path.read_text().split())
+
+    assert "ADD COLUMN IF NOT EXISTS file_okapi_index_version VARCHAR(32)" in content
+    assert (
+        "ADD COLUMN IF NOT EXISTS file_okapi_documents_count "
+        "INTEGER NOT NULL DEFAULT 0"
+    ) in content
+    assert "CREATE TABLE IF NOT EXISTS repository_file_lexical_documents" in content
+    assert "CREATE TABLE IF NOT EXISTS repository_file_lexical_terms" in content
+    assert (
+        "file_id VARCHAR(36) PRIMARY KEY REFERENCES repository_files(file_id) "
+        "ON DELETE CASCADE"
+    ) in content
+    assert content.count(
+        "repo_id VARCHAR(36) NOT NULL REFERENCES repositories(repo_id) "
+        "ON DELETE CASCADE"
+    ) == 2
+    assert (
+        "file_id VARCHAR(36) NOT NULL REFERENCES repository_files(file_id) "
+        "ON DELETE CASCADE"
+    ) in content
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_file_lexical_terms_scope "
+        "ON repository_file_lexical_terms (repo_id, term, file_id)"
+    ) in content
 
 
 def test_alembic_config_importable():
