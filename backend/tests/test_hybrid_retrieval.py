@@ -918,6 +918,95 @@ def test_file_okapi_applies_language_filter():
     assert "rf.language = :language" in session.calls[-1].sql
 
 
+def test_file_okapi_term_df_uses_language_filtered_scope_docs():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    file_okapi_search(
+        session,
+        "user service",
+        "u1",
+        repo_ids=["repo-1"],
+        language="python",
+    )
+    sql = session.calls[-1].sql
+    term_stats_start = sql.index("term_stats AS (")
+    term_stats_end = sql.index("), file_scores AS (")
+    term_stats_sql = sql[term_stats_start:term_stats_end]
+    assert "scope_docs" in term_stats_sql
+    assert "lt.repo_id IN" not in term_stats_sql
+
+
+def test_file_okapi_clamps_top_k_to_candidate_cap():
+    from synsc.services.hybrid_retrieval import (
+        FILE_OKAPI_CANDIDATES,
+        file_okapi_search,
+    )
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    file_okapi_search(
+        session,
+        "user service",
+        "u1",
+        repo_ids=["repo-1"],
+        top_k=500,
+    )
+    assert session.calls[-1].params["top_k"] == FILE_OKAPI_CANDIDATES
+
+
+def test_file_okapi_deduplicates_repo_ids_before_validation():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    candidates = file_okapi_search(
+        session,
+        "user service",
+        "u1",
+        repo_ids=["repo-1", "repo-1"],
+        top_k=5,
+    )
+    assert candidates == []
+    assert len(session.calls) == 2
+    assert session.calls[-1].params["repo_id_0"] == "repo-1"
+    assert "repo_id_1" not in session.calls[-1].params
+
+
+def test_file_okapi_rolls_back_session_after_sql_failure():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    class FailingSession(_FileOkapiRecordingSession):
+        rollbacks = 0
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+        def execute(self, statement, params):
+            if len(self.calls) == 0:
+                raise RuntimeError("scope query failed")
+            return super().execute(statement, params)
+
+    session = FailingSession([])
+    assert (
+        file_okapi_search(session, "user service", "u1", repo_ids=["repo-1"]) == []
+    )
+    assert session.rollbacks == 1
+
+
 def test_file_okapi_selects_best_chunk_with_total_order():
     from synsc.services.hybrid_retrieval import file_okapi_search
 

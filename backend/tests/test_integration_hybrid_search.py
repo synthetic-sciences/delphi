@@ -547,6 +547,7 @@ def file_okapi_repos(user_id):
     strong_file_id = str(uuid.uuid4())
     weak_file_id = str(uuid.uuid4())
     private_file_id = str(uuid.uuid4())
+    strong_chunk_early = str(uuid.uuid4())
     strong_chunk_best = str(uuid.uuid4())
     weak_chunk_id = str(uuid.uuid4())
     private_chunk_id = str(uuid.uuid4())
@@ -558,6 +559,11 @@ def file_okapi_repos(user_id):
         "class HTTPServer:\n"
         "    def get_user(self, user_id):\n"
         "        return self.users[user_id]\n"
+    )
+    strong_chunk_early_content = "# configuration defaults\nTIMEOUT = 30\n"
+    strong_chunk_best_content = (
+        "The http server exposes get user handlers.\n"
+        "Each get user request is routed by the server.\n"
     )
     weak_content = "def normalize_user(value):\n    return value.strip()\n"
     private_content = (
@@ -646,13 +652,22 @@ def file_okapi_repos(user_id):
 
         chunks = (
             (
+                strong_chunk_early,
+                accessible_repo_id,
+                strong_file_id,
+                strong_chunk_early_content,
+                1,
+                1,
+                0,
+            ),
+            (
                 strong_chunk_best,
                 accessible_repo_id,
                 strong_file_id,
-                strong_content,
-                1,
+                strong_chunk_best_content,
+                2,
                 4,
-                0,
+                1,
             ),
             (
                 weak_chunk_id,
@@ -714,6 +729,7 @@ def file_okapi_repos(user_id):
         "strong_file_id": strong_file_id,
         "weak_file_id": weak_file_id,
         "private_file_id": private_file_id,
+        "strong_chunk_early": strong_chunk_early,
         "strong_chunk_best": strong_chunk_best,
         "weak_chunk_id": weak_chunk_id,
         "private_chunk_id": private_chunk_id,
@@ -742,7 +758,7 @@ def test_file_okapi_search_ranks_accessible_files_and_hides_private_repo(
     with get_session() as session:
         scoped = file_okapi_search(
             session,
-            "HTTPServer get_user",
+            "http server get user",
             user_id,
             repo_ids=[data["accessible_repo_id"]],
             top_k=10,
@@ -752,6 +768,7 @@ def test_file_okapi_search_ranks_accessible_files_and_hides_private_repo(
     assert len({candidate.file_id for candidate in scoped}) == 2
     assert scoped[0].file_id == data["strong_file_id"]
     assert scoped[0].chunk_id == data["strong_chunk_best"]
+    assert scoped[0].chunk_id != data["strong_chunk_early"]
     assert scoped[0].sources["file_okapi"] > scoped[1].sources["file_okapi"]
     assert all(candidate.sources["file_okapi"] > 0 for candidate in scoped)
     assert data["private_file_id"] not in {candidate.file_id for candidate in scoped}

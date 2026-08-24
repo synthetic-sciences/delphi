@@ -917,14 +917,18 @@ def _file_okapi_repo_placeholders(
 
 
 def _file_okapi_query_term_cte(terms: list[str], params: dict[str, Any]) -> str:
-    if not terms:
-        return "SELECT NULL::varchar AS term WHERE FALSE"
     selects = []
     for index, term in enumerate(terms):
         key = f"okapi_term_{index}"
         params[key] = term
         selects.append(f"SELECT :{key} AS term")
     return "\n            UNION ALL\n            ".join(selects)
+
+
+def _file_okapi_rollback(session: Session) -> None:
+    rollback = getattr(session, "rollback", None)
+    if callable(rollback):
+        rollback()
 
 
 def file_okapi_search(
@@ -942,7 +946,12 @@ def file_okapi_search(
     total lexical document count across the scope must not exceed
     ``FILE_OKAPI_MAX_FILES``.
     """
-    if not repo_ids or top_k <= 0:
+    if not repo_ids:
+        return []
+
+    repo_ids = list(dict.fromkeys(repo_ids))
+    top_k = min(top_k, FILE_OKAPI_CANDIDATES)
+    if top_k <= 0:
         return []
 
     terms = tokenize_file_okapi(query, limit=FILE_OKAPI_QUERY_TERM_CAP)
@@ -994,12 +1003,10 @@ def file_okapi_search(
         scope_rows = session.execute(scope_sql, params).mappings().all()
     except Exception as exc:
         logger.warning("file-okapi scope validation failed", error=str(exc))
+        _file_okapi_rollback(session)
         return []
 
-    scope_row = scope_rows[0] if scope_rows else None
-
-    if scope_row is None:
-        return []
+    scope_row = scope_rows[0]
 
     requested_count = int(scope_row["requested_count"] or 0)
     accessible_count = int(scope_row["accessible_count"] or 0)
@@ -1044,11 +1051,12 @@ def file_okapi_search(
         term_stats AS (
             SELECT
                 query_terms.term,
-                COUNT(DISTINCT lt.file_id)::int AS document_frequency
+                COUNT(DISTINCT scope_docs.file_id)::int AS document_frequency
             FROM query_terms
             LEFT JOIN repository_file_lexical_terms lt
                 ON lt.term = query_terms.term
-                AND lt.repo_id IN ({repo_placeholders})
+            LEFT JOIN scope_docs
+                ON scope_docs.file_id = lt.file_id
             GROUP BY query_terms.term
         ),
         file_scores AS (
@@ -1150,6 +1158,7 @@ def file_okapi_search(
         rows = session.execute(search_sql, params).mappings().all()
     except Exception as exc:
         logger.warning("file-okapi search failed", error=str(exc))
+        _file_okapi_rollback(session)
         return []
 
     candidates: list[Candidate] = []
