@@ -67,7 +67,6 @@ def tokenize_file_okapi(value: str, *, limit: int | None = None) -> list[str]:
     seen: set[str] = set()
     for term in tokens:
         if term in seen:
-            truncated.append(term)
             continue
         if len(seen) >= limit:
             break

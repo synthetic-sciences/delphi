@@ -52,3 +52,34 @@ def test_bm25_term_score_matches_hand_calculated_reference():
     expected_idf = math.log(1 + (10 - 2 + 0.5) / (2 + 0.5))
     expected = expected_idf * (3 * 2.2) / (3 + 1.2 * (0.25 + 0.75 * 1.25))
     assert actual == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    ("value", "limit", "expected"),
+    [
+        ("foo foo", 1, ["foo"]),
+        ("foo bar foo baz qux", 2, ["foo", "bar"]),
+        ("alpha beta gamma", 256, ["alpha", "beta", "gamma"]),
+    ],
+)
+def test_tokenizer_limit_deduplicates_and_caps_unique_terms(value, limit, expected):
+    assert tokenize_file_okapi(value, limit=limit) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("123 abc 456", ["abc"]),
+        ("a " + ("x" * 128), ["a", "x" * 128]),
+        ("a " + ("y" * 129), ["a"]),
+    ],
+)
+def test_tokenizer_rejects_numeric_only_and_overlong_terms(value, expected):
+    assert tokenize_file_okapi(value) == expected
+
+
+def test_document_accepts_exactly_at_token_cap(monkeypatch):
+    monkeypatch.setattr(file_okapi, "FILE_OKAPI_DOCUMENT_TOKEN_CAP", 3)
+    document = build_file_okapi_document("a.py", "one")
+    assert document.document_length == 3
+    assert document.term_frequencies == {"a": 1, "py": 1, "one": 1}
