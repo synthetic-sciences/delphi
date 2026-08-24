@@ -74,6 +74,7 @@ def _agent_candidates() -> list[Candidate]:
 def _stub_agent_search(monkeypatch, candidates: list[Candidate]):
     import synsc.services.hybrid_retrieval as hybrid_module
     import synsc.services.search_service as search_module
+    from synsc.services.hybrid_retrieval import HybridRetrieveResult
 
     monkeypatch.setattr(search_module, "get_session", _fake_session)
     monkeypatch.setattr(
@@ -84,7 +85,7 @@ def _stub_agent_search(monkeypatch, candidates: list[Candidate]):
     monkeypatch.setattr(
         hybrid_module,
         "hybrid_retrieve",
-        lambda **_kwargs: candidates,
+        lambda **_kwargs: HybridRetrieveResult(candidates=candidates),
     )
     monkeypatch.setattr(
         search_module,
@@ -480,6 +481,34 @@ def test_agent_search_reports_serving_retrieval_configuration(monkeypatch) -> No
 
 
 def test_agent_search_reports_file_okapi_serving_configuration(monkeypatch) -> None:
+    candidates = _agent_candidates()
+    candidates[0].sources["file_okapi"] = 0.75
+    search_module = _stub_agent_search(monkeypatch, candidates)
+    monkeypatch.delenv("SYNSC_FUSION_WEIGHTS", raising=False)
+
+    service = search_module.SearchService(user_id="user-id")
+    monkeypatch.setattr(service.config.search, "enable_reranker", False)
+    monkeypatch.setattr(service.config.search, "enable_file_okapi", True)
+    result = service.search_code(
+        query="find the user service implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    config = result["retrieval_config"]
+    assert config["file_okapi_configured"] is True
+    assert config["file_okapi"] is True
+    assert config["fusion_weights"]["file_okapi"] == 0.15
+    assert config["file_okapi_candidates"] == 50
+    assert config["file_okapi_index_version"] == "v1"
+    assert config["file_okapi_k1"] == 1.2
+    assert config["file_okapi_b"] == 0.75
+
+
+def test_agent_search_reports_file_okapi_configured_but_inactive_without_hits(
+    monkeypatch,
+) -> None:
     search_module = _stub_agent_search(monkeypatch, _agent_candidates())
     monkeypatch.delenv("SYNSC_FUSION_WEIGHTS", raising=False)
 
@@ -494,12 +523,80 @@ def test_agent_search_reports_file_okapi_serving_configuration(monkeypatch) -> N
     )
 
     config = result["retrieval_config"]
-    assert config["file_okapi"] is True
-    assert config["fusion_weights"]["file_okapi"] == 0.15
+    assert config["file_okapi_configured"] is True
+    assert config["file_okapi"] is False
+    assert "file_okapi" not in config["fusion_weights"]
     assert config["file_okapi_candidates"] == 50
     assert config["file_okapi_index_version"] == "v1"
     assert config["file_okapi_k1"] == 1.2
     assert config["file_okapi_b"] == 0.75
+
+
+def test_agent_search_warns_when_file_okapi_configured_but_inactive(
+    monkeypatch,
+) -> None:
+    import synsc.services.hybrid_retrieval as hybrid_module
+    import synsc.services.search_service as search_module
+    from synsc.services.hybrid_retrieval import HybridRetrieveResult
+
+    monkeypatch.setattr(search_module, "get_session", _fake_session)
+    monkeypatch.setattr(
+        search_module,
+        "get_embedding_generator",
+        lambda: _FakeEmbeddingGenerator(),
+    )
+    monkeypatch.setattr(
+        hybrid_module,
+        "hybrid_retrieve",
+        lambda **_kwargs: HybridRetrieveResult(
+            candidates=_agent_candidates(),
+            file_okapi_inactive={
+                "reason": "index_missing_or_stale",
+                "document_count": 0,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        search_module,
+        "_enrich_results_with_context",
+        lambda results: results,
+    )
+
+    service = search_module.SearchService(user_id="user-id")
+    monkeypatch.setattr(service.config.search, "enable_reranker", False)
+    monkeypatch.setattr(service.config.search, "enable_file_okapi", True)
+    result = service.search_code(
+        query="find the user service implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    assert result["retrieval_config"]["file_okapi_configured"] is True
+    assert result["retrieval_config"]["file_okapi"] is False
+    assert result["warnings"] == [
+        {
+            "code": "file_okapi_inactive",
+            "reason": "index_missing_or_stale",
+            "document_count": 0,
+        }
+    ]
+
+
+def test_disabled_file_okapi_does_not_emit_inactive_warning(monkeypatch) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+
+    service = search_module.SearchService(user_id="user-id")
+    monkeypatch.setattr(service.config.search, "enable_reranker", False)
+    monkeypatch.setattr(service.config.search, "enable_file_okapi", False)
+    result = service.search_code(
+        query="find the user service implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    assert "warnings" not in result
 
 
 def test_serving_configuration_marks_file_okapi_inactive_when_disabled(
@@ -519,8 +616,10 @@ def test_serving_configuration_marks_file_okapi_inactive_when_disabled(
     )
 
     config = result["retrieval_config"]
+    assert config["file_okapi_configured"] is False
     assert config["file_okapi"] is False
     assert "file_okapi" not in config["fusion_weights"]
+    assert "file_okapi_candidates" not in config
 
 
 def test_serving_configuration_marks_file_okapi_inactive_without_scope(
@@ -539,8 +638,10 @@ def test_serving_configuration_marks_file_okapi_inactive_without_scope(
     )
 
     config = result["retrieval_config"]
+    assert config["file_okapi_configured"] is False
     assert config["file_okapi"] is False
     assert "file_okapi" not in config["fusion_weights"]
+    assert "file_okapi_candidates" not in config
 
 
 def test_agent_search_passes_file_okapi_flag(monkeypatch) -> None:
@@ -549,7 +650,9 @@ def test_agent_search_passes_file_okapi_flag(monkeypatch) -> None:
 
     def capture_hybrid(**kwargs):
         captured.update(kwargs)
-        return _agent_candidates()
+        from synsc.services.hybrid_retrieval import HybridRetrieveResult
+
+        return HybridRetrieveResult(candidates=_agent_candidates())
 
     import synsc.services.hybrid_retrieval as hybrid_module
 
@@ -700,7 +803,9 @@ def test_agent_search_probes_related_paths_from_structured_context(
 
     def capture_hybrid(**kwargs):
         captured.update(kwargs)
-        return _agent_candidates()
+        from synsc.services.hybrid_retrieval import HybridRetrieveResult
+
+        return HybridRetrieveResult(candidates=_agent_candidates())
 
     import synsc.services.hybrid_retrieval as hybrid_module
 
@@ -731,7 +836,9 @@ def test_agent_search_passes_path_token_flag(monkeypatch) -> None:
 
     def capture_hybrid(**kwargs):
         captured.update(kwargs)
-        return _agent_candidates()
+        from synsc.services.hybrid_retrieval import HybridRetrieveResult
+
+        return HybridRetrieveResult(candidates=_agent_candidates())
 
     import synsc.services.hybrid_retrieval as hybrid_module
 
@@ -756,7 +863,9 @@ def test_agent_search_preserves_explicit_file_pattern(monkeypatch) -> None:
 
     def capture_hybrid(**kwargs):
         captured.update(kwargs)
-        return _agent_candidates()
+        from synsc.services.hybrid_retrieval import HybridRetrieveResult
+
+        return HybridRetrieveResult(candidates=_agent_candidates())
 
     import synsc.services.hybrid_retrieval as hybrid_module
 

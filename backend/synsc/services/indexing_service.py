@@ -1109,7 +1109,7 @@ class IndexingService:
         """Flush and expunge persisted lexical rows to bound session memory."""
         if not staged:
             return
-        session.flush(staged)
+        session.flush()
         for row in staged:
             session.expunge(row)
         staged.clear()
@@ -1256,6 +1256,18 @@ class IndexingService:
                     progress_callback(stage, message, progress, **kwargs)
 
         repo_id = existing.repo_id
+
+        if (
+            existing.file_okapi_index_version is not None
+            and existing.file_okapi_index_version != FILE_OKAPI_INDEX_VERSION
+        ):
+            logger.info(
+                "file-okapi index version mismatch, falling back to full re-index",
+                repo_id=repo_id,
+                stored_version=existing.file_okapi_index_version,
+                expected_version=FILE_OKAPI_INDEX_VERSION,
+            )
+            return None
 
         # 1. Compute diff
         report_progress("computing_diff", "Comparing files with previous index...", 15)

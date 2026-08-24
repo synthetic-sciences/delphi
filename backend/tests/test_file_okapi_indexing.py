@@ -312,6 +312,50 @@ def test_diff_reindex_deletions_only_recounts_okapi_documents() -> None:
     assert existing.commit_sha == "new-sha"
 
 
+def test_diff_reindex_falls_back_when_file_okapi_version_mismatches() -> None:
+    from pathlib import Path
+
+    from synsc.database.models import Repository
+
+    service = IndexingService()
+    existing = Repository(
+        repo_id="repo-1",
+        url="https://github.com/acme/example",
+        owner="acme",
+        name="example",
+        branch="main",
+        commit_sha="old-sha",
+        files_count=1,
+        chunks_count=1,
+        symbols_count=0,
+        file_okapi_index_version="v0",
+        file_okapi_documents_count=1,
+    )
+
+    class _FakeSession:
+        def execute(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        service,
+        "_compute_file_diff",
+        lambda *_args, **_kwargs: ([], [], []),
+    )
+    try:
+        result = service._diff_reindex(
+            _FakeSession(),
+            existing,
+            Path("/tmp/example"),
+            [{"path": "same.py", "name": "same.py", "size_bytes": 1, "content": "x"}],
+            "new-sha",
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert result is None
+
+
 def test_diff_reindex_null_content_hash_skips_okapi_but_indexes_chunks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -780,6 +780,8 @@ def test_hybrid_retrieve_runs_opt_in_file_okapi_branch(monkeypatch):
 
     called = {}
 
+    from synsc.services.hybrid_retrieval import FileOkapiSearchResult
+
     def fake_file_okapi_search(*args, **kwargs):
         called["args"] = args
         called.update(kwargs)
@@ -788,7 +790,7 @@ def test_hybrid_retrieve_runs_opt_in_file_okapi_branch(monkeypatch):
             file_path="src/user_service.py",
         )
         candidate.sources["file_okapi"] = 1.0
-        return [candidate]
+        return FileOkapiSearchResult(candidates=[candidate])
 
     monkeypatch.setattr(
         hybrid_module,
@@ -820,13 +822,14 @@ def test_hybrid_retrieve_aligns_file_okapi_onto_strongest_existing_chunk(
     monkeypatch,
 ):
     import synsc.services.hybrid_retrieval as hybrid_module
+    from synsc.services.hybrid_retrieval import FileOkapiSearchResult
 
     def fake_file_okapi_search(*args, **kwargs):
         aligned = Candidate(chunk_id="lexical-a", file_id="file-a")
         aligned.sources["file_okapi"] = 4.0
         novel = Candidate(chunk_id="lexical-c", file_id="file-c")
         novel.sources["file_okapi"] = 3.0
-        return [aligned, novel]
+        return FileOkapiSearchResult(candidates=[aligned, novel])
 
     monkeypatch.setattr(
         hybrid_module,
@@ -869,10 +872,12 @@ def test_zero_hit_file_okapi_branch_does_not_rescale_fusion(monkeypatch):
 
     calls = 0
 
+    from synsc.services.hybrid_retrieval import FileOkapiSearchResult
+
     def empty_file_okapi_search(*args, **kwargs):
         nonlocal calls
         calls += 1
-        return []
+        return FileOkapiSearchResult()
 
     monkeypatch.setattr(
         hybrid_module,
@@ -921,10 +926,12 @@ def test_disabled_file_okapi_does_not_call_search(monkeypatch):
 
     calls = 0
 
+    from synsc.services.hybrid_retrieval import FileOkapiSearchResult
+
     def counting_file_okapi_search(*args, **kwargs):
         nonlocal calls
         calls += 1
-        return []
+        return FileOkapiSearchResult()
 
     monkeypatch.setattr(
         hybrid_module,
@@ -955,10 +962,12 @@ def test_unscoped_file_okapi_does_not_fuse_branch(monkeypatch):
 
     calls = 0
 
+    from synsc.services.hybrid_retrieval import FileOkapiSearchResult
+
     def counting_file_okapi_search(*args, **kwargs):
         nonlocal calls
         calls += 1
-        return []
+        return FileOkapiSearchResult()
 
     monkeypatch.setattr(
         hybrid_module,
@@ -992,6 +1001,43 @@ def test_unscoped_file_okapi_does_not_fuse_branch(monkeypatch):
     )
 
     assert calls == 0
+
+
+def test_hybrid_retrieve_propagates_file_okapi_inactive_metadata(monkeypatch):
+    import synsc.services.hybrid_retrieval as hybrid_module
+    from synsc.services.hybrid_retrieval import FileOkapiSearchResult
+
+    def inactive_file_okapi_search(*args, **kwargs):
+        return FileOkapiSearchResult(
+            inactive_reason="index_missing_or_stale",
+            inactive_details={"document_count": 0},
+        )
+
+    monkeypatch.setattr(
+        hybrid_module,
+        "file_okapi_search",
+        inactive_file_okapi_search,
+    )
+
+    result = hybrid_module.hybrid_retrieve(
+        session=object(),
+        query="user service",
+        query_embedding=object(),
+        vector_search_fn=lambda **kwargs: [],
+        user_id="user-id",
+        repo_ids=["repo-id"],
+        top_k=20,
+        enable_bm25=False,
+        enable_trigram=False,
+        enable_symbol=False,
+        enable_path=False,
+        enable_file_okapi=True,
+    )
+
+    assert result.file_okapi_inactive == {
+        "reason": "index_missing_or_stale",
+        "document_count": 0,
+    }
 
 
 # ── File-level Okapi ─────────────────────────────────────────────────────────
@@ -1076,7 +1122,12 @@ def test_file_okapi_sql_uses_canonical_formula_scope_and_total_order():
     assert "average_document_length" in sql
     assert "ur.user_id = :user_id" in sql
     assert "r.is_public = TRUE OR r.indexed_by = :user_id" in sql
-    assert "ORDER BY score DESC, rf.file_path" in sql
+    assert "lt.repo_id IN" in sql
+    assert (
+        "ORDER BY score DESC, file_path, repo_id, file_id LIMIT :top_k"
+    ) in sql
+    assert "chunk_ranks AS" in sql
+    assert "ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id" in sql
     assert candidates[0].sources["file_okapi"] > 0
 
 
@@ -1086,10 +1137,11 @@ def test_file_okapi_fails_closed_when_index_version_missing():
     session = _FileOkapiRecordingSession(
         [[{"requested_count": 1, "accessible_count": 0, "document_count": 0}]]
     )
-    assert (
-        file_okapi_search(session, "user service", "u1", repo_ids=["repo-1"])
-        == []
+    result = file_okapi_search(
+        session, "user service", "u1", repo_ids=["repo-1"]
     )
+    assert result.candidates == []
+    assert result.inactive_reason == "scope_incomplete"
     assert len(session.calls) == 1
 
 
@@ -1110,11 +1162,25 @@ def test_file_okapi_fails_closed_when_scope_exceeds_file_limit():
             ]
         ]
     )
-    assert (
-        file_okapi_search(session, "user service", "u1", repo_ids=["repo-1"])
-        == []
+    result = file_okapi_search(
+        session, "user service", "u1", repo_ids=["repo-1"]
     )
+    assert result.candidates == []
+    assert result.inactive_reason == "scope_over_cap"
     assert len(session.calls) == 1
+
+
+def test_file_okapi_reports_stale_index_when_scope_has_no_documents():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [[{"requested_count": 1, "accessible_count": 1, "document_count": 0}]]
+    )
+    result = file_okapi_search(
+        session, "user service", "u1", repo_ids=["repo-1"]
+    )
+    assert result.candidates == []
+    assert result.inactive_reason == "index_missing_or_stale"
 
 
 def test_file_okapi_applies_language_filter():
@@ -1158,7 +1224,7 @@ def test_file_okapi_term_df_uses_language_filtered_scope_docs():
     term_stats_end = sql.index("), file_scores AS (")
     term_stats_sql = sql[term_stats_start:term_stats_end]
     assert "scope_docs" in term_stats_sql
-    assert "lt.repo_id IN" not in term_stats_sql
+    assert "lt.repo_id IN" in term_stats_sql
 
 
 def test_file_okapi_clamps_top_k_to_candidate_cap():
@@ -1237,10 +1303,11 @@ def test_file_okapi_selects_best_chunk_with_total_order():
     )
     file_okapi_search(session, "alpha beta", "u1", repo_ids=["repo-1"])
     sql = session.calls[-1].sql
+    assert "chunk_ranks AS" in sql
     assert (
-        "ROW_NUMBER() OVER ( PARTITION BY cc.file_id "
-        "ORDER BY ts_rank_cd("
+        "ROW_NUMBER() OVER ( PARTITION BY file_id ORDER BY chunk_score DESC"
     ) in sql
     assert (
         "ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id"
     ) in sql
+    assert sql.count("ts_rank_cd(") == 1
