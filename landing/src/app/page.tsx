@@ -427,7 +427,7 @@ export default function Home() {
 
         {/* ============================ FAQ ============================= */}
         <section id="faq" className="relative w-full overflow-hidden border-t border-border/40">
-          <div className="relative z-10 mx-auto w-full max-w-[1400px] px-6 py-24 sm:px-10 sm:py-32">
+          <div className="relative z-10 mx-auto w-full max-w-[1400px] px-6 pb-14 pt-24 sm:px-10 sm:pb-16 sm:pt-32">
             <div className="grid grid-cols-12 gap-10 lg:gap-16">
               <div className="col-span-12 self-start lg:sticky lg:top-28 lg:col-span-5">
                 <Reveal>
@@ -497,14 +497,22 @@ export default function Home() {
           />
 
           <div className="absolute inset-0 z-10 mx-auto flex h-full max-w-[1400px] flex-col px-6 sm:px-10">
-            <div className="hero-text mt-[16vh] max-w-[820px] sm:mt-[26vh]">
+            <div className="hero-text relative mt-[22vh] max-w-[820px] sm:mt-[34vh]">
+              <span
+                aria-hidden
+                className="pointer-events-none absolute -inset-x-14 -inset-y-16 -z-10"
+                style={{
+                  background:
+                    "radial-gradient(72% 92% at 34% 46%, hsl(30 14% 7% / 0.82) 0%, hsl(30 14% 7% / 0.48) 56%, transparent 80%)",
+                }}
+              />
               <Reveal>
                 <h2 className={`text-balance ${H_HUGE} text-foreground`}>
                   Start with one command.
                 </h2>
               </Reveal>
               <Reveal delay={180}>
-                <p className={`mt-6 max-w-[44ch] ${P_BIG} text-foreground/80`}>
+                <p className={`mt-6 max-w-[44ch] ${P_BIG} text-foreground/90`}>
                   Open source and indexing in minutes. The dashboard and API
                   run on localhost.
                 </p>
@@ -526,7 +534,7 @@ export default function Home() {
       <footer className="relative overflow-hidden">
         <div className="mx-auto max-w-[1400px] border-t border-border/40 px-6 pb-10 pt-16 text-[14px] text-muted sm:px-10">
           <div className="grid grid-cols-12 gap-10">
-            <div className="col-span-12 md:col-span-5">
+            <div className="col-span-12 md:col-span-6">
               <div className="font-display text-[22px] leading-none tracking-tight text-foreground">
                 delphi
               </div>
@@ -535,25 +543,14 @@ export default function Home() {
                 Synthetic Sciences.
               </p>
             </div>
-            <div className="col-span-6 sm:col-span-4 md:col-span-2">
-              <div className="mb-4 text-[13px] tracking-[0.04em] text-foreground/45">Product</div>
-              <ul className="space-y-2.5 text-[13.5px]">
-                <li><a href="#search" className="link-underline text-foreground/70 hover:text-foreground">Search</a></li>
-                <li><a href="#sources" className="link-underline text-foreground/70 hover:text-foreground">Sources</a></li>
-                <li><a href="#local" className="link-underline text-foreground/70 hover:text-foreground">Local stack</a></li>
-                <li><a href="#install" className="link-underline text-foreground/70 hover:text-foreground">Install</a></li>
-              </ul>
-            </div>
-            <div className="col-span-6 sm:col-span-4 md:col-span-2">
+            <div className="col-span-6 sm:col-span-4 md:col-span-3">
               <div className="mb-4 text-[13px] tracking-[0.04em] text-foreground/45">Resources</div>
               <ul className="space-y-2.5 text-[13.5px]">
                 <li><a href="https://www.npmjs.com/package/@synsci/delphi" className="link-underline text-foreground/70 hover:text-foreground" target="_blank" rel="noreferrer">npm</a></li>
                 <li><a href={GITHUB} className="link-underline text-foreground/70 hover:text-foreground" target="_blank" rel="noreferrer">GitHub</a></li>
-                <li><a href={`${GITHUB}#readme`} className="link-underline text-foreground/70 hover:text-foreground" target="_blank" rel="noreferrer">README</a></li>
-                <li><a href="https://modelcontextprotocol.io" className="link-underline text-foreground/70 hover:text-foreground" target="_blank" rel="noreferrer">MCP</a></li>
               </ul>
             </div>
-            <div className="col-span-12 sm:col-span-4 md:col-span-3">
+            <div className="col-span-6 sm:col-span-4 md:col-span-3">
               <div className="mb-4 text-[13px] tracking-[0.04em] text-foreground/45">Company</div>
               <ul className="space-y-2.5 text-[13.5px]">
                 <li>
@@ -569,7 +566,19 @@ export default function Home() {
                     </svg>
                   </a>
                 </li>
-                <li><a href="https://tryatlas.sh" className="link-underline text-foreground/70 hover:text-foreground" target="_blank" rel="noreferrer">Atlas</a></li>
+                <li>
+                  <a
+                    href="https://tryatlas.sh"
+                    className="link-underline inline-flex items-center gap-1.5 text-foreground/70 hover:text-foreground"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Atlas
+                    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+                      <path d="M2 8 L8 2 M4 2 L8 2 L8 6" stroke="currentColor" fill="none" />
+                    </svg>
+                  </a>
+                </li>
                 <li><a href="mailto:team@syntheticsciences.ai" className="link-underline text-foreground/70 hover:text-foreground">Contact</a></li>
                 <li><a href="https://syntheticsciences.ai/privacy" className="link-underline text-foreground/70 hover:text-foreground" target="_blank" rel="noreferrer">Privacy</a></li>
                 <li><a href="https://syntheticsciences.ai/terms" className="link-underline text-foreground/70 hover:text-foreground" target="_blank" rel="noreferrer">Terms</a></li>
