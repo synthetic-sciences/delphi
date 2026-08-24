@@ -213,6 +213,7 @@ def test_local_changed_content_reindex_reuses_existing_repo_id(
     assert result["repo_id"] == existing.repo_id
     assert calls["deleted_objects"] == []
     assert calls["purge_repo_ids"] == [existing.repo_id]
+    assert calls["lock_calls"] == [(existing.repo_id, "stale-digest")]
     assert calls["index_files_kwargs"]["existing_repo_id"] == existing.repo_id
 
 

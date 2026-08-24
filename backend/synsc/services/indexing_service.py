@@ -1799,6 +1799,7 @@ class IndexingService:
 
         if repo:
             # Update existing record
+            repo.name = name
             repo.commit_sha = commit_sha
             repo.local_path = str(repo_path)
             if deep_index:

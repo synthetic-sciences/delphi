@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
 from sqlalchemy import text
+
+from synsc.services.file_okapi import FILE_OKAPI_INDEX_VERSION
+
+
+def _local_content_digest(files: list[dict[str, Any]]) -> str:
+    digest = hashlib.sha256()
+    for file_info in sorted(files, key=lambda item: item["path"]):
+        digest.update(str(file_info["path"]).encode("utf-8", "ignore"))
+        digest.update(b"\0")
+        digest.update(str(file_info.get("content") or "").encode("utf-8", "ignore"))
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _postgres_reachable() -> bool:
@@ -690,9 +704,21 @@ def test_local_force_reindex_preserves_repo_id_and_user_mapping(
 
     service = _service_for_local_reindex(monkeypatch, seeded_local_repository)
 
+    new_content = "print('new local index')\n"
+    expected_digest = _local_content_digest(
+        [
+            {
+                "path": "new.py",
+                "content": new_content,
+            }
+        ]
+    )
+    renamed_display = "renamed-local-repo"
+
     result = service.index_local_folder(
         str(seeded_local_repository["path"]),
         user_id=seeded_local_repository["user_id"],
+        name=renamed_display,
         force_reindex=True,
         quality_mode="agent",
     )
@@ -705,7 +731,12 @@ def test_local_force_reindex_preserves_repo_id_and_user_mapping(
                 """
                 SELECT COUNT(*) AS repo_rows,
                        COUNT(DISTINCT ur.id) AS user_links,
-                       MIN(c.content) AS content
+                       MIN(c.content) AS content,
+                       MIN(r.commit_sha) AS commit_sha,
+                       MIN(r.name) AS name,
+                       MIN(r.files_count) AS files_count,
+                       MIN(r.file_okapi_documents_count) AS file_okapi_documents_count,
+                       MIN(r.file_okapi_index_version) AS file_okapi_index_version
                 FROM repositories r
                 LEFT JOIN user_repositories ur ON ur.repo_id = r.repo_id
                 LEFT JOIN code_chunks c ON c.repo_id = r.repo_id
@@ -719,6 +750,12 @@ def test_local_force_reindex_preserves_repo_id_and_user_mapping(
     assert row.repo_rows == 1
     assert row.user_links == 1
     assert "new local index" in row.content
+    assert row.commit_sha == expected_digest
+    assert row.commit_sha != "old-digest"
+    assert row.name == renamed_display
+    assert row.files_count == 1
+    assert row.file_okapi_documents_count == 1
+    assert row.file_okapi_index_version == FILE_OKAPI_INDEX_VERSION
 
 
 def test_local_failed_force_reindex_restores_last_good_index(
