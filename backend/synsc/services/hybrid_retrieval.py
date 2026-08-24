@@ -1011,6 +1011,7 @@ def file_okapi_search(
         "b": FILE_OKAPI_B,
         "top_k": top_k,
         "search_query": " ".join(terms),
+        "query_terms": terms,
     }
     repo_placeholders = _file_okapi_repo_placeholders(repo_ids, params)
     language_filter = ""
@@ -1097,6 +1098,7 @@ def file_okapi_search(
                 docs.file_id,
                 docs.repo_id,
                 docs.document_length,
+                docs.term_frequencies,
                 rf.file_path,
                 rf.language
             FROM repository_file_lexical_documents docs
@@ -1118,47 +1120,48 @@ def file_okapi_search(
         query_terms AS (
             {query_terms_cte}
         ),
+        matching_docs AS (
+            SELECT scope_docs.*
+            FROM scope_docs
+            WHERE scope_docs.term_frequencies ?| CAST(:query_terms AS text[])
+        ),
         term_stats AS (
             SELECT
                 query_terms.term,
                 COUNT(DISTINCT scope_docs.file_id)::int AS document_frequency
             FROM query_terms
-            LEFT JOIN repository_file_lexical_terms lt
-                ON lt.term = query_terms.term
-                AND lt.repo_id IN ({repo_placeholders})
             LEFT JOIN scope_docs
-                ON scope_docs.file_id = lt.file_id
+                ON scope_docs.term_frequencies ? query_terms.term
             GROUP BY query_terms.term
         ),
         file_scores AS (
             SELECT
-                scope_docs.file_id,
-                scope_docs.repo_id,
-                scope_docs.file_path,
+                matching_docs.file_id,
+                matching_docs.repo_id,
+                matching_docs.file_path,
                 SUM(
                     LN(1 + (
                         stats.document_count - term_stats.document_frequency + 0.5
                     ) / (term_stats.document_frequency + 0.5))
-                    * lt.term_frequency * (:k1 + 1)
+                    * term_kv.freq_text::int * (:k1 + 1)
                     / (
-                        lt.term_frequency
+                        term_kv.freq_text::int
                         + :k1 * (
                             1 - :b
-                            + :b * scope_docs.document_length
+                            + :b * matching_docs.document_length
                               / stats.average_document_length
                         )
                     )
                 ) AS score
-            FROM scope_docs
+            FROM matching_docs
             CROSS JOIN scope_stats stats
-            INNER JOIN repository_file_lexical_terms lt
-                ON lt.file_id = scope_docs.file_id
-            INNER JOIN query_terms ON lt.term = query_terms.term
+            CROSS JOIN LATERAL jsonb_each_text(matching_docs.term_frequencies) AS term_kv(term, freq_text)
+            INNER JOIN query_terms ON term_kv.term = query_terms.term
             INNER JOIN term_stats ON term_stats.term = query_terms.term
             GROUP BY
-                scope_docs.file_id,
-                scope_docs.repo_id,
-                scope_docs.file_path,
+                matching_docs.file_id,
+                matching_docs.repo_id,
+                matching_docs.file_path,
                 stats.document_count,
                 stats.average_document_length
         ),

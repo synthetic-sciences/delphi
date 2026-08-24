@@ -1122,7 +1122,11 @@ def test_file_okapi_sql_uses_canonical_formula_scope_and_total_order():
     assert "average_document_length" in sql
     assert "ur.user_id = :user_id" in sql
     assert "r.is_public = TRUE OR r.indexed_by = :user_id" in sql
-    assert "lt.repo_id IN" in sql
+    assert "term_frequencies ?|" in sql
+    assert "CAST(:query_terms AS text[])" in sql
+    assert "matching_docs AS" in sql
+    assert "jsonb_each_text" in sql
+    assert "repository_file_lexical_terms" not in sql
     assert (
         "ORDER BY score DESC, file_path, repo_id, file_id LIMIT :top_k"
     ) in sql
@@ -1224,7 +1228,8 @@ def test_file_okapi_term_df_uses_language_filtered_scope_docs():
     term_stats_end = sql.index("), file_scores AS (")
     term_stats_sql = sql[term_stats_start:term_stats_end]
     assert "scope_docs" in term_stats_sql
-    assert "lt.repo_id IN" in term_stats_sql
+    assert "term_frequencies ?" in term_stats_sql
+    assert "repository_file_lexical_terms" not in term_stats_sql
 
 
 def test_file_okapi_clamps_top_k_to_candidate_cap():
@@ -1311,3 +1316,41 @@ def test_file_okapi_selects_best_chunk_with_total_order():
         "ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id"
     ) in sql
     assert sql.count("ts_rank_cd(") == 1
+
+
+def test_file_okapi_sql_expands_matching_docs_with_jsonb_each_text():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    file_okapi_search(session, "alpha beta", "u1", repo_ids=["repo-1"])
+    sql = session.calls[-1].sql
+    file_scores_start = sql.index("file_scores AS (")
+    file_scores_end = sql.index("), ranked_files AS (")
+    file_scores_sql = sql[file_scores_start:file_scores_end]
+    assert "matching_docs" in file_scores_sql
+    assert "jsonb_each_text" in file_scores_sql
+    assert "repository_file_lexical_terms" not in sql
+
+
+def test_file_okapi_sql_passes_query_terms_array_for_gin_pruning():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    file_okapi_search(session, "http server get user", "u1", repo_ids=["repo-1"])
+    assert session.calls[-1].params["query_terms"] == [
+        "http",
+        "server",
+        "get",
+        "user",
+    ]
+    assert "term_frequencies ?| CAST(:query_terms AS text[])" in session.calls[-1].sql
