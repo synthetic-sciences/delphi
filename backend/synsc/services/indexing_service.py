@@ -1196,6 +1196,9 @@ class IndexingService:
         Callers must write the replacement before committing so any failure
         rolls this purge back together with the partial new index.
         """
+        session.execute(text("SET LOCAL statement_timeout = '0'"))
+        session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '0'"))
+
         params = {"rid": repo_id}
         session.execute(
             text("DELETE FROM symbol_references WHERE repo_id = :rid"),

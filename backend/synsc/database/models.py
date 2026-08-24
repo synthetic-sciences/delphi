@@ -459,6 +459,7 @@ class Symbol(Base):
         Index("idx_symbols_name", "name"),
         Index("idx_symbols_type", "symbol_type"),
         Index("idx_symbols_qualified", "qualified_name"),
+        Index("idx_symbols_parent", "parent_symbol_id"),
     )
 
     symbol_id: Mapped[str] = mapped_column(

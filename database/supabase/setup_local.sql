@@ -367,6 +367,7 @@ CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
 CREATE INDEX IF NOT EXISTS idx_symbols_qualified ON symbols(qualified_name);
+CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_symbol_id);
 
 
 -- ============================================================================
