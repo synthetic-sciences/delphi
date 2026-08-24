@@ -480,3 +480,278 @@ def test_failure_classifier_writes_to_activity_log(user_id):
             {"uid": user_id},
         ).fetchall()
         assert len(rows) >= 1
+
+
+def _insert_file_okapi_lexical_rows(
+    session,
+    *,
+    repo_id: str,
+    file_id: str,
+    file_path: str,
+    content: str,
+    content_hash: str,
+) -> None:
+    from sqlalchemy import text
+
+    from synsc.services.file_okapi import FILE_OKAPI_INDEX_VERSION, build_file_okapi_document
+
+    document = build_file_okapi_document(file_path, content)
+    session.execute(
+        text(
+            """
+            INSERT INTO repository_file_lexical_documents (
+                file_id, repo_id, document_length, content_hash, index_version
+            )
+            VALUES (
+                :file_id, :repo_id, :document_length, :content_hash, :index_version
+            )
+            """
+        ),
+        {
+            "file_id": file_id,
+            "repo_id": repo_id,
+            "document_length": document.document_length,
+            "content_hash": content_hash,
+            "index_version": FILE_OKAPI_INDEX_VERSION,
+        },
+    )
+    for term, term_frequency in document.term_frequencies.items():
+        session.execute(
+            text(
+                """
+                INSERT INTO repository_file_lexical_terms (
+                    file_id, repo_id, term, term_frequency
+                )
+                VALUES (:file_id, :repo_id, :term, :term_frequency)
+                """
+            ),
+            {
+                "file_id": file_id,
+                "repo_id": repo_id,
+                "term": term,
+                "term_frequency": term_frequency,
+            },
+        )
+
+
+@pytest.fixture
+def file_okapi_repos(user_id):
+    """Seed accessible and private repositories with lexical rows and chunks."""
+    from sqlalchemy import text
+
+    from synsc.database.connection import get_session
+    from synsc.services.file_okapi import FILE_OKAPI_INDEX_VERSION
+
+    accessible_repo_id = str(uuid.uuid4())
+    private_repo_id = str(uuid.uuid4())
+    strong_file_id = str(uuid.uuid4())
+    weak_file_id = str(uuid.uuid4())
+    private_file_id = str(uuid.uuid4())
+    strong_chunk_best = str(uuid.uuid4())
+    weak_chunk_id = str(uuid.uuid4())
+    private_chunk_id = str(uuid.uuid4())
+
+    strong_path = "src/HTTPServer.py"
+    weak_path = "src/user_helpers.py"
+    private_path = "src/HTTPServer_secret.py"
+    strong_content = (
+        "class HTTPServer:\n"
+        "    def get_user(self, user_id):\n"
+        "        return self.users[user_id]\n"
+    )
+    weak_content = "def normalize_user(value):\n    return value.strip()\n"
+    private_content = (
+        "class HTTPServer:\n"
+        "    def get_user(self, secret):\n"
+        "        return secret\n"
+    )
+
+    with get_session() as session:
+        for repo_id, owner, indexed_by, is_public in (
+            (accessible_repo_id, "acme", user_id, False),
+            (private_repo_id, "secret", str(uuid.uuid4()), False),
+        ):
+            session.execute(
+                text(
+                    """
+                    INSERT INTO repositories (
+                        repo_id, url, owner, name, branch, indexed_by,
+                        is_public, deep_indexed,
+                        file_okapi_index_version, file_okapi_documents_count
+                    )
+                    VALUES (
+                        :repo_id, :url, :owner, :name, 'main', :indexed_by,
+                        :is_public, TRUE, :index_version, :document_count
+                    )
+                    """
+                ),
+                {
+                    "repo_id": repo_id,
+                    "url": f"https://test/{repo_id}",
+                    "owner": owner,
+                    "name": "service",
+                    "indexed_by": indexed_by,
+                    "is_public": is_public,
+                    "index_version": FILE_OKAPI_INDEX_VERSION,
+                    "document_count": 2 if repo_id == accessible_repo_id else 1,
+                },
+            )
+
+        session.execute(
+            text(
+                "INSERT INTO user_repositories (user_id, repo_id) "
+                "VALUES (:user_id, :repo_id)"
+            ),
+            {"user_id": user_id, "repo_id": accessible_repo_id},
+        )
+
+        files = (
+            (strong_file_id, accessible_repo_id, strong_path, strong_content, "hash-strong"),
+            (weak_file_id, accessible_repo_id, weak_path, weak_content, "hash-weak"),
+            (
+                private_file_id,
+                private_repo_id,
+                private_path,
+                private_content,
+                "hash-private",
+            ),
+        )
+        for file_id, repo_id, file_path, _content, _hash in files:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO repository_files (
+                        file_id, repo_id, file_path, file_name, language
+                    )
+                    VALUES (:file_id, :repo_id, :file_path, :file_name, 'python')
+                    """
+                ),
+                {
+                    "file_id": file_id,
+                    "repo_id": repo_id,
+                    "file_path": file_path,
+                    "file_name": file_path.rsplit("/", 1)[-1],
+                },
+            )
+
+        for file_id, repo_id, file_path, content, content_hash in files:
+            _insert_file_okapi_lexical_rows(
+                session,
+                repo_id=repo_id,
+                file_id=file_id,
+                file_path=file_path,
+                content=content,
+                content_hash=content_hash,
+            )
+
+        chunks = (
+            (
+                strong_chunk_best,
+                accessible_repo_id,
+                strong_file_id,
+                strong_content,
+                1,
+                4,
+                0,
+            ),
+            (
+                weak_chunk_id,
+                accessible_repo_id,
+                weak_file_id,
+                weak_content,
+                1,
+                2,
+                0,
+            ),
+            (
+                private_chunk_id,
+                private_repo_id,
+                private_file_id,
+                private_content,
+                1,
+                3,
+                0,
+            ),
+        )
+        for (
+            chunk_id,
+            repo_id,
+            file_id,
+            content,
+            start_line,
+            end_line,
+            chunk_index,
+        ) in chunks:
+            session.execute(
+                text(
+                    """
+                    INSERT INTO code_chunks (
+                        chunk_id, repo_id, file_id, chunk_index, content,
+                        start_line, end_line, language, symbol_names
+                    )
+                    VALUES (
+                        :chunk_id, :repo_id, :file_id, :chunk_index, :content,
+                        :start_line, :end_line, 'python', :symbol_names
+                    )
+                    """
+                ),
+                {
+                    "chunk_id": chunk_id,
+                    "repo_id": repo_id,
+                    "file_id": file_id,
+                    "chunk_index": chunk_index,
+                    "content": content,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "symbol_names": '["HTTPServer"]',
+                },
+            )
+        session.commit()
+
+    return {
+        "accessible_repo_id": accessible_repo_id,
+        "private_repo_id": private_repo_id,
+        "strong_file_id": strong_file_id,
+        "weak_file_id": weak_file_id,
+        "private_file_id": private_file_id,
+        "strong_chunk_best": strong_chunk_best,
+        "weak_chunk_id": weak_chunk_id,
+        "private_chunk_id": private_chunk_id,
+    }
+
+
+def test_file_okapi_search_ranks_accessible_files_and_hides_private_repo(
+    user_id,
+    file_okapi_repos,
+):
+    from synsc.database.connection import get_session
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    data = file_okapi_repos
+    with get_session() as session:
+        results = file_okapi_search(
+            session,
+            "HTTPServer get_user",
+            user_id,
+            repo_ids=[data["accessible_repo_id"], data["private_repo_id"]],
+            top_k=10,
+        )
+
+    assert results == []
+
+    with get_session() as session:
+        scoped = file_okapi_search(
+            session,
+            "HTTPServer get_user",
+            user_id,
+            repo_ids=[data["accessible_repo_id"]],
+            top_k=10,
+        )
+
+    assert len(scoped) == 2
+    assert len({candidate.file_id for candidate in scoped}) == 2
+    assert scoped[0].file_id == data["strong_file_id"]
+    assert scoped[0].chunk_id == data["strong_chunk_best"]
+    assert scoped[0].sources["file_okapi"] > scoped[1].sources["file_okapi"]
+    assert all(candidate.sources["file_okapi"] > 0 for candidate in scoped)
+    assert data["private_file_id"] not in {candidate.file_id for candidate in scoped}

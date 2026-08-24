@@ -10,6 +10,8 @@ exact_path_search) are integration-tested separately with a real Postgres.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from synsc.services.hybrid_retrieval import (
     DEFAULT_WEIGHTS,
     Candidate,
@@ -771,3 +773,166 @@ def test_zero_hit_path_token_branch_does_not_rescale_fusion(monkeypatch):
 
     assert enabled_without_hits[0].fused_score == disabled[0].fused_score
     assert calls == 1
+
+
+# ── File-level Okapi ─────────────────────────────────────────────────────────
+
+
+class _FileOkapiRecordingSession:
+    """Records SQL execute() calls and returns scripted row sets."""
+
+    def __init__(self, scripted: list[list[dict]] | None = None) -> None:
+        self.calls: list[SimpleNamespace] = []
+        self._scripted = list(scripted or [])
+
+    def execute(self, statement, params):
+        call = SimpleNamespace(
+            sql=" ".join(str(statement).split()),
+            params=params,
+        )
+        self.calls.append(call)
+        rows = self._scripted.pop(0) if self._scripted else []
+
+        class _Result:
+            def mappings(_self):
+                return _self
+
+            def all(_self):
+                return rows
+
+        return _Result()
+
+
+def test_file_okapi_requires_repository_scope():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession([])
+    assert file_okapi_search(session, "user service", "u1", repo_ids=None) == []
+    assert session.calls == []
+
+
+def test_file_okapi_returns_empty_for_blank_query():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession([])
+    assert file_okapi_search(session, "   ", "u1", repo_ids=["repo-1"]) == []
+    assert session.calls == []
+
+
+def test_file_okapi_sql_uses_canonical_formula_scope_and_total_order():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    scope_count_row = {
+        "requested_count": 1,
+        "accessible_count": 1,
+        "document_count": 2,
+    }
+    candidate_row = {
+        "chunk_id": "chunk-1",
+        "repo_id": "repo-1",
+        "file_id": "file-1",
+        "content": "class HTTPServer:\n    def get_user(self): pass",
+        "start_line": 1,
+        "end_line": 2,
+        "chunk_index": 0,
+        "chunk_type": "code",
+        "language": "python",
+        "symbol_names": '["HTTPServer"]',
+        "file_path": "src/HTTPServer.py",
+        "repo_name": "acme/service",
+        "is_public": True,
+        "score": 3.5,
+    }
+    session = _FileOkapiRecordingSession([[scope_count_row], [candidate_row]])
+    candidates = file_okapi_search(
+        session,
+        "HTTPServer get_user",
+        "u1",
+        repo_ids=["repo-1"],
+        top_k=7,
+    )
+    sql = session.calls[-1].sql
+    assert "LN(1 +" in sql
+    assert "document_frequency" in sql
+    assert "average_document_length" in sql
+    assert "ur.user_id = :user_id" in sql
+    assert "r.is_public = TRUE OR r.indexed_by = :user_id" in sql
+    assert "ORDER BY score DESC, rf.file_path" in sql
+    assert candidates[0].sources["file_okapi"] > 0
+
+
+def test_file_okapi_fails_closed_when_index_version_missing():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [[{"requested_count": 1, "accessible_count": 0, "document_count": 0}]]
+    )
+    assert (
+        file_okapi_search(session, "user service", "u1", repo_ids=["repo-1"])
+        == []
+    )
+    assert len(session.calls) == 1
+
+
+def test_file_okapi_fails_closed_when_scope_exceeds_file_limit():
+    from synsc.services.hybrid_retrieval import (
+        FILE_OKAPI_MAX_FILES,
+        file_okapi_search,
+    )
+
+    session = _FileOkapiRecordingSession(
+        [
+            [
+                {
+                    "requested_count": 1,
+                    "accessible_count": 1,
+                    "document_count": FILE_OKAPI_MAX_FILES + 1,
+                }
+            ]
+        ]
+    )
+    assert (
+        file_okapi_search(session, "user service", "u1", repo_ids=["repo-1"])
+        == []
+    )
+    assert len(session.calls) == 1
+
+
+def test_file_okapi_applies_language_filter():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    file_okapi_search(
+        session,
+        "user service",
+        "u1",
+        repo_ids=["repo-1"],
+        language="python",
+    )
+    assert session.calls[-1].params["language"] == "python"
+    assert "rf.language = :language" in session.calls[-1].sql
+
+
+def test_file_okapi_selects_best_chunk_with_total_order():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    file_okapi_search(session, "alpha beta", "u1", repo_ids=["repo-1"])
+    sql = session.calls[-1].sql
+    assert (
+        "ROW_NUMBER() OVER ( PARTITION BY cc.file_id "
+        "ORDER BY ts_rank_cd("
+    ) in sql
+    assert (
+        "ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id"
+    ) in sql

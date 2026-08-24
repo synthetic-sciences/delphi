@@ -37,6 +37,14 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from synsc.services.file_okapi import (
+    FILE_OKAPI_B,
+    FILE_OKAPI_INDEX_VERSION,
+    FILE_OKAPI_K1,
+    FILE_OKAPI_QUERY_TERM_CAP,
+    tokenize_file_okapi,
+)
+
 logger = structlog.get_logger(__name__)
 
 
@@ -678,6 +686,9 @@ _PATH_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 _ACRONYM_BOUNDARY_RE = re.compile(r"([A-Z]+)([A-Z][a-z])")
 _CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
 PATH_TOKEN_MAX_FILES = 50_000
+FILE_OKAPI_WEIGHT = 0.15
+FILE_OKAPI_MAX_FILES = 50_000
+FILE_OKAPI_CANDIDATES = 50
 
 
 def _path_tokens(value: str) -> list[str]:
@@ -887,6 +898,278 @@ def path_token_search(
         candidate.sources["path_token"] = float(
             file_row["path_token_score"]
         )
+        candidates.append(candidate)
+    return candidates
+
+
+def _file_okapi_repo_placeholders(
+    repo_ids: list[str],
+    params: dict[str, Any],
+    *,
+    prefix: str = "repo_id",
+) -> str:
+    placeholders = []
+    for index, repo_id in enumerate(repo_ids):
+        key = f"{prefix}_{index}"
+        placeholders.append(f":{key}")
+        params[key] = repo_id
+    return ", ".join(placeholders)
+
+
+def _file_okapi_query_term_cte(terms: list[str], params: dict[str, Any]) -> str:
+    if not terms:
+        return "SELECT NULL::varchar AS term WHERE FALSE"
+    selects = []
+    for index, term in enumerate(terms):
+        key = f"okapi_term_{index}"
+        params[key] = term
+        selects.append(f"SELECT :{key} AS term")
+    return "\n            UNION ALL\n            ".join(selects)
+
+
+def file_okapi_search(
+    session: Session,
+    query: str,
+    user_id: str,
+    repo_ids: list[str] | None = None,
+    language: str | None = None,
+    top_k: int = FILE_OKAPI_CANDIDATES,
+) -> list[Candidate]:
+    """Return one representative chunk per file ranked by scoped Okapi BM25.
+
+    Requires an explicit repository scope. Every requested repository must be
+    accessible to the caller and indexed at ``FILE_OKAPI_INDEX_VERSION``; the
+    total lexical document count across the scope must not exceed
+    ``FILE_OKAPI_MAX_FILES``.
+    """
+    if not repo_ids or top_k <= 0:
+        return []
+
+    terms = tokenize_file_okapi(query, limit=FILE_OKAPI_QUERY_TERM_CAP)
+    if not terms:
+        return []
+
+    params: dict[str, Any] = {
+        "user_id": user_id,
+        "index_version": FILE_OKAPI_INDEX_VERSION,
+        "k1": FILE_OKAPI_K1,
+        "b": FILE_OKAPI_B,
+        "top_k": top_k,
+        "search_query": " ".join(terms),
+    }
+    repo_placeholders = _file_okapi_repo_placeholders(repo_ids, params)
+    language_filter = ""
+    if language:
+        language_filter = " AND rf.language = :language"
+        params["language"] = language
+
+    scope_sql = text(
+        f"""
+        WITH requested_repos AS (
+            SELECT repo_id
+            FROM repositories
+            WHERE repo_id IN ({repo_placeholders})
+        ),
+        accessible_repos AS (
+            SELECT r.repo_id
+            FROM repositories r
+            INNER JOIN user_repositories ur
+                ON r.repo_id = ur.repo_id AND ur.user_id = :user_id
+            INNER JOIN requested_repos req ON r.repo_id = req.repo_id
+            WHERE (r.is_public = TRUE OR r.indexed_by = :user_id)
+              AND r.file_okapi_index_version = :index_version
+        )
+        SELECT
+            (SELECT COUNT(*) FROM requested_repos) AS requested_count,
+            (SELECT COUNT(*) FROM accessible_repos) AS accessible_count,
+            (
+                SELECT COUNT(*)
+                FROM repository_file_lexical_documents d
+                INNER JOIN accessible_repos ar ON d.repo_id = ar.repo_id
+                WHERE d.index_version = :index_version
+            ) AS document_count
+        """
+    )
+    try:
+        scope_rows = session.execute(scope_sql, params).mappings().all()
+    except Exception as exc:
+        logger.warning("file-okapi scope validation failed", error=str(exc))
+        return []
+
+    scope_row = scope_rows[0] if scope_rows else None
+
+    if scope_row is None:
+        return []
+
+    requested_count = int(scope_row["requested_count"] or 0)
+    accessible_count = int(scope_row["accessible_count"] or 0)
+    document_count = int(scope_row["document_count"] or 0)
+    if (
+        requested_count != len(repo_ids)
+        or accessible_count != len(repo_ids)
+        or document_count == 0
+        or document_count > FILE_OKAPI_MAX_FILES
+    ):
+        return []
+
+    query_terms_cte = _file_okapi_query_term_cte(terms, params)
+    search_sql = text(
+        f"""
+        WITH scope_docs AS (
+            SELECT
+                docs.file_id,
+                docs.repo_id,
+                docs.document_length,
+                rf.file_path,
+                rf.language
+            FROM repository_file_lexical_documents docs
+            INNER JOIN repository_files rf ON docs.file_id = rf.file_id
+            INNER JOIN repositories r ON docs.repo_id = r.repo_id
+            INNER JOIN user_repositories ur
+                ON r.repo_id = ur.repo_id AND ur.user_id = :user_id
+            WHERE docs.repo_id IN ({repo_placeholders})
+              AND (r.is_public = TRUE OR r.indexed_by = :user_id)
+              AND docs.index_version = :index_version
+              {language_filter}
+        ),
+        scope_stats AS (
+            SELECT
+                COUNT(*)::int AS document_count,
+                AVG(scope_docs.document_length)::float AS average_document_length
+            FROM scope_docs
+        ),
+        query_terms AS (
+            {query_terms_cte}
+        ),
+        term_stats AS (
+            SELECT
+                query_terms.term,
+                COUNT(DISTINCT lt.file_id)::int AS document_frequency
+            FROM query_terms
+            LEFT JOIN repository_file_lexical_terms lt
+                ON lt.term = query_terms.term
+                AND lt.repo_id IN ({repo_placeholders})
+            GROUP BY query_terms.term
+        ),
+        file_scores AS (
+            SELECT
+                scope_docs.file_id,
+                scope_docs.repo_id,
+                scope_docs.file_path,
+                SUM(
+                    LN(1 + (
+                        stats.document_count - term_stats.document_frequency + 0.5
+                    ) / (term_stats.document_frequency + 0.5))
+                    * lt.term_frequency * (:k1 + 1)
+                    / (
+                        lt.term_frequency
+                        + :k1 * (
+                            1 - :b
+                            + :b * scope_docs.document_length
+                              / stats.average_document_length
+                        )
+                    )
+                ) AS score
+            FROM scope_docs
+            CROSS JOIN scope_stats stats
+            INNER JOIN repository_file_lexical_terms lt
+                ON lt.file_id = scope_docs.file_id
+            INNER JOIN query_terms ON lt.term = query_terms.term
+            INNER JOIN term_stats ON term_stats.term = query_terms.term
+            GROUP BY
+                scope_docs.file_id,
+                scope_docs.repo_id,
+                scope_docs.file_path,
+                stats.document_count,
+                stats.average_document_length
+        ),
+        ranked_files AS (
+            SELECT file_scores.*
+            FROM file_scores
+            WHERE score > 0
+        ),
+        best_chunks AS (
+            SELECT
+                cc.chunk_id,
+                cc.repo_id,
+                cc.file_id,
+                cc.content,
+                cc.start_line,
+                cc.end_line,
+                cc.chunk_index,
+                cc.chunk_type,
+                cc.language,
+                cc.symbol_names,
+                rf.file_path,
+                r.owner || '/' || r.name AS repo_name,
+                r.is_public,
+                ts_rank_cd(
+                    cc.content_tsv,
+                    websearch_to_tsquery('english', :search_query)
+                ) AS chunk_score,
+                ROW_NUMBER() OVER (
+                    PARTITION BY cc.file_id
+                    ORDER BY
+                        ts_rank_cd(
+                            cc.content_tsv,
+                            websearch_to_tsquery('english', :search_query)
+                        ) DESC,
+                        cc.chunk_index,
+                        cc.repo_id,
+                        cc.chunk_id
+                ) AS file_chunk_rank
+            FROM code_chunks cc
+            INNER JOIN repository_files rf ON cc.file_id = rf.file_id
+            INNER JOIN repositories r ON cc.repo_id = r.repo_id
+            WHERE cc.file_id IN (SELECT file_id FROM ranked_files)
+        )
+        SELECT
+            best_chunks.chunk_id,
+            best_chunks.repo_id,
+            best_chunks.file_id,
+            best_chunks.content,
+            best_chunks.start_line,
+            best_chunks.end_line,
+            best_chunks.chunk_index,
+            best_chunks.chunk_type,
+            best_chunks.language,
+            best_chunks.symbol_names,
+            best_chunks.file_path,
+            best_chunks.repo_name,
+            best_chunks.is_public,
+            rf.score
+        FROM ranked_files rf
+        INNER JOIN best_chunks
+            ON best_chunks.file_id = rf.file_id
+            AND best_chunks.file_chunk_rank = 1
+        ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id
+        LIMIT :top_k
+        """
+    )
+    try:
+        rows = session.execute(search_sql, params).mappings().all()
+    except Exception as exc:
+        logger.warning("file-okapi search failed", error=str(exc))
+        return []
+
+    candidates: list[Candidate] = []
+    for row in rows:
+        candidate = Candidate(
+            chunk_id=str(row["chunk_id"]),
+            repo_id=str(row["repo_id"]),
+            file_id=str(row["file_id"]),
+            repo_name=row["repo_name"] or "",
+            file_path=row["file_path"] or "",
+            content=row["content"] or "",
+            start_line=row["start_line"],
+            end_line=row["end_line"],
+            chunk_index=row["chunk_index"],
+            chunk_type=row["chunk_type"] or "code",
+            language=row["language"],
+            symbol_names=row["symbol_names"],
+            is_public=bool(row["is_public"]),
+        )
+        candidate.sources["file_okapi"] = float(row["score"])
         candidates.append(candidate)
     return candidates
 
