@@ -955,11 +955,16 @@ class IndexingService:
                         "symbols_extracted": existing.symbols_count,
                         "message": "Local folder already indexed and unchanged.",
                     }
-                # Changed or force: wipe the prior version so we re-index clean
-                # (FK cascade removes files/chunks/symbols/edges).
+                reindex_repo_id: str | None = None
                 if existing:
-                    session.delete(existing)
-                    session.flush()
+                    reindex_repo_id = str(existing.repo_id)
+                    reindex_baseline_sha = existing.commit_sha
+                    self._lock_repository_for_reindex(
+                        session,
+                        reindex_repo_id,
+                        reindex_baseline_sha,
+                    )
+                    self._purge_repository_index(session, reindex_repo_id)
 
                 report_progress("indexing", "Processing files and extracting symbols...", 40)
                 result = self._index_files(
@@ -976,6 +981,7 @@ class IndexingService:
                     progress_callback=progress_callback,
                     deep_index=deep_index,
                     quality_mode=effective_mode,
+                    existing_repo_id=reindex_repo_id,
                 )
                 self._add_repo_to_user_collection(session, result["repo_id"], effective_user_id)
                 report_progress("committing", "Saving to database...", 95)
