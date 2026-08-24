@@ -314,6 +314,91 @@ def _related_path_pattern(query: str) -> str | None:
     return None
 
 
+_EVIDENCE_KEY_TOKENS = {
+    "comment",
+    "diff",
+    "hunk",
+    "patch",
+    "review",
+    "excerpt",
+    "failure",
+    "trace",
+    "traceback",
+}
+
+
+def _query_anchor_paths(query: str) -> set[str]:
+    """Repository paths the request already carries in full.
+
+    A structured developer envelope that quotes evidence — a review comment
+    with its diff hunk, a failing command with its trace — names the file the
+    evidence came from. The requester has that file open; what they are
+    missing is the *other* side of the story (the implementation behind a
+    reviewed test, the config that consumes a changed schema). Returning the
+    quoted file back to them spends top-of-page slots on zero new
+    information, so those paths are demoted below everything else.
+
+    Only envelopes that actually quote evidence qualify. A plain
+    ``{"intent": "explain", "file": "x.py"}`` request keeps its file ranked
+    normally, because there the file is the subject, not the evidence.
+    """
+    try:
+        payload = json.loads(query)
+    except (json.JSONDecodeError, TypeError):
+        return set()
+    if not isinstance(payload, dict) or not _is_structured_developer_query(payload):
+        return set()
+
+    has_evidence = False
+    paths: set[str] = set()
+
+    def collect(key: str, value: Any) -> None:
+        nonlocal has_evidence
+        normalized_key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+        key_tokens = set(normalized_key.split("_"))
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                collect(str(nested_key), nested_value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                collect(key, item)
+            return
+        if not isinstance(value, str):
+            return
+        if key_tokens & _EVIDENCE_KEY_TOKENS:
+            has_evidence = True
+        if _structured_query_priority(normalized_key) != 2:
+            return
+        candidate = value.strip().replace("\\", "/")
+        if (
+            "/" not in candidate
+            or "://" in candidate
+            or candidate.startswith(("/", "~"))
+            or ".." in candidate.split("/")
+        ):
+            return
+        paths.add(candidate)
+
+    for field, field_value in payload.items():
+        collect(str(field), field_value)
+    return paths if has_evidence else set()
+
+
+def _demote_anchor_paths(
+    results: list[dict[str, Any]],
+    anchor_paths: set[str],
+) -> list[dict[str, Any]]:
+    """Stable-partition results so anchor-file chunks rank after the rest."""
+    if not anchor_paths:
+        return results
+    fresh = [r for r in results if r.get("file_path") not in anchor_paths]
+    quoted = [r for r in results if r.get("file_path") in anchor_paths]
+    if not quoted or not fresh:
+        return results
+    return fresh + quoted
+
+
 def _compact_structured_query(
     payload: dict[str, Any],
     *,
@@ -1294,7 +1379,9 @@ class SearchService:
             # inventing terms for them would manufacture false precision.
             from synsc.services.query_expansion import embedding_text
 
-            embed_input, query_expanded = embedding_text(retrieval_query)
+            embed_input, query_expanded = embedding_text(
+                retrieval_query, raw_query=query
+            )
             t_embed = time.time()
             # Hosted embedding APIs return slightly different floats for the
             # same text, which moves near-tied candidates across the HNSW cut.
@@ -1472,6 +1559,16 @@ class SearchService:
                     "error": "Search cancelled or timed out",
                     "results": [],
                 }
+
+            # A request that quotes evidence from a file (review comment with
+            # its diff hunk, failing command with its trace) is asking for the
+            # context *around* that file, not the file itself. Demote the
+            # quoted file's chunks below everything else — after the
+            # cross-encoder blend so nothing re-promotes them — so the final
+            # page and the listwise window carry new information.
+            raw_results = _demote_anchor_paths(
+                raw_results, _query_anchor_paths(query)
+            )
 
             if agent_mode:
                 # Keep high-recall branch candidates and avoid returning many
