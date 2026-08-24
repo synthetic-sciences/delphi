@@ -196,21 +196,11 @@ def seeded_repository():
             text(
                 """
                 INSERT INTO repository_file_lexical_documents
-                    (file_id, repo_id, document_length, content_hash, index_version)
+                    (file_id, repo_id, document_length, content_hash, index_version,
+                     term_frequencies)
                 VALUES
-                    (:file_id, :repo_id, 3, 'old-hash', 'v1')
-                """
-            ),
-            {"file_id": file_id, "repo_id": repo_id},
-        )
-        session.execute(
-            text(
-                """
-                INSERT INTO repository_file_lexical_terms
-                    (file_id, repo_id, term, term_frequency)
-                VALUES
-                    (:file_id, :repo_id, 'old', 2),
-                    (:file_id, :repo_id, 'index', 1)
+                    (:file_id, :repo_id, 3, 'old-hash', 'v1',
+                     '{"index": 1, "old": 2}'::jsonb)
                 """
             ),
             {"file_id": file_id, "repo_id": repo_id},
@@ -349,15 +339,24 @@ def test_failed_full_reindex_restores_last_good_index(
                        MIN(f.file_path) AS file_path,
                        MIN(c.content) AS content,
                        COUNT(DISTINCT d.file_id) AS lexical_docs,
-                       COUNT(DISTINCT t.file_id || ':' || t.term) AS lexical_terms
+                       COALESCE(
+                           SUM(
+                               CASE
+                                   WHEN d.term_frequencies IS NULL THEN 0
+                                   ELSE (
+                                       SELECT COUNT(*)
+                                       FROM jsonb_object_keys(d.term_frequencies) AS k
+                                   )
+                               END
+                           ),
+                           0
+                       ) AS lexical_terms
                 FROM repositories r
                 LEFT JOIN repository_files f ON f.repo_id = r.repo_id
                 LEFT JOIN code_chunks c ON c.repo_id = r.repo_id
                 LEFT JOIN user_repositories ur ON ur.repo_id = r.repo_id
                 LEFT JOIN repository_file_lexical_documents d
                     ON d.repo_id = r.repo_id
-                LEFT JOIN repository_file_lexical_terms t
-                    ON t.repo_id = r.repo_id
                 WHERE r.repo_id = :repo_id
                 GROUP BY r.commit_sha,
                          r.file_okapi_index_version,
@@ -413,13 +412,22 @@ def test_failed_diff_reindex_preserves_last_good_index_and_reports_failure(
                        r.file_okapi_documents_count,
                        COUNT(DISTINCT c.chunk_id) AS chunks,
                        COUNT(DISTINCT d.file_id) AS lexical_docs,
-                       COUNT(DISTINCT t.file_id || ':' || t.term) AS lexical_terms
+                       COALESCE(
+                           SUM(
+                               CASE
+                                   WHEN d.term_frequencies IS NULL THEN 0
+                                   ELSE (
+                                       SELECT COUNT(*)
+                                       FROM jsonb_object_keys(d.term_frequencies) AS k
+                                   )
+                               END
+                           ),
+                           0
+                       ) AS lexical_terms
                 FROM repositories r
                 LEFT JOIN code_chunks c ON c.repo_id = r.repo_id
                 LEFT JOIN repository_file_lexical_documents d
                     ON d.repo_id = r.repo_id
-                LEFT JOIN repository_file_lexical_terms t
-                    ON t.repo_id = r.repo_id
                 WHERE r.repo_id = :repo_id
                 GROUP BY r.file_okapi_index_version,
                          r.file_okapi_documents_count
@@ -617,20 +625,10 @@ def seeded_local_repository(tmp_path: Path):
             text(
                 """
                 INSERT INTO repository_file_lexical_documents
-                    (file_id, repo_id, document_length, content_hash, index_version)
+                    (file_id, repo_id, document_length, content_hash, index_version,
+                     term_frequencies)
                 VALUES
-                    (:file_id, :repo_id, 3, 'old-hash', 'v1')
-                """
-            ),
-            {"file_id": file_id, "repo_id": repo_id},
-        )
-        session.execute(
-            text(
-                """
-                INSERT INTO repository_file_lexical_terms
-                    (file_id, repo_id, term, term_frequency)
-                VALUES
-                    (:file_id, :repo_id, 'old', 1)
+                    (:file_id, :repo_id, 3, 'old-hash', 'v1', '{"old": 1}'::jsonb)
                 """
             ),
             {"file_id": file_id, "repo_id": repo_id},
@@ -835,15 +833,24 @@ def test_local_failed_force_reindex_restores_last_good_index(
                        MIN(f.file_path) AS file_path,
                        MIN(c.content) AS content,
                        COUNT(DISTINCT d.file_id) AS lexical_docs,
-                       COUNT(DISTINCT t.file_id || ':' || t.term) AS lexical_terms
+                       COALESCE(
+                           SUM(
+                               CASE
+                                   WHEN d.term_frequencies IS NULL THEN 0
+                                   ELSE (
+                                       SELECT COUNT(*)
+                                       FROM jsonb_object_keys(d.term_frequencies) AS k
+                                   )
+                               END
+                           ),
+                           0
+                       ) AS lexical_terms
                 FROM repositories r
                 LEFT JOIN repository_files f ON f.repo_id = r.repo_id
                 LEFT JOIN code_chunks c ON c.repo_id = r.repo_id
                 LEFT JOIN user_repositories ur ON ur.repo_id = r.repo_id
                 LEFT JOIN repository_file_lexical_documents d
                     ON d.repo_id = r.repo_id
-                LEFT JOIN repository_file_lexical_terms t
-                    ON t.repo_id = r.repo_id
                 WHERE r.repo_id = :repo_id
                 GROUP BY r.commit_sha,
                          r.file_okapi_index_version,

@@ -13,7 +13,6 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from alembic import command
-from synsc.database.connection import EXPECTED_ALEMBIC_REVISION
 
 BACKEND_ROOT = Path(__file__).parent.parent
 PROJECT_ROOT = BACKEND_ROOT.parent
@@ -37,7 +36,7 @@ def test_symbol_parent_index_migration_chains_after_file_okapi() -> None:
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     assert ScriptDirectory.from_config(config).get_current_head() == (
-        EXPECTED_ALEMBIC_REVISION
+        "021_file_okapi_compact"
     )
 
 

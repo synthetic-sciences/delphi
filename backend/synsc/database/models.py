@@ -159,12 +159,6 @@ class Repository(Base):
             passive_deletes=True,
         )
     )
-    file_lexical_terms: Mapped[list["RepositoryFileLexicalTerm"]] = relationship(
-        "RepositoryFileLexicalTerm",
-        back_populates="repository",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
     chunks: Mapped[list["CodeChunk"]] = relationship(
         "CodeChunk", back_populates="repository", cascade="all, delete-orphan"
     )
@@ -295,12 +289,6 @@ class RepositoryFile(Base):
         passive_deletes=True,
         uselist=False,
     )
-    lexical_terms: Mapped[list["RepositoryFileLexicalTerm"]] = relationship(
-        "RepositoryFileLexicalTerm",
-        back_populates="file",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-    )
 
 
 class RepositoryFileLexicalDocument(Base):
@@ -311,6 +299,16 @@ class RepositoryFileLexicalDocument(Base):
         CheckConstraint(
             "document_length > 0",
             name="ck_file_lexical_documents_positive_length",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(term_frequencies) = 'object' "
+            "AND term_frequencies <> '{}'::jsonb",
+            name="ck_file_lexical_documents_nonempty_terms",
+        ),
+        Index(
+            "idx_file_lexical_term_keys",
+            "term_frequencies",
+            postgresql_using="gin",
         ),
     )
 
@@ -327,45 +325,13 @@ class RepositoryFileLexicalDocument(Base):
     document_length: Mapped[int] = mapped_column(Integer, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     index_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    term_frequencies: Mapped[dict[str, int]] = mapped_column(JSONB, nullable=False)
 
     repository: Mapped["Repository"] = relationship(
         "Repository", back_populates="file_lexical_documents"
     )
     file: Mapped["RepositoryFile"] = relationship(
         "RepositoryFile", back_populates="lexical_document"
-    )
-
-
-class RepositoryFileLexicalTerm(Base):
-    """Per-file term frequency used by Okapi BM25 retrieval."""
-
-    __tablename__ = "repository_file_lexical_terms"
-    __table_args__ = (
-        CheckConstraint(
-            "term_frequency > 0",
-            name="ck_file_lexical_terms_positive_frequency",
-        ),
-        Index("idx_file_lexical_terms_scope", "repo_id", "term", "file_id"),
-    )
-
-    file_id: Mapped[str] = mapped_column(
-        String(36),
-        ForeignKey("repository_files.file_id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    repo_id: Mapped[str] = mapped_column(
-        String(36),
-        ForeignKey("repositories.repo_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    term: Mapped[str] = mapped_column(String(128), primary_key=True)
-    term_frequency: Mapped[int] = mapped_column(Integer, nullable=False)
-
-    repository: Mapped["Repository"] = relationship(
-        "Repository", back_populates="file_lexical_terms"
-    )
-    file: Mapped["RepositoryFile"] = relationship(
-        "RepositoryFile", back_populates="lexical_terms"
     )
 
 

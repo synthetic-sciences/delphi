@@ -253,21 +253,17 @@ CREATE TABLE IF NOT EXISTS repository_file_lexical_documents (
         REFERENCES repositories(repo_id) ON DELETE CASCADE,
     document_length INTEGER NOT NULL CHECK (document_length > 0),
     content_hash VARCHAR(64) NOT NULL,
-    index_version VARCHAR(32) NOT NULL
+    index_version VARCHAR(32) NOT NULL,
+    term_frequencies JSONB NOT NULL
+        CHECK (
+            jsonb_typeof(term_frequencies) = 'object'
+            AND term_frequencies <> '{}'::jsonb
+        )
 );
 
-CREATE TABLE IF NOT EXISTS repository_file_lexical_terms (
-    file_id UUID NOT NULL
-        REFERENCES repository_files(file_id) ON DELETE CASCADE,
-    repo_id UUID NOT NULL
-        REFERENCES repositories(repo_id) ON DELETE CASCADE,
-    term VARCHAR(128) NOT NULL,
-    term_frequency INTEGER NOT NULL CHECK (term_frequency > 0),
-    PRIMARY KEY (file_id, term)
-);
-
-CREATE INDEX IF NOT EXISTS idx_file_lexical_terms_scope
-    ON repository_file_lexical_terms(repo_id, term, file_id);
+CREATE INDEX IF NOT EXISTS idx_file_lexical_term_keys
+    ON repository_file_lexical_documents
+    USING GIN (term_frequencies);
 
 
 -- ============================================================================

@@ -20,7 +20,7 @@ logger = structlog.get_logger(__name__)
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
-EXPECTED_ALEMBIC_REVISION = "020_symbol_parent_index"
+EXPECTED_ALEMBIC_REVISION = "021_file_okapi_compact"
 
 
 def get_engine() -> Engine:

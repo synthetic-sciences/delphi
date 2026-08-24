@@ -107,17 +107,18 @@ def test_research_jobs_migration_exists():
     assert "drop_table" in content  # downgrade is wired
 
 
-def test_file_okapi_migration_chains_before_symbol_parent_index_head():
-    path = PROJECT_ROOT / "alembic" / "versions" / "019_file_okapi.py"
-    content = path.read_text()
-    assert 'revision: str = "019_file_okapi"' in content
-    assert 'down_revision: Union[str, None] = "018_context_sessions"' in content
+def test_file_okapi_compact_migration_chains_after_symbol_parent_index():
+    compact_path = PROJECT_ROOT / "alembic" / "versions" / "021_file_okapi_compact.py"
+    assert compact_path.is_file()
+    compact_content = compact_path.read_text()
+    assert 'revision: str = "021_file_okapi_compact"' in compact_content
+    assert 'down_revision: Union[str, None] = "020_symbol_parent_index"' in compact_content
 
     head_path = PROJECT_ROOT / "alembic" / "versions" / "020_symbol_parent_index.py"
     head_content = head_path.read_text()
     assert 'revision: str = "020_symbol_parent_index"' in head_content
     assert 'down_revision: Union[str, None] = "019_file_okapi"' in head_content
-    assert EXPECTED_ALEMBIC_REVISION == "020_symbol_parent_index"
+    assert EXPECTED_ALEMBIC_REVISION == "021_file_okapi_compact"
 
 
 def test_file_okapi_migration_defines_persistent_schema():

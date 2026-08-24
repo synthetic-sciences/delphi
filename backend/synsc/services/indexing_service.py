@@ -36,7 +36,6 @@ from synsc.database.models import (
     Repository,
     RepositoryFile,
     RepositoryFileLexicalDocument,
-    RepositoryFileLexicalTerm,
     Symbol,
     UserRepository,
 )
@@ -1069,7 +1068,6 @@ class IndexingService:
         file_path: str,
         content: str,
         content_hash: str,
-        staged: list[object] | None = None,
     ) -> int:
         """Persist file-level Okapi lexical statistics for one indexed file."""
         try:
@@ -1083,42 +1081,17 @@ class IndexingService:
             )
             return 0
 
-        rows: list[object] = [
+        session.add(
             RepositoryFileLexicalDocument(
                 file_id=repository_file.file_id,
                 repo_id=repo_id,
                 document_length=document.document_length,
                 content_hash=content_hash,
                 index_version=FILE_OKAPI_INDEX_VERSION,
+                term_frequencies=document.term_frequencies,
             )
-        ]
-        rows.extend(
-            RepositoryFileLexicalTerm(
-                file_id=repository_file.file_id,
-                repo_id=repo_id,
-                term=term,
-                term_frequency=term_frequency,
-            )
-            for term, term_frequency in document.term_frequencies.items()
         )
-        for row in rows:
-            session.add(row)
-        if staged is not None:
-            staged.extend(rows)
         return 1
-
-    def _release_staged_file_okapi_rows(
-        self,
-        session: Session,
-        staged: list[object],
-    ) -> None:
-        """Flush and expunge persisted lexical rows to bound session memory."""
-        if not staged:
-            return
-        session.flush()
-        for row in staged:
-            session.expunge(row)
-        staged.clear()
 
     # ── Diff-aware re-indexing ─────────────────────────────────────────────
 
@@ -1384,7 +1357,6 @@ class IndexingService:
         parser_registry = get_parser_registry()
         total_new_symbols = 0
         chunks_to_embed: list[tuple[CodeChunk, str]] = []
-        diff_okapi_staged: list[object] = []
 
         for file_idx, file_info in enumerate(files_to_process):
             file_path = file_info["path"]
@@ -1477,7 +1449,6 @@ class IndexingService:
                     file_path=file_path,
                     content=content,
                     content_hash=file_content_hash,
-                    staged=diff_okapi_staged,
                 )
 
             # Doc files
@@ -1641,8 +1612,6 @@ class IndexingService:
                         extracted_symbols, content, language,
                     )
                     chunks_to_embed.append((db_chunk, enriched))
-
-        self._release_staged_file_okapi_rows(session, diff_okapi_staged)
 
         # Flush all new chunks + symbols
         session.flush()
@@ -2028,7 +1997,6 @@ class IndexingService:
                 )
 
                 # Now process chunks for all files in this batch
-                batch_okapi_staged: list[object] = []
                 for db_file, file_info, content in current_batch_files:
                     file_path = file_info["path"]
                     language = db_file.language
@@ -2042,7 +2010,6 @@ class IndexingService:
                             file_path=file_path,
                             content=content,
                             content_hash=file_content_hash,
-                            staged=batch_okapi_staged,
                         )
 
                     # Documentation files (markdown, rst) — paragraph-based chunking
@@ -2281,8 +2248,6 @@ class IndexingService:
                 # ── Progressive drain: write completed embeddings to pgvector ──
                 # This keeps the DB session active, preventing connection timeouts
                 _drain_embed_results()
-
-                self._release_staged_file_okapi_rows(session, batch_okapi_staged)
 
                 # Clear batch after processing
                 current_batch_files = []

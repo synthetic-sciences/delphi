@@ -10,11 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from synsc.database.models import (
-    RepositoryFile,
-    RepositoryFileLexicalDocument,
-    RepositoryFileLexicalTerm,
-)
+from synsc.database.models import RepositoryFile, RepositoryFileLexicalDocument
 from synsc.services import file_okapi
 from synsc.services.file_okapi import FILE_OKAPI_INDEX_VERSION, build_file_okapi_document
 from synsc.services.indexing_service import IndexingService
@@ -44,7 +40,7 @@ class RecordingSession:
         self.added.append(obj)
 
 
-def test_add_file_okapi_rows_persists_document_and_exact_terms() -> None:
+def test_add_file_okapi_rows_persists_single_document_with_term_frequencies() -> None:
     service = IndexingService()
     session = RecordingSession()
     db_file = RepositoryFile(
@@ -67,21 +63,15 @@ def test_add_file_okapi_rows_persists_document_and_exact_terms() -> None:
     )
 
     assert count == 1
-    documents = [
-        obj for obj in session.added if isinstance(obj, RepositoryFileLexicalDocument)
-    ]
-    terms = [obj for obj in session.added if isinstance(obj, RepositoryFileLexicalTerm)]
-    assert len(documents) == 1
-    document = documents[0]
+    assert len(session.added) == 1
+    document = session.added[0]
+    assert isinstance(document, RepositoryFileLexicalDocument)
     assert document.file_id == "file-1"
     assert document.repo_id == "repo-1"
     assert document.document_length == expected.document_length
     assert document.content_hash == "abc123"
     assert document.index_version == FILE_OKAPI_INDEX_VERSION
-    assert {(term.term, term.term_frequency) for term in terms} == set(
-        expected.term_frequencies.items()
-    )
-    assert all(term.file_id == "file-1" and term.repo_id == "repo-1" for term in terms)
+    assert document.term_frequencies == expected.term_frequencies
 
 
 def test_add_file_okapi_rows_rejects_over_cap_without_partial_rows(
@@ -208,11 +198,11 @@ def test_full_index_sets_repository_okapi_version_and_count(
                 ),
                 {"repo_id": result["repo_id"]},
             ).scalar_one()
-            term_count = session.execute(
+            term_map = session.execute(
                 text(
                     """
-                    SELECT COUNT(*)
-                    FROM repository_file_lexical_terms
+                    SELECT term_frequencies
+                    FROM repository_file_lexical_documents
                     WHERE repo_id = :repo_id
                     """
                 ),
@@ -222,7 +212,8 @@ def test_full_index_sets_repository_okapi_version_and_count(
         assert repo.file_okapi_index_version == FILE_OKAPI_INDEX_VERSION
         assert repo.file_okapi_documents_count == 1
         assert doc_count == 1
-        assert term_count >= 1
+        assert isinstance(term_map, dict)
+        assert sum(term_map.values()) >= 1
     finally:
         repo_id = result.get("repo_id")
         if repo_id:
