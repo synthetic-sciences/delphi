@@ -26,10 +26,12 @@ import httpx
 import structlog
 
 from synsc.config import get_config
+from synsc.core.llm_cache import BoundedCache, get_cache
 
 logger = structlog.get_logger(__name__)
 
 _ENDPOINT = "https://api.openai.com/v1/chat/completions"
+_PROMPT_REV = "hyde-v1"
 
 _SYSTEM_PROMPT = (
     "You write short, plausible code snippets that would answer a developer's "
@@ -84,6 +86,17 @@ def expand_query(query: str, *, timeout: float = 10.0) -> str | None:
     # request is worth expanding, and it keeps the prompt cheap.
     prompt = query[:2000]
 
+    # Chat models resample even at temperature 0, and the expansion feeds the
+    # query embedding, so an uncached expansion makes the whole vector branch
+    # non-repeatable. First answer wins for the lifetime of the process.
+    cache = get_cache("query-expansion", config.search.llm_cache_entries)
+    cache_key = BoundedCache.key(
+        _PROMPT_REV, config.search.query_expansion_model, prompt
+    )
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached or None
+
     try:
         response = httpx.post(
             _ENDPOINT,
@@ -99,6 +112,7 @@ def expand_query(query: str, *, timeout: float = 10.0) -> str | None:
                 ],
                 "max_completion_tokens": 220,
                 "temperature": 0.0,
+                "seed": config.search.llm_seed,
             },
             timeout=timeout,
         )
@@ -113,6 +127,7 @@ def expand_query(query: str, *, timeout: float = 10.0) -> str | None:
     except (KeyError, IndexError, AttributeError):
         return None
 
+    cache.put(cache_key, content or "")
     return content or None
 
 

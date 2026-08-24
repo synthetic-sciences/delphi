@@ -357,6 +357,35 @@ class SearchConfig(BaseModel):
         ),
     )
 
+    # Determinism controls. Hosted chat models resample even at temperature 0
+    # and hosted embedding APIs jitter at ~1e-4 cosine, so identical searches
+    # can return different orders. The seed pins provider-side sampling where
+    # the API supports it; the caches make every repeated stage return its
+    # first answer for the lifetime of the process.
+    llm_seed: int = Field(
+        default=1042,
+        description=(
+            "Seed sent with every chat-completion call in the search path "
+            "(query expansion, listwise rerank). Best-effort determinism on "
+            "providers that honor it."
+        ),
+    )
+    llm_cache_entries: int = Field(
+        default=2048,
+        description=(
+            "Entries kept per search-stage cache (query expansion replies, "
+            "listwise orders, query embeddings). 0 disables caching."
+        ),
+    )
+    vector_exact_scan: bool = Field(
+        default=False,
+        description=(
+            "Force exact (sequential) nearest-neighbour scans instead of the "
+            "HNSW index. Fully reproducible rankings at higher query cost; "
+            "meant for evaluation and small corpora."
+        ),
+    )
+
     # Code-aware reranker — falls back to ms-marco when unavailable.
     code_reranker_model: str = Field(
         default="BAAI/bge-reranker-base",
@@ -577,6 +606,18 @@ class SynscConfig(BaseModel):
             config.search.listwise_rerank_k = int(listwise_k)
         if min_score := os.getenv("SYNSC_MIN_SIMILARITY_SCORE"):
             config.search.min_similarity_score = float(min_score)
+        if llm_seed := os.getenv("SYNSC_LLM_SEED"):
+            with contextlib.suppress(ValueError):
+                config.search.llm_seed = int(llm_seed)
+        if cache_entries := os.getenv("SYNSC_LLM_CACHE_ENTRIES"):
+            with contextlib.suppress(ValueError):
+                config.search.llm_cache_entries = int(cache_entries)
+        if exact_scan := os.getenv("SYNSC_VECTOR_EXACT_SCAN"):
+            config.search.vector_exact_scan = exact_scan.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
 
         # Quality mode + indexing overrides for ad-hoc reindexing.
         if qmode := os.getenv("SYNSC_QUALITY_MODE"):

@@ -1296,9 +1296,24 @@ class SearchService:
 
             embed_input, query_expanded = embedding_text(retrieval_query)
             t_embed = time.time()
-            query_embedding = self.embedding_generator.generate_single(
-                embed_input
+            # Hosted embedding APIs return slightly different floats for the
+            # same text, which moves near-tied candidates across the HNSW cut.
+            # Caching the first vector per exact input keeps repeated searches
+            # on one ranking and skips the round-trip.
+            from synsc.core.llm_cache import BoundedCache, get_cache
+
+            embed_cache = get_cache(
+                "query-embedding", self.config.search.llm_cache_entries
             )
+            embed_key = BoundedCache.key(
+                getattr(self.embedding_generator, "model_name", "?"), embed_input
+            )
+            query_embedding = embed_cache.get(embed_key)
+            if query_embedding is None:
+                query_embedding = self.embedding_generator.generate_single(
+                    embed_input
+                )
+                embed_cache.put(embed_key, query_embedding)
             embed_ms = (time.time() - t_embed) * 1000
             if stopped():
                 return {
@@ -1401,8 +1416,16 @@ class SearchService:
             if not agent_mode:
                 _apply_metadata_scoring(raw_results, query=retrieval_query)
 
-            # Re-sort after boosting + metadata adjustments
-            raw_results.sort(key=lambda r: r["similarity"], reverse=True)
+            # Re-sort after boosting + metadata adjustments. Secondary keys
+            # give equal-scored chunks a total order so ties can never flip
+            # between otherwise-identical searches.
+            raw_results.sort(
+                key=lambda r: (
+                    -float(r.get("similarity") or 0.0),
+                    str(r.get("file_path") or ""),
+                    str(r.get("chunk_id") or ""),
+                )
+            )
 
             # 3. Optional cross-encoder reranking (blended with fused/vector
             #    similarity), gated by SYNSC_ENABLE_RERANKER.

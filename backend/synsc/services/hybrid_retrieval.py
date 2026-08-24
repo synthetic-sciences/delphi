@@ -919,12 +919,16 @@ def fuse_candidates(
         )
         c.fused_score = raw / best_possible if best_possible > 0 else 0.0
 
-    # Ties on reciprocal rank fall back to the strongest raw branch score, so
-    # ordering stays deterministic instead of depending on dict insertion.
+    # Ties on reciprocal rank fall back to the strongest raw branch score and
+    # finally to chunk_id, so ordering is a total order that never depends on
+    # dict insertion (which itself inherits branch arrival order).
     out = sorted(
         by_chunk.values(),
-        key=lambda c: (c.fused_score, max(c.sources.values(), default=0.0)),
-        reverse=True,
+        key=lambda c: (
+            -c.fused_score,
+            -max(c.sources.values(), default=0.0),
+            str(c.chunk_id),
+        ),
     )
     return out
 
