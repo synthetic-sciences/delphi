@@ -80,6 +80,7 @@ WORKDIR /app
 COPY --from=build --chown=synsc:synsc /app /app
 
 RUN mkdir -p /tmp/synsc-context /home/synsc/.cache/huggingface \
+    /home/synsc/.cache/delphi \
  && chown -R synsc:synsc /tmp/synsc-context /home/synsc/.cache
 
 ENV PATH="/app/.venv/bin:${PATH}" \

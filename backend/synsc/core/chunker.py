@@ -99,6 +99,58 @@ class CodeChunker:
 
         for i, line in enumerate(lines, start=1):
             line_tokens = self.count_tokens(line + "\n")
+            line_token_ids = (
+                self._tokenizer.encode(line, disallowed_special=())
+                if line_tokens > self.max_tokens
+                else []
+            )
+
+            # A single generated/minified line can be much larger than the
+            # configured hard limit. The ordinary line-boundary logic cannot
+            # split it because the current chunk is still empty, so it would
+            # otherwise become one oversized chunk and be truncated by the
+            # embedding provider. Split the token stream into balanced pieces
+            # so the final tail is not dropped by the minimum-chunk threshold.
+            if len(line_token_ids) > self.max_tokens:
+                if current_chunk_lines:
+                    chunk_content = "\n".join(current_chunk_lines)
+                    if current_tokens >= self.min_chunk_tokens:
+                        chunks.append(
+                            CodeChunk(
+                                content=chunk_content,
+                                start_line=current_start_line,
+                                end_line=i - 1,
+                                chunk_type=self._detect_chunk_type(
+                                    chunk_content, language
+                                ),
+                                token_count=current_tokens,
+                            )
+                        )
+
+                segment_count = (
+                    len(line_token_ids) + self.max_tokens - 1
+                ) // self.max_tokens
+                segment_size = (
+                    len(line_token_ids) + segment_count - 1
+                ) // segment_count
+                for start in range(0, len(line_token_ids), segment_size):
+                    segment_tokens = line_token_ids[start : start + segment_size]
+                    segment = self._tokenizer.decode(segment_tokens)
+                    chunks.append(
+                        CodeChunk(
+                            content=segment,
+                            start_line=i,
+                            end_line=i,
+                            chunk_type=self._detect_chunk_type(segment, language),
+                            token_count=len(segment_tokens),
+                        )
+                    )
+
+                current_chunk_lines = []
+                current_tokens = 0
+                current_start_line = i + 1
+                seeking_boundary = False
+                continue
 
             # Hard limit — must split now regardless of boundaries
             if current_tokens + line_tokens > self.max_tokens and current_chunk_lines:

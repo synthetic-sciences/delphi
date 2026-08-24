@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
+from synsc.services import query_expansion as expansion_module
 from synsc.services.query_expansion import (
     embedding_text,
     expand_query,
@@ -70,3 +72,43 @@ def test_review_envelope_prose_passes_the_gate_where_raw_json_fails():
     }))
     assert envelope_view is not None
     assert looks_like_prose(envelope_view)
+
+
+def test_query_expansion_uses_singleflight_cache(monkeypatch):
+    config = SimpleNamespace(
+        search=SimpleNamespace(
+            enable_query_expansion=True,
+            query_expansion_model="model",
+            llm_cache_entries=4,
+            llm_cache_db="/tmp/search-stage-cache.sqlite3",
+            llm_seed=7,
+        )
+    )
+
+    class SingleflightOnlyCache:
+        calls = 0
+
+        def get_or_compute(self, _key, _compute):
+            self.calls += 1
+            return "def retry_until_timeout(): pass"
+
+    cache = SingleflightOnlyCache()
+    cache_options = {}
+
+    def fake_get_cache(*_args, **kwargs):
+        cache_options.update(kwargs)
+        return cache
+
+    monkeypatch.setattr(expansion_module, "get_config", lambda: config)
+    monkeypatch.setattr(expansion_module, "get_cache", fake_get_cache)
+    monkeypatch.setenv("OPENAI_API_KEY", "test")
+
+    result = expand_query(
+        "why does the retry loop give up before the timeout is reached"
+    )
+
+    assert result == "def retry_until_timeout(): pass"
+    assert cache.calls == 1
+    assert cache_options == {
+        "persistent_path": "/tmp/search-stage-cache.sqlite3"
+    }

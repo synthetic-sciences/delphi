@@ -302,6 +302,20 @@ class SearchConfig(BaseModel):
         default=False,
         description="Run BM25/symbol/path/trigram alongside vector and fuse the results.",
     )
+    enable_file_diverse_bm25: bool = Field(
+        default=False,
+        description=(
+            "Add an opt-in lexical branch that contributes only the best "
+            "matching chunk from each distinct file before fusion."
+        ),
+    )
+    enable_path_token_search: bool = Field(
+        default=False,
+        description=(
+            "Add an opt-in repository-scoped branch that ranks file paths by "
+            "code-aware query-token overlap before fusion."
+        ),
+    )
     hybrid_candidates: int = Field(
         default=50,
         description="Top-K per branch before fusion (also the rerank window).",
@@ -375,6 +389,23 @@ class SearchConfig(BaseModel):
         description=(
             "Entries kept per search-stage cache (query expansion replies, "
             "listwise orders, query embeddings). 0 disables caching."
+        ),
+    )
+    llm_cache_db: str | None = Field(
+        default=None,
+        description=(
+            "Optional SQLite path that persists supported search-stage cache "
+            "values across API process restarts. Unset keeps the cache in "
+            "memory only."
+        ),
+    )
+    hnsw_ef_search: int = Field(
+        default=100,
+        ge=1,
+        le=10_000,
+        description=(
+            "HNSW dynamic candidate-list size. Higher values improve filtered "
+            "nearest-neighbor recall at greater query cost."
         ),
     )
     vector_exact_scan: bool = Field(
@@ -586,6 +617,18 @@ class SynscConfig(BaseModel):
         # deployment usually wants to make explicitly.
         if candidates := os.getenv("SYNSC_HYBRID_CANDIDATES"):
             config.search.hybrid_candidates = int(candidates)
+        if file_bm25 := os.getenv("SYNSC_FILE_DIVERSE_BM25"):
+            config.search.enable_file_diverse_bm25 = file_bm25.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        if path_tokens := os.getenv("SYNSC_PATH_TOKEN_SEARCH"):
+            config.search.enable_path_token_search = path_tokens.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
         if expansion := os.getenv("SYNSC_QUERY_EXPANSION"):
             config.search.enable_query_expansion = expansion.lower() in (
                 "true",
@@ -612,6 +655,11 @@ class SynscConfig(BaseModel):
         if cache_entries := os.getenv("SYNSC_LLM_CACHE_ENTRIES"):
             with contextlib.suppress(ValueError):
                 config.search.llm_cache_entries = int(cache_entries)
+        if cache_db := os.getenv("SYNSC_LLM_CACHE_DB"):
+            config.search.llm_cache_db = cache_db
+        if hnsw_ef_search := os.getenv("SYNSC_HNSW_EF_SEARCH"):
+            with contextlib.suppress(ValueError):
+                config.search.hnsw_ef_search = int(hnsw_ef_search)
         if exact_scan := os.getenv("SYNSC_VECTOR_EXACT_SCAN"):
             config.search.vector_exact_scan = exact_scan.lower() in (
                 "true",

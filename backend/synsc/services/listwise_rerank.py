@@ -117,12 +117,19 @@ def listwise_rerank(
     # candidates can come back in a different order on the next call. Cache
     # the reply per exact prompt: repeated searches reorder identically and
     # skip the API round-trip entirely.
-    cache = get_cache("listwise-rerank", config.search.llm_cache_entries)
-    cache_key = BoundedCache.key(
-        _PROMPT_REV, config.search.listwise_rerank_model, prompt
+    cache = get_cache(
+        "listwise-rerank",
+        config.search.llm_cache_entries,
+        persistent_path=config.search.llm_cache_db,
     )
-    reply = cache.get(cache_key)
-    if reply is None:
+    cache_key = BoundedCache.key(
+        _PROMPT_REV,
+        config.search.listwise_rerank_model,
+        str(config.search.llm_seed),
+        prompt,
+    )
+
+    def fetch_reply() -> str | None:
         try:
             response = httpx.post(
                 _ENDPOINT,
@@ -143,11 +150,14 @@ def listwise_rerank(
                 timeout=config.search.listwise_timeout_seconds,
             )
             response.raise_for_status()
-            reply = response.json()["choices"][0]["message"]["content"]
+            return response.json()["choices"][0]["message"]["content"]
         except Exception as exc:  # noqa: BLE001 - ranking must never fail a search
             logger.warning("listwise rerank failed", error=str(exc)[:200])
-            return results
-        cache.put(cache_key, reply)
+            return None
+
+    reply = cache.get_or_compute(cache_key, fetch_reply)
+    if reply is None:
+        return results
 
     order = parse_order(reply, len(head))
     if order is None:

@@ -154,45 +154,50 @@ def expand_query(
     # Chat models resample even at temperature 0, and the expansion feeds the
     # query embedding, so an uncached expansion makes the whole vector branch
     # non-repeatable. First answer wins for the lifetime of the process.
-    cache = get_cache("query-expansion", config.search.llm_cache_entries)
-    cache_key = BoundedCache.key(
-        _PROMPT_REV, config.search.query_expansion_model, prompt
+    cache = get_cache(
+        "query-expansion",
+        config.search.llm_cache_entries,
+        persistent_path=config.search.llm_cache_db,
     )
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached or None
+    cache_key = BoundedCache.key(
+        _PROMPT_REV,
+        config.search.query_expansion_model,
+        str(config.search.llm_seed),
+        prompt,
+    )
 
-    try:
-        response = httpx.post(
-            _ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": config.search.query_expansion_model,
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_completion_tokens": 220,
-                "temperature": 0.0,
-                "seed": config.search.llm_seed,
-            },
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except Exception as exc:  # noqa: BLE001 - expansion is strictly optional
-        logger.warning("query expansion failed", error=str(exc)[:200])
-        return None
+    def fetch_expansion() -> str | None:
+        try:
+            response = httpx.post(
+                _ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": config.search.query_expansion_model,
+                    "messages": [
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_completion_tokens": 220,
+                    "temperature": 0.0,
+                    "seed": config.search.llm_seed,
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:  # noqa: BLE001 - expansion is strictly optional
+            logger.warning("query expansion failed", error=str(exc)[:200])
+            return None
 
-    try:
-        content = payload["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, AttributeError):
-        return None
+        try:
+            return payload["choices"][0]["message"]["content"].strip()
+        except (KeyError, IndexError, AttributeError):
+            return None
 
-    cache.put(cache_key, content or "")
+    content = cache.get_or_compute(cache_key, fetch_expansion)
     return content or None
 
 

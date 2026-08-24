@@ -238,6 +238,9 @@ class ReindexRepositoryRequest(BaseModel):
 
 class SearchCodeRequest(BaseModel):
     """Request to search code."""
+
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(..., description="Natural language query or keywords")
     repo_ids: list[str] | None = Field(default=None, description="Repository IDs to search")
     language: str | None = Field(default=None, description="Filter by programming language")

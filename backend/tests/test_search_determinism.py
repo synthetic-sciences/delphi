@@ -7,7 +7,12 @@ behavior that closes each hole.
 """
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
+import pytest
 
 from synsc.core.llm_cache import BoundedCache, get_cache
 from synsc.services.hybrid_retrieval import Candidate, fuse_candidates
@@ -38,6 +43,102 @@ def test_cache_size_zero_disables_storage():
     assert cache.get("k") is None
 
 
+def test_cache_singleflights_concurrent_computation_for_same_key():
+    cache = BoundedCache(4)
+    calculation_started = threading.Event()
+    release_calculation = threading.Event()
+    second_started = threading.Event()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def calculate() -> str:
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        calculation_started.set()
+        assert release_calculation.wait(timeout=2)
+        return "first answer"
+
+    def second_call() -> str:
+        second_started.set()
+        return cache.get_or_compute("same-key", calculate)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(cache.get_or_compute, "same-key", calculate)
+        assert calculation_started.wait(timeout=1)
+        second = pool.submit(second_call)
+        assert second_started.wait(timeout=1)
+        release_calculation.set()
+
+    assert first.result() == "first answer"
+    assert second.result() == "first answer"
+    assert calls == 1
+
+
+def test_cache_shares_transient_none_with_waiters_but_does_not_store_it():
+    cache = BoundedCache(4)
+    calculation_started = threading.Event()
+    release_calculation = threading.Event()
+    second_started = threading.Event()
+    calls = 0
+
+    def calculate():
+        nonlocal calls
+        calls += 1
+        calculation_started.set()
+        assert release_calculation.wait(timeout=2)
+        return None if calls == 1 else "divergent retry"
+
+    def second_call():
+        second_started.set()
+        return cache.get_or_compute("same-key", calculate)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(cache.get_or_compute, "same-key", calculate)
+        assert calculation_started.wait(timeout=1)
+        second = pool.submit(second_call)
+        assert second_started.wait(timeout=1)
+        time.sleep(0.05)
+        release_calculation.set()
+
+    assert first.result() is None
+    assert second.result() is None
+    assert calls == 1
+    assert cache.get_or_compute("same-key", lambda: "later retry") == (
+        "later retry"
+    )
+
+
+def test_cache_shares_transient_exception_with_waiters():
+    cache = BoundedCache(4)
+    calculation_started = threading.Event()
+    release_calculation = threading.Event()
+    calls = 0
+
+    def calculate():
+        nonlocal calls
+        calls += 1
+        calculation_started.set()
+        assert release_calculation.wait(timeout=2)
+        raise RuntimeError("provider unavailable")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(cache.get_or_compute, "same-key", calculate)
+        assert calculation_started.wait(timeout=1)
+        second = pool.submit(cache.get_or_compute, "same-key", calculate)
+        time.sleep(0.05)
+        release_calculation.set()
+
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        first.result()
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        second.result()
+    assert calls == 1
+    assert cache.get_or_compute("same-key", lambda: "later retry") == (
+        "later retry"
+    )
+
+
 def test_get_cache_rebuilds_when_capacity_changes():
     first = get_cache("test-namespace", 4)
     first.put("k", "v")
@@ -45,6 +146,118 @@ def test_get_cache_rebuilds_when_capacity_changes():
     assert same.get("k") == "v"
     resized = get_cache("test-namespace", 8)
     assert resized.get("k") is None
+
+
+def test_persistent_cache_survives_instance_recreation(tmp_path):
+    cache_path = tmp_path / "search-cache.sqlite3"
+    first = BoundedCache(
+        4,
+        namespace="query-expansion",
+        persistent_path=cache_path,
+    )
+    assert first.get_or_compute("same-key", lambda: "first answer") == (
+        "first answer"
+    )
+
+    recreated = BoundedCache(
+        4,
+        namespace="query-expansion",
+        persistent_path=cache_path,
+    )
+
+    assert recreated.get_or_compute(
+        "same-key",
+        lambda: pytest.fail("persisted answer was not reused"),
+    ) == "first answer"
+
+
+def test_persistent_cache_singleflights_across_live_instances(tmp_path):
+    cache_path = tmp_path / "search-cache.sqlite3"
+    first = BoundedCache(
+        4,
+        namespace="query-expansion",
+        persistent_path=cache_path,
+    )
+    second = BoundedCache(
+        4,
+        namespace="query-expansion",
+        persistent_path=cache_path,
+    )
+    calculation_started = threading.Event()
+    release_calculation = threading.Event()
+    second_calculation_started = threading.Event()
+
+    def calculate_first() -> str:
+        calculation_started.set()
+        assert release_calculation.wait(timeout=2)
+        return "first answer"
+
+    def calculate_second() -> str:
+        second_calculation_started.set()
+        return "divergent answer"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first_result = pool.submit(
+            first.get_or_compute,
+            "same-key",
+            calculate_first,
+        )
+        assert calculation_started.wait(timeout=1)
+        second_result = pool.submit(
+            second.get_or_compute,
+            "same-key",
+            calculate_second,
+        )
+        time.sleep(0.05)
+        release_calculation.set()
+
+    assert first_result.result() == "first answer"
+    assert second_result.result() == "first answer"
+    assert not second_calculation_started.is_set()
+
+
+def test_persistent_cache_round_trips_numpy_vectors(tmp_path):
+    cache_path = tmp_path / "search-cache.sqlite3"
+    vector = np.arange(6, dtype=np.float32).reshape(2, 3)
+    first = BoundedCache(
+        4,
+        namespace="query-embedding",
+        persistent_path=cache_path,
+    )
+    first.put("vector-key", vector)
+
+    recreated = BoundedCache(
+        4,
+        namespace="query-embedding",
+        persistent_path=cache_path,
+    )
+    cached = recreated.get("vector-key")
+
+    assert isinstance(cached, np.ndarray)
+    assert cached.dtype == np.float32
+    assert np.array_equal(cached, vector)
+
+
+def test_persistent_cache_evicts_oldest_entry(tmp_path):
+    cache_path = tmp_path / "search-cache.sqlite3"
+    first = BoundedCache(
+        2,
+        namespace="listwise-rerank",
+        persistent_path=cache_path,
+    )
+    first.put("oldest", "one")
+    first.put("middle", "two")
+    first.put("newest", "three")
+
+    recreated = BoundedCache(
+        2,
+        namespace="listwise-rerank",
+        persistent_path=cache_path,
+    )
+
+    assert recreated.get("oldest") is None
+    assert recreated.get("middle") == "two"
+    assert recreated.get("newest") == "three"
 
 
 def _candidate(chunk_id: str, source: str, score: float) -> Candidate:

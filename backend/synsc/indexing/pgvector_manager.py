@@ -152,10 +152,15 @@ class PgVectorManager:
                 ),
                 {"timeout": f"{timeout_ms}ms"},
             )
-            # Tune HNSW search quality — ef_search=100 gives good recall
-            session.execute(text("SET LOCAL hnsw.ef_search = 100"))
-            from synsc.config import get_config
-            if get_config().search.vector_exact_scan:
+            search_config = get_config().search
+            session.execute(
+                text(
+                    "SELECT set_config("
+                    "'hnsw.ef_search', :ef_search, true)"
+                ),
+                {"ef_search": str(search_config.hnsw_ef_search)},
+            )
+            if search_config.vector_exact_scan:
                 # Exact nearest-neighbour scan: bypass the HNSW index so the
                 # ranking is a pure function of the stored vectors. Costs a
                 # sequential scan per query; meant for evaluation runs and
