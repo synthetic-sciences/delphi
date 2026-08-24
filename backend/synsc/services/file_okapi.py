@@ -19,7 +19,7 @@ _MAX_TERM_LENGTH = 128
 _ACRONYM_BOUNDARY_RE = re.compile(r"([A-Z]+)([A-Z][a-z])")
 _CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
 _SEGMENT_SPLIT_RE = re.compile(r"[/._\W]+")
-_ALNUM_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_ALNUM_TOKEN_RE = re.compile(r"[^\W_]+")
 _NUMERIC_ONLY_RE = re.compile(r"^\d+$")
 
 

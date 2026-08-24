@@ -36,7 +36,7 @@ def test_symbol_parent_index_migration_chains_after_file_okapi() -> None:
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     assert ScriptDirectory.from_config(config).get_current_head() == (
-        "021_file_okapi_compact"
+        "022_file_okapi_repo_scope_index"
     )
 
 

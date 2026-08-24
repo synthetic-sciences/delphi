@@ -993,6 +993,11 @@ def _file_okapi_scope_document_from_and_where(
             WHERE docs.repo_id IN ({repo_placeholders})
               AND (r.is_public = TRUE OR r.indexed_by = :user_id)
               AND docs.index_version = :index_version
+              AND EXISTS (
+                  SELECT 1
+                  FROM code_chunks searchable_chunks
+                  WHERE searchable_chunks.file_id = docs.file_id
+              )
               {extra_docs_predicates}
               {language_filter}"""
 
@@ -1108,7 +1113,7 @@ def _file_okapi_search_sql(
                 r.is_public,
                 ts_rank_cd(
                     cc.content_tsv,
-                    websearch_to_tsquery('english', :search_query)
+                    plainto_tsquery('english', :search_query)
                 ) AS chunk_score
             FROM code_chunks cc
             INNER JOIN repository_files rf ON cc.file_id = rf.file_id
@@ -1218,6 +1223,19 @@ def file_okapi_search(
                 FROM repository_file_lexical_documents d
                 INNER JOIN accessible_repos ar ON d.repo_id = ar.repo_id
                 WHERE d.index_version = :index_version
+            ) AS indexed_document_count,
+            (
+                SELECT COUNT(*)
+                FROM repository_file_lexical_documents d
+                INNER JOIN repository_files rf ON d.file_id = rf.file_id
+                INNER JOIN accessible_repos ar ON d.repo_id = ar.repo_id
+                WHERE d.index_version = :index_version
+                  AND EXISTS (
+                      SELECT 1
+                      FROM code_chunks searchable_chunks
+                      WHERE searchable_chunks.file_id = d.file_id
+                  )
+                  {language_filter}
             ) AS document_count
         """
     )
@@ -1236,21 +1254,25 @@ def file_okapi_search(
     requested_count = int(scope_row["requested_count"] or 0)
     accessible_count = int(scope_row["accessible_count"] or 0)
     document_count = int(scope_row["document_count"] or 0)
+    indexed_document_count = int(
+        scope_row.get("indexed_document_count", document_count) or 0
+    )
     if (
         requested_count != len(repo_ids)
         or accessible_count != len(repo_ids)
-        or document_count == 0
+        or indexed_document_count == 0
         or document_count > FILE_OKAPI_MAX_FILES
     ):
         if requested_count != len(repo_ids) or accessible_count != len(repo_ids):
             inactive_reason = "scope_incomplete"
-        elif document_count == 0:
+        elif indexed_document_count == 0:
             inactive_reason = "index_missing_or_stale"
         else:
             inactive_reason = "scope_over_cap"
         inactive_details = {
             "requested_repositories": requested_count,
             "accessible_repositories": accessible_count,
+            "indexed_document_count": indexed_document_count,
             "document_count": document_count,
             "repository_count": len(repo_ids),
             "max_files": FILE_OKAPI_MAX_FILES,
@@ -1264,6 +1286,8 @@ def file_okapi_search(
             inactive_reason=inactive_reason,
             inactive_details=inactive_details,
         )
+    if document_count == 0:
+        return FileOkapiSearchResult()
 
     query_terms_cte = _file_okapi_query_term_cte(terms, params)
     search_sql = text(
@@ -1899,7 +1923,7 @@ def hybrid_retrieve(
     else:
         weights.pop("path_token", None)
     if enable_file_okapi and file_okapi_candidates:
-        weights.setdefault("file_okapi", FILE_OKAPI_WEIGHT)
+        weights["file_okapi"] = FILE_OKAPI_WEIGHT
         branches.append(
             _align_file_level_candidates(
                 branches,

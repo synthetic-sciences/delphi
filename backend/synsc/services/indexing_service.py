@@ -1239,10 +1239,7 @@ class IndexingService:
 
         repo_id = existing.repo_id
 
-        if (
-            existing.file_okapi_index_version is not None
-            and existing.file_okapi_index_version != FILE_OKAPI_INDEX_VERSION
-        ):
+        if existing.file_okapi_index_version != FILE_OKAPI_INDEX_VERSION:
             logger.info(
                 "file-okapi index version mismatch, falling back to full re-index",
                 repo_id=repo_id,

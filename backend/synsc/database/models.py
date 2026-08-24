@@ -305,6 +305,7 @@ class RepositoryFileLexicalDocument(Base):
             "AND term_frequencies <> '{}'::jsonb",
             name="ck_file_lexical_documents_nonempty_terms",
         ),
+        Index("idx_file_lexical_documents_repo", "repo_id", "index_version"),
         Index(
             "idx_file_lexical_term_keys",
             "term_frequencies",

@@ -303,7 +303,10 @@ def test_diff_reindex_deletions_only_recounts_okapi_documents() -> None:
     assert existing.commit_sha == "new-sha"
 
 
-def test_diff_reindex_falls_back_when_file_okapi_version_mismatches() -> None:
+@pytest.mark.parametrize("stored_version", [None, "v0"])
+def test_diff_reindex_falls_back_when_file_okapi_version_mismatches(
+    stored_version: str | None,
+) -> None:
     from pathlib import Path
 
     from synsc.database.models import Repository
@@ -319,7 +322,7 @@ def test_diff_reindex_falls_back_when_file_okapi_version_mismatches() -> None:
         files_count=1,
         chunks_count=1,
         symbols_count=0,
-        file_okapi_index_version="v0",
+        file_okapi_index_version=stored_version,
         file_okapi_documents_count=1,
     )
 
@@ -380,6 +383,8 @@ def test_diff_reindex_null_content_hash_skips_okapi_but_indexes_chunks(
         files_count=1,
         chunks_count=1,
         symbols_count=0,
+        file_okapi_index_version=FILE_OKAPI_INDEX_VERSION,
+        file_okapi_documents_count=1,
     )
     null_hash_file = RepositoryFile(
         file_id="file-1",

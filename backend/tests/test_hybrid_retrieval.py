@@ -1135,6 +1135,30 @@ def test_file_okapi_sql_uses_canonical_formula_scope_and_total_order():
     assert candidates[0].sources["file_okapi"] > 0
 
 
+def test_file_okapi_scope_excludes_files_without_searchable_chunks():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    file_okapi_search(
+        session,
+        "user service",
+        "u1",
+        repo_ids=["repo-1"],
+    )
+
+    sql = session.calls[-1].sql
+    searchable_filter = (
+        "EXISTS ( SELECT 1 FROM code_chunks searchable_chunks "
+        "WHERE searchable_chunks.file_id = docs.file_id )"
+    )
+    assert sql.count(searchable_filter) == 2
+
+
 def test_file_okapi_fails_closed_when_index_version_missing():
     from synsc.services.hybrid_retrieval import file_okapi_search
 
@@ -1171,6 +1195,61 @@ def test_file_okapi_fails_closed_when_scope_exceeds_file_limit():
     )
     assert result.candidates == []
     assert result.inactive_reason == "scope_over_cap"
+    assert len(session.calls) == 1
+
+
+def test_file_okapi_scope_cap_counts_only_searchable_language_scoped_files():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [{"requested_count": 1, "accessible_count": 1, "document_count": 1}],
+            [],
+        ]
+    )
+    file_okapi_search(
+        session,
+        "user service",
+        "u1",
+        repo_ids=["repo-1"],
+        language="python",
+    )
+
+    scope_sql = session.calls[0].sql
+    assert "INNER JOIN repository_files rf ON d.file_id = rf.file_id" in scope_sql
+    assert (
+        "EXISTS ( SELECT 1 FROM code_chunks searchable_chunks "
+        "WHERE searchable_chunks.file_id = d.file_id )"
+    ) in scope_sql
+    assert "rf.language = :language" in scope_sql
+
+
+def test_file_okapi_empty_searchable_language_scope_is_clean_zero_hit():
+    from synsc.services.hybrid_retrieval import file_okapi_search
+
+    session = _FileOkapiRecordingSession(
+        [
+            [
+                {
+                    "requested_count": 1,
+                    "accessible_count": 1,
+                    "indexed_document_count": 2,
+                    "document_count": 0,
+                }
+            ]
+        ]
+    )
+    result = file_okapi_search(
+        session,
+        "user service",
+        "u1",
+        repo_ids=["repo-1"],
+        language="nonexistent",
+    )
+
+    assert result.candidates == []
+    assert result.inactive_reason is None
+    assert result.inactive_details is None
     assert len(session.calls) == 1
 
 
@@ -1316,6 +1395,8 @@ def test_file_okapi_selects_best_chunk_with_total_order():
         "ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id"
     ) in sql
     assert sql.count("ts_rank_cd(") == 1
+    assert "plainto_tsquery('english', :search_query)" in sql
+    assert "websearch_to_tsquery" not in sql
 
 
 def test_file_okapi_sql_expands_matching_docs_with_jsonb_each_text():

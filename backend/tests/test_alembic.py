@@ -118,7 +118,7 @@ def test_file_okapi_compact_migration_chains_after_symbol_parent_index():
     head_content = head_path.read_text()
     assert 'revision: str = "020_symbol_parent_index"' in head_content
     assert 'down_revision: Union[str, None] = "019_file_okapi"' in head_content
-    assert EXPECTED_ALEMBIC_REVISION == "021_file_okapi_compact"
+    assert EXPECTED_ALEMBIC_REVISION == "022_file_okapi_repo_scope_index"
 
 
 def test_file_okapi_migration_defines_persistent_schema():

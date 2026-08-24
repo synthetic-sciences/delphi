@@ -24,6 +24,17 @@ def test_tokenizer_splits_snake_camel_acronym_and_path_boundaries():
     ]
 
 
+def test_tokenizer_preserves_unicode_identifiers():
+    assert tokenize_file_okapi("src/naïve_Δelta/π_value.py") == [
+        "src",
+        "naïve",
+        "δelta",
+        "π",
+        "value",
+        "py",
+    ]
+
+
 def test_document_prepends_path_terms_once_and_counts_source_terms():
     document = build_file_okapi_document(
         "src/user_service.py",

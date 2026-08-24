@@ -484,7 +484,7 @@ def test_agent_search_reports_file_okapi_serving_configuration(monkeypatch) -> N
     candidates = _agent_candidates()
     candidates[0].sources["file_okapi"] = 0.75
     search_module = _stub_agent_search(monkeypatch, candidates)
-    monkeypatch.delenv("SYNSC_FUSION_WEIGHTS", raising=False)
+    monkeypatch.setenv("SYNSC_FUSION_WEIGHTS", "file_okapi=0.9")
 
     service = search_module.SearchService(user_id="user-id")
     monkeypatch.setattr(service.config.search, "enable_reranker", False)

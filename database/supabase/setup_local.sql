@@ -261,6 +261,9 @@ CREATE TABLE IF NOT EXISTS repository_file_lexical_documents (
         )
 );
 
+CREATE INDEX IF NOT EXISTS idx_file_lexical_documents_repo
+    ON repository_file_lexical_documents (repo_id, index_version);
+
 CREATE INDEX IF NOT EXISTS idx_file_lexical_term_keys
     ON repository_file_lexical_documents
     USING GIN (term_frequencies);

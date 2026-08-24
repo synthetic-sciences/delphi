@@ -1331,7 +1331,7 @@ def _retrieval_config_snapshot(
     else:
         fusion_weights.pop("path_token", None)
     if file_okapi_effective:
-        fusion_weights.setdefault("file_okapi", FILE_OKAPI_WEIGHT)
+        fusion_weights["file_okapi"] = FILE_OKAPI_WEIGHT
     else:
         fusion_weights.pop("file_okapi", None)
     snapshot: dict[str, Any] = {
