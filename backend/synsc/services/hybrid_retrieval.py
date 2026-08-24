@@ -977,6 +977,181 @@ def _file_okapi_rollback(session: Session) -> None:
         rollback()
 
 
+def _file_okapi_scope_document_from_and_where(
+    repo_placeholders: str,
+    language_filter: str,
+    *,
+    extra_docs_predicates: str = "",
+) -> str:
+    """Shared scoped-document join/filter for scope_docs and matching_docs."""
+    return f"""
+            FROM repository_file_lexical_documents docs
+            INNER JOIN repository_files rf ON docs.file_id = rf.file_id
+            INNER JOIN repositories r ON docs.repo_id = r.repo_id
+            INNER JOIN user_repositories ur
+                ON r.repo_id = ur.repo_id AND ur.user_id = :user_id
+            WHERE docs.repo_id IN ({repo_placeholders})
+              AND (r.is_public = TRUE OR r.indexed_by = :user_id)
+              AND docs.index_version = :index_version
+              {extra_docs_predicates}
+              {language_filter}"""
+
+
+def _file_okapi_search_sql(
+    repo_placeholders: str,
+    language_filter: str,
+    query_terms_cte: str,
+) -> str:
+    """Production file-Okapi search statement (used by file_okapi_search)."""
+    scope_from = _file_okapi_scope_document_from_and_where(
+        repo_placeholders,
+        language_filter,
+    )
+    matching_from = _file_okapi_scope_document_from_and_where(
+        repo_placeholders,
+        language_filter,
+        extra_docs_predicates=(
+            "AND docs.term_frequencies ?| CAST(:query_terms AS text[])"
+        ),
+    )
+    return f"""
+        WITH scope_docs AS NOT MATERIALIZED (
+            SELECT
+                docs.file_id,
+                docs.repo_id,
+                docs.document_length,
+                docs.term_frequencies,
+                rf.file_path,
+                rf.language
+            {scope_from}
+        ),
+        scope_stats AS (
+            SELECT
+                COUNT(*)::int AS document_count,
+                AVG(scope_docs.document_length)::float AS average_document_length
+            FROM scope_docs
+        ),
+        query_terms AS (
+            {query_terms_cte}
+        ),
+        matching_docs AS (
+            SELECT
+                docs.file_id,
+                docs.repo_id,
+                docs.document_length,
+                docs.term_frequencies,
+                rf.file_path,
+                rf.language
+            {matching_from}
+        ),
+        term_stats AS (
+            SELECT
+                query_terms.term,
+                COUNT(DISTINCT scope_docs.file_id)::int AS document_frequency
+            FROM query_terms
+            LEFT JOIN scope_docs
+                ON scope_docs.term_frequencies ? query_terms.term
+            GROUP BY query_terms.term
+        ),
+        file_scores AS (
+            SELECT
+                matching_docs.file_id,
+                matching_docs.repo_id,
+                matching_docs.file_path,
+                SUM(
+                    LN(1 + (
+                        stats.document_count - term_stats.document_frequency + 0.5
+                    ) / (term_stats.document_frequency + 0.5))
+                    * term_kv.freq_text::int * (:k1 + 1)
+                    / (
+                        term_kv.freq_text::int
+                        + :k1 * (
+                            1 - :b
+                            + :b * matching_docs.document_length
+                              / stats.average_document_length
+                        )
+                    )
+                ) AS score
+            FROM matching_docs
+            CROSS JOIN scope_stats stats
+            CROSS JOIN LATERAL jsonb_each_text(matching_docs.term_frequencies) AS term_kv(term, freq_text)
+            INNER JOIN query_terms ON term_kv.term = query_terms.term
+            INNER JOIN term_stats ON term_stats.term = query_terms.term
+            GROUP BY
+                matching_docs.file_id,
+                matching_docs.repo_id,
+                matching_docs.file_path,
+                stats.document_count,
+                stats.average_document_length
+        ),
+        ranked_files AS (
+            SELECT file_scores.*
+            FROM file_scores
+            WHERE score > 0
+            ORDER BY score DESC, file_path, repo_id, file_id
+            LIMIT :top_k
+        ),
+        chunk_ranks AS (
+            SELECT
+                cc.chunk_id,
+                cc.repo_id,
+                cc.file_id,
+                cc.content,
+                cc.start_line,
+                cc.end_line,
+                cc.chunk_index,
+                cc.chunk_type,
+                cc.language,
+                cc.symbol_names,
+                rf.file_path,
+                r.owner || '/' || r.name AS repo_name,
+                r.is_public,
+                ts_rank_cd(
+                    cc.content_tsv,
+                    websearch_to_tsquery('english', :search_query)
+                ) AS chunk_score
+            FROM code_chunks cc
+            INNER JOIN repository_files rf ON cc.file_id = rf.file_id
+            INNER JOIN repositories r ON cc.repo_id = r.repo_id
+            WHERE cc.file_id IN (SELECT file_id FROM ranked_files)
+        ),
+        best_chunks AS (
+            SELECT
+                chunk_ranks.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY file_id
+                    ORDER BY
+                        chunk_score DESC,
+                        chunk_index,
+                        repo_id,
+                        chunk_id
+                ) AS file_chunk_rank
+            FROM chunk_ranks
+        )
+        SELECT
+            best_chunks.chunk_id,
+            best_chunks.repo_id,
+            best_chunks.file_id,
+            best_chunks.content,
+            best_chunks.start_line,
+            best_chunks.end_line,
+            best_chunks.chunk_index,
+            best_chunks.chunk_type,
+            best_chunks.language,
+            best_chunks.symbol_names,
+            best_chunks.file_path,
+            best_chunks.repo_name,
+            best_chunks.is_public,
+            rf.score
+        FROM ranked_files rf
+        INNER JOIN best_chunks
+            ON best_chunks.file_id = rf.file_id
+            AND best_chunks.file_chunk_rank = 1
+        ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id
+        LIMIT :top_k
+        """
+
+
 def file_okapi_search(
     session: Session,
     query: str,
@@ -1092,145 +1267,7 @@ def file_okapi_search(
 
     query_terms_cte = _file_okapi_query_term_cte(terms, params)
     search_sql = text(
-        f"""
-        WITH scope_docs AS (
-            SELECT
-                docs.file_id,
-                docs.repo_id,
-                docs.document_length,
-                docs.term_frequencies,
-                rf.file_path,
-                rf.language
-            FROM repository_file_lexical_documents docs
-            INNER JOIN repository_files rf ON docs.file_id = rf.file_id
-            INNER JOIN repositories r ON docs.repo_id = r.repo_id
-            INNER JOIN user_repositories ur
-                ON r.repo_id = ur.repo_id AND ur.user_id = :user_id
-            WHERE docs.repo_id IN ({repo_placeholders})
-              AND (r.is_public = TRUE OR r.indexed_by = :user_id)
-              AND docs.index_version = :index_version
-              {language_filter}
-        ),
-        scope_stats AS (
-            SELECT
-                COUNT(*)::int AS document_count,
-                AVG(scope_docs.document_length)::float AS average_document_length
-            FROM scope_docs
-        ),
-        query_terms AS (
-            {query_terms_cte}
-        ),
-        matching_docs AS (
-            SELECT scope_docs.*
-            FROM scope_docs
-            WHERE scope_docs.term_frequencies ?| CAST(:query_terms AS text[])
-        ),
-        term_stats AS (
-            SELECT
-                query_terms.term,
-                COUNT(DISTINCT scope_docs.file_id)::int AS document_frequency
-            FROM query_terms
-            LEFT JOIN scope_docs
-                ON scope_docs.term_frequencies ? query_terms.term
-            GROUP BY query_terms.term
-        ),
-        file_scores AS (
-            SELECT
-                matching_docs.file_id,
-                matching_docs.repo_id,
-                matching_docs.file_path,
-                SUM(
-                    LN(1 + (
-                        stats.document_count - term_stats.document_frequency + 0.5
-                    ) / (term_stats.document_frequency + 0.5))
-                    * term_kv.freq_text::int * (:k1 + 1)
-                    / (
-                        term_kv.freq_text::int
-                        + :k1 * (
-                            1 - :b
-                            + :b * matching_docs.document_length
-                              / stats.average_document_length
-                        )
-                    )
-                ) AS score
-            FROM matching_docs
-            CROSS JOIN scope_stats stats
-            CROSS JOIN LATERAL jsonb_each_text(matching_docs.term_frequencies) AS term_kv(term, freq_text)
-            INNER JOIN query_terms ON term_kv.term = query_terms.term
-            INNER JOIN term_stats ON term_stats.term = query_terms.term
-            GROUP BY
-                matching_docs.file_id,
-                matching_docs.repo_id,
-                matching_docs.file_path,
-                stats.document_count,
-                stats.average_document_length
-        ),
-        ranked_files AS (
-            SELECT file_scores.*
-            FROM file_scores
-            WHERE score > 0
-            ORDER BY score DESC, file_path, repo_id, file_id
-            LIMIT :top_k
-        ),
-        chunk_ranks AS (
-            SELECT
-                cc.chunk_id,
-                cc.repo_id,
-                cc.file_id,
-                cc.content,
-                cc.start_line,
-                cc.end_line,
-                cc.chunk_index,
-                cc.chunk_type,
-                cc.language,
-                cc.symbol_names,
-                rf.file_path,
-                r.owner || '/' || r.name AS repo_name,
-                r.is_public,
-                ts_rank_cd(
-                    cc.content_tsv,
-                    websearch_to_tsquery('english', :search_query)
-                ) AS chunk_score
-            FROM code_chunks cc
-            INNER JOIN repository_files rf ON cc.file_id = rf.file_id
-            INNER JOIN repositories r ON cc.repo_id = r.repo_id
-            WHERE cc.file_id IN (SELECT file_id FROM ranked_files)
-        ),
-        best_chunks AS (
-            SELECT
-                chunk_ranks.*,
-                ROW_NUMBER() OVER (
-                    PARTITION BY file_id
-                    ORDER BY
-                        chunk_score DESC,
-                        chunk_index,
-                        repo_id,
-                        chunk_id
-                ) AS file_chunk_rank
-            FROM chunk_ranks
-        )
-        SELECT
-            best_chunks.chunk_id,
-            best_chunks.repo_id,
-            best_chunks.file_id,
-            best_chunks.content,
-            best_chunks.start_line,
-            best_chunks.end_line,
-            best_chunks.chunk_index,
-            best_chunks.chunk_type,
-            best_chunks.language,
-            best_chunks.symbol_names,
-            best_chunks.file_path,
-            best_chunks.repo_name,
-            best_chunks.is_public,
-            rf.score
-        FROM ranked_files rf
-        INNER JOIN best_chunks
-            ON best_chunks.file_id = rf.file_id
-            AND best_chunks.file_chunk_rank = 1
-        ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id
-        LIMIT :top_k
-        """
+        _file_okapi_search_sql(repo_placeholders, language_filter, query_terms_cte)
     )
     try:
         rows = session.execute(search_sql, params).mappings().all()

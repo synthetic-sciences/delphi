@@ -987,3 +987,143 @@ def test_file_okapi_search_returns_empty_for_zero_term_overlap(user_id):
         )
 
     assert results == []
+
+
+def test_file_okapi_search_plan_uses_gin_index_for_matching_docs(
+    user_id,
+):
+    """Production search must reach idx_file_lexical_term_keys for ?| pruning."""
+    import json
+
+    from sqlalchemy import text
+
+    from synsc.database.connection import get_session
+    from synsc.services.file_okapi import (
+        FILE_OKAPI_INDEX_VERSION,
+        FILE_OKAPI_QUERY_TERM_CAP,
+        build_file_okapi_document,
+        tokenize_file_okapi,
+    )
+    from synsc.services.hybrid_retrieval import (
+        FILE_OKAPI_B,
+        FILE_OKAPI_K1,
+        _file_okapi_query_term_cte,
+        _file_okapi_repo_placeholders,
+        _file_okapi_search_sql,
+    )
+
+    repo_id = str(uuid.uuid4())
+    matching_file_ids: list[str] = []
+    query = "http server get user"
+    terms = tokenize_file_okapi(query, limit=FILE_OKAPI_QUERY_TERM_CAP)
+
+    with get_session() as session:
+        session.execute(
+            text(
+                """
+                INSERT INTO repositories (
+                    repo_id, url, owner, name, branch, indexed_by,
+                    is_public, deep_indexed,
+                    file_okapi_index_version, file_okapi_documents_count
+                )
+                VALUES (
+                    :repo_id, :url, 'acme', 'service', 'main', :indexed_by,
+                    FALSE, TRUE, :index_version, :document_count
+                )
+                """
+            ),
+            {
+                "repo_id": repo_id,
+                "url": f"https://test/{repo_id}",
+                "indexed_by": user_id,
+                "index_version": FILE_OKAPI_INDEX_VERSION,
+                "document_count": 200,
+            },
+        )
+        session.execute(
+            text(
+                "INSERT INTO user_repositories (user_id, repo_id) "
+                "VALUES (:user_id, :repo_id)"
+            ),
+            {"user_id": user_id, "repo_id": repo_id},
+        )
+
+        for index in range(200):
+            file_id = str(uuid.uuid4())
+            if index < 3:
+                file_path = f"src/HTTPServer_{index}.py"
+                content = (
+                    "class HTTPServer:\n"
+                    "    def get_user(self, user_id):\n"
+                    "        return self.users[user_id]\n"
+                )
+                matching_file_ids.append(file_id)
+            else:
+                file_path = f"src/module_{index}.py"
+                content = f"def compute_{index}(value):\n    return value + {index}\n"
+
+            session.execute(
+                text(
+                    """
+                    INSERT INTO repository_files (
+                        file_id, repo_id, file_path, file_name, language
+                    )
+                    VALUES (:file_id, :repo_id, :file_path, :file_name, 'python')
+                    """
+                ),
+                {
+                    "file_id": file_id,
+                    "repo_id": repo_id,
+                    "file_path": file_path,
+                    "file_name": file_path.rsplit("/", 1)[-1],
+                },
+            )
+            document = build_file_okapi_document(file_path, content)
+            session.execute(
+                text(
+                    """
+                    INSERT INTO repository_file_lexical_documents (
+                        file_id, repo_id, document_length, content_hash,
+                        index_version, term_frequencies
+                    )
+                    VALUES (
+                        :file_id, :repo_id, :document_length, :content_hash,
+                        :index_version, CAST(:term_frequencies AS jsonb)
+                    )
+                    """
+                ),
+                {
+                    "file_id": file_id,
+                    "repo_id": repo_id,
+                    "document_length": document.document_length,
+                    "content_hash": f"hash-{index}",
+                    "index_version": FILE_OKAPI_INDEX_VERSION,
+                    "term_frequencies": json.dumps(document.term_frequencies),
+                },
+            )
+        session.execute(text("ANALYZE repository_file_lexical_documents"))
+        session.commit()
+
+    params: dict[str, object] = {
+        "user_id": user_id,
+        "index_version": FILE_OKAPI_INDEX_VERSION,
+        "k1": FILE_OKAPI_K1,
+        "b": FILE_OKAPI_B,
+        "top_k": 10,
+        "search_query": " ".join(terms),
+        "query_terms": terms,
+    }
+    repo_placeholders = _file_okapi_repo_placeholders([repo_id], params)
+    query_terms_cte = _file_okapi_query_term_cte(terms, params)
+    search_sql = _file_okapi_search_sql(repo_placeholders, "", query_terms_cte)
+
+    with get_session() as session:
+        session.execute(text("SET LOCAL enable_seqscan = off"))
+        plan_rows = session.execute(
+            text(f"EXPLAIN {search_sql}"),
+            params,
+        ).fetchall()
+
+    plan = "\n".join(row[0] for row in plan_rows)
+    assert "idx_file_lexical_term_keys" in plan, plan
+    assert matching_file_ids, "fixture must include query-overlap documents"

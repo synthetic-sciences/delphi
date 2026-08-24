@@ -1334,6 +1334,12 @@ def test_file_okapi_sql_expands_matching_docs_with_jsonb_each_text():
     file_scores_sql = sql[file_scores_start:file_scores_end]
     assert "matching_docs" in file_scores_sql
     assert "jsonb_each_text" in file_scores_sql
+    matching_docs_start = sql.index("matching_docs AS (")
+    matching_docs_end = sql.index("), term_stats AS (")
+    matching_docs_sql = sql[matching_docs_start:matching_docs_end]
+    assert "repository_file_lexical_documents docs" in matching_docs_sql
+    assert "FROM scope_docs" not in matching_docs_sql
+    assert "NOT MATERIALIZED" in sql
     assert "repository_file_lexical_terms" not in sql
 
 
