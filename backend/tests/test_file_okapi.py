@@ -35,6 +35,11 @@ def test_document_prepends_path_terms_once_and_counts_source_terms():
     assert document.document_length == sum(document.term_frequencies.values())
 
 
+def test_document_rejects_zero_retained_terms() -> None:
+    with pytest.raises(ValueError, match="no retained terms"):
+        build_file_okapi_document("123/456", "789 000 +++")
+
+
 def test_document_rejects_more_than_token_cap(monkeypatch):
     monkeypatch.setattr(file_okapi, "FILE_OKAPI_DOCUMENT_TOKEN_CAP", 3)
     with pytest.raises(ValueError, match="token cap"):

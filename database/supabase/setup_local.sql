@@ -185,10 +185,6 @@ WHERE visibility IS NULL;
 ALTER TABLE repositories
     ALTER COLUMN visibility SET DEFAULT 'public',
     ALTER COLUMN visibility SET NOT NULL;
-ALTER TABLE repositories
-    ADD COLUMN IF NOT EXISTS file_okapi_index_version VARCHAR(32),
-    ADD COLUMN IF NOT EXISTS file_okapi_documents_count
-        INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_repos_public ON repositories(is_public);
 CREATE INDEX IF NOT EXISTS idx_repositories_visibility ON repositories(visibility);
@@ -247,6 +243,8 @@ CREATE INDEX IF NOT EXISTS idx_files_language ON repository_files(language);
 -- ============================================================================
 -- PART 6A: FILE-LEVEL OKAPI LEXICAL STATISTICS
 -- ============================================================================
+-- Bootstrap uses UUID FK columns (consistent with repository_files/repos).
+-- Alembic migration 019 uses VARCHAR(36) for the same logical identifiers.
 
 CREATE TABLE IF NOT EXISTS repository_file_lexical_documents (
     file_id UUID PRIMARY KEY

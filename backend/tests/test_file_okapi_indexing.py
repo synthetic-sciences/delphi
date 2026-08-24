@@ -111,6 +111,30 @@ def test_add_file_okapi_rows_rejects_over_cap_without_partial_rows(
     assert session.added == []
 
 
+def test_add_file_okapi_rows_rejects_zero_token_document_without_partial_rows() -> None:
+    service = IndexingService()
+    session = RecordingSession()
+    db_file = RepositoryFile(
+        file_id="file-1",
+        repo_id="repo-1",
+        file_path="123/456",
+        file_name="456",
+        content_hash="hash",
+    )
+
+    count = service._add_file_okapi_rows(
+        session,
+        repo_id="repo-1",
+        repository_file=db_file,
+        file_path="123/456",
+        content="789 000 +++",
+        content_hash="hash",
+    )
+
+    assert count == 0
+    assert session.added == []
+
+
 def test_full_index_sets_repository_okapi_version_and_count(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -207,3 +231,82 @@ def test_full_index_sets_repository_okapi_version_and_count(
                     text("DELETE FROM repositories WHERE repo_id = :repo_id"),
                     {"repo_id": repo_id},
                 )
+
+
+def test_diff_reindex_deletions_only_recounts_okapi_documents() -> None:
+    from pathlib import Path
+
+    from synsc.database.models import CodeChunk, Repository, RepositoryFile, Symbol
+
+    service = IndexingService()
+    existing = Repository(
+        repo_id="repo-1",
+        url="https://github.com/acme/example",
+        owner="acme",
+        name="example",
+        branch="main",
+        commit_sha="old-sha",
+        files_count=1,
+        chunks_count=1,
+        symbols_count=0,
+        file_okapi_index_version=FILE_OKAPI_INDEX_VERSION,
+        file_okapi_documents_count=1,
+    )
+    deleted_file = RepositoryFile(
+        file_id="file-old",
+        repo_id="repo-1",
+        file_path="old.py",
+        file_name="old.py",
+        content_hash="old-hash",
+    )
+
+    counts = {
+        RepositoryFile: 0,
+        CodeChunk: 0,
+        Symbol: 0,
+        RepositoryFileLexicalDocument: 0,
+    }
+
+    class _CountQuery:
+        def __init__(self, model: type[object]) -> None:
+            self._model = model
+
+        def filter(self, *_args: object, **_kwargs: object) -> _CountQuery:
+            return self
+
+        def count(self) -> int:
+            return counts[self._model]
+
+    class _FakeSession:
+        def execute(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def flush(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def query(self, model: type[object]) -> _CountQuery:
+            return _CountQuery(model)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        service,
+        "_compute_file_diff",
+        lambda *_args, **_kwargs: ([], [], [deleted_file]),
+    )
+    monkeypatch.setattr(service, "_delete_file_data", lambda *_args, **_kwargs: None)
+    try:
+        result = service._diff_reindex(
+            _FakeSession(),
+            existing,
+            Path("/tmp/example"),
+            [],
+            "new-sha",
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert result is not None
+    assert result["file_okapi_documents_count"] == 0
+    assert existing.file_okapi_index_version is None
+    assert existing.file_okapi_documents_count == 0
+    assert existing.commit_sha == "new-sha"

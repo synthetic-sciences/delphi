@@ -85,6 +85,9 @@ def build_file_okapi_document(file_path: str, content: str) -> FileOkapiDocument
         frequencies[term] += 1
 
     document_length = sum(frequencies.values())
+    if document_length == 0:
+        msg = "document has no retained terms"
+        raise ValueError(msg)
     if document_length > FILE_OKAPI_DOCUMENT_TOKEN_CAP:
         msg = f"document exceeds token cap ({FILE_OKAPI_DOCUMENT_TOKEN_CAP})"
         raise ValueError(msg)

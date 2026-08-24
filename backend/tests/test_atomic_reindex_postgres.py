@@ -392,12 +392,33 @@ def test_failed_diff_reindex_preserves_last_good_index_and_reports_failure(
     assert result["success"] is False
     assert "diff embedding failed" in result["error"]
     with get_session() as session:
-        chunks = session.execute(
-            text("SELECT COUNT(*) FROM code_chunks WHERE repo_id = :repo_id"),
+        row = session.execute(
+            text(
+                """
+                SELECT r.file_okapi_index_version,
+                       r.file_okapi_documents_count,
+                       COUNT(DISTINCT c.chunk_id) AS chunks,
+                       COUNT(DISTINCT d.file_id) AS lexical_docs,
+                       COUNT(DISTINCT t.file_id || ':' || t.term) AS lexical_terms
+                FROM repositories r
+                LEFT JOIN code_chunks c ON c.repo_id = r.repo_id
+                LEFT JOIN repository_file_lexical_documents d
+                    ON d.repo_id = r.repo_id
+                LEFT JOIN repository_file_lexical_terms t
+                    ON t.repo_id = r.repo_id
+                WHERE r.repo_id = :repo_id
+                GROUP BY r.file_okapi_index_version,
+                         r.file_okapi_documents_count
+                """
+            ),
             {"repo_id": seeded_repository["repo_id"]},
-        ).scalar_one()
+        ).one()
 
-    assert chunks == 1
+    assert row.chunks == 1
+    assert row.file_okapi_index_version == "v1"
+    assert row.file_okapi_documents_count == 1
+    assert row.lexical_docs == 1
+    assert row.lexical_terms == 2
 
 
 def test_stale_candidate_is_rejected_after_concurrent_commit(
