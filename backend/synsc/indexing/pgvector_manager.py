@@ -152,8 +152,20 @@ class PgVectorManager:
                 ),
                 {"timeout": f"{timeout_ms}ms"},
             )
-            # Tune HNSW search quality — ef_search=100 gives good recall
-            session.execute(text("SET LOCAL hnsw.ef_search = 100"))
+            search_config = get_config().search
+            session.execute(
+                text(
+                    "SELECT set_config("
+                    "'hnsw.ef_search', :ef_search, true)"
+                ),
+                {"ef_search": str(search_config.hnsw_ef_search)},
+            )
+            if search_config.vector_exact_scan:
+                # Exact nearest-neighbour scan: bypass the HNSW index so the
+                # ranking is a pure function of the stored vectors. Costs a
+                # sequential scan per query; meant for evaluation runs and
+                # small corpora where reproducibility beats latency.
+                session.execute(text("SET LOCAL enable_indexscan = off"))
 
             # Format the vector as a string for direct SQL embedding
             # This is safe since we control the embedding generation
@@ -210,7 +222,7 @@ class PgVectorManager:
                     INNER JOIN code_chunks cc ON ce.chunk_id = cc.chunk_id
                     INNER JOIN repository_files rf ON cc.file_id = rf.file_id
                     WHERE 1=1 {extra_filters}
-                    ORDER BY ce.embedding <=> '{vector_str}'::vector
+                    ORDER BY ce.embedding <=> '{vector_str}'::vector, ce.chunk_id
                     LIMIT :top_k
                 """),
                 query_params

@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from sqlalchemy import text
 
@@ -390,3 +391,84 @@ def test_stale_candidate_is_rejected_after_concurrent_commit(
             {"repo_id": seeded_repository["repo_id"]},
         ).scalar_one()
     assert commit_sha == "winner-sha"
+
+
+def test_local_index_flushes_valid_files_when_final_input_is_skipped(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A skipped final file must not strand earlier valid files in the batch."""
+    from synsc.database.connection import get_session
+    from synsc.services.indexing_service import IndexingService
+
+    valid_content = (
+        "def answer(values):\n"
+        "    total = 0\n"
+        "    for value in values:\n"
+        "        total += value\n"
+        "    return total\n"
+    )
+    (tmp_path / "main.py").write_text(valid_content)
+    (tmp_path / "empty.py").write_text("")
+
+    service = IndexingService()
+    service.git_client.list_files = lambda *_args, **_kwargs: [
+        {
+            "path": "main.py",
+            "name": "main.py",
+            "size_bytes": len(valid_content),
+            "content": valid_content,
+        },
+        {
+            "path": "empty.py",
+            "name": "empty.py",
+            "size_bytes": 0,
+            "content": "",
+        },
+    ]
+
+    class FixedEmbeddingGenerator:
+        batch_size = 64
+        model_name = "test-fixed-768"
+
+        def generate(self, texts: list[str]) -> np.ndarray:
+            vectors = np.zeros((len(texts), 768), dtype=np.float32)
+            vectors[:, 0] = 1.0
+            return vectors
+
+    service._embedding_generator = FixedEmbeddingGenerator()
+    monkeypatch.setattr(service, "_build_code_graph_safe", lambda *_args: None)
+
+    result: dict[str, object] = {}
+    try:
+        result = service.index_local_folder(
+            str(tmp_path),
+            user_id=str(uuid.uuid4()),
+            quality_mode="agent",
+        )
+
+        assert result["success"] is True
+        assert int(result["chunks_created"]) >= 1
+        with get_session() as session:
+            counts = session.execute(
+                text(
+                    """
+                    SELECT COUNT(DISTINCT c.chunk_id) AS chunks,
+                           COUNT(DISTINCT e.embedding_id) AS embeddings
+                    FROM code_chunks c
+                    LEFT JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
+                    WHERE c.repo_id = :repo_id
+                    """
+                ),
+                {"repo_id": result["repo_id"]},
+            ).one()
+        assert counts.chunks >= 1
+        assert counts.embeddings == counts.chunks
+    finally:
+        repo_id = result.get("repo_id")
+        if repo_id:
+            with get_session() as session:
+                session.execute(
+                    text("DELETE FROM repositories WHERE repo_id = :repo_id"),
+                    {"repo_id": repo_id},
+                )

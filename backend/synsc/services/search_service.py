@@ -314,6 +314,91 @@ def _related_path_pattern(query: str) -> str | None:
     return None
 
 
+_EVIDENCE_KEY_TOKENS = {
+    "comment",
+    "diff",
+    "hunk",
+    "patch",
+    "review",
+    "excerpt",
+    "failure",
+    "trace",
+    "traceback",
+}
+
+
+def _query_anchor_paths(query: str) -> set[str]:
+    """Repository paths the request already carries in full.
+
+    A structured developer envelope that quotes evidence — a review comment
+    with its diff hunk, a failing command with its trace — names the file the
+    evidence came from. The requester has that file open; what they are
+    missing is the *other* side of the story (the implementation behind a
+    reviewed test, the config that consumes a changed schema). Returning the
+    quoted file back to them spends top-of-page slots on zero new
+    information, so those paths are demoted below everything else.
+
+    Only envelopes that actually quote evidence qualify. A plain
+    ``{"intent": "explain", "file": "x.py"}`` request keeps its file ranked
+    normally, because there the file is the subject, not the evidence.
+    """
+    try:
+        payload = json.loads(query)
+    except (json.JSONDecodeError, TypeError):
+        return set()
+    if not isinstance(payload, dict) or not _is_structured_developer_query(payload):
+        return set()
+
+    has_evidence = False
+    paths: set[str] = set()
+
+    def collect(key: str, value: Any) -> None:
+        nonlocal has_evidence
+        normalized_key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
+        key_tokens = set(normalized_key.split("_"))
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                collect(str(nested_key), nested_value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                collect(key, item)
+            return
+        if not isinstance(value, str):
+            return
+        if key_tokens & _EVIDENCE_KEY_TOKENS:
+            has_evidence = True
+        if _structured_query_priority(normalized_key) != 2:
+            return
+        candidate = value.strip().replace("\\", "/")
+        if (
+            "/" not in candidate
+            or "://" in candidate
+            or candidate.startswith(("/", "~"))
+            or ".." in candidate.split("/")
+        ):
+            return
+        paths.add(candidate)
+
+    for field, field_value in payload.items():
+        collect(str(field), field_value)
+    return paths if has_evidence else set()
+
+
+def _demote_anchor_paths(
+    results: list[dict[str, Any]],
+    anchor_paths: set[str],
+) -> list[dict[str, Any]]:
+    """Stable-partition results so anchor-file chunks rank after the rest."""
+    if not anchor_paths:
+        return results
+    fresh = [r for r in results if r.get("file_path") not in anchor_paths]
+    quoted = [r for r in results if r.get("file_path") in anchor_paths]
+    if not quoted or not fresh:
+        return results
+    return fresh + quoted
+
+
 def _compact_structured_query(
     payload: dict[str, Any],
     *,
@@ -1000,7 +1085,7 @@ def _select_source_diverse_results(
     if top_k <= 0 or not results:
         return []
     if len(results) <= top_k:
-        return list(results)
+        return _select_file_diverse_results(results, top_k=top_k)
 
     selected = _select_file_diverse_results(results, top_k=top_k)
 
@@ -1009,10 +1094,36 @@ def _select_source_diverse_results(
     # Preserve the semantic baseline first, then the highest-precision
     # lexical branches. Trigram precedes broad BM25 so small result windows
     # still retain the only branch able to recover a misspelled identifier.
-    for source in ("vector", "symbol", "path", "trigram", "bm25"):
+    file_level_sources = {"file_bm25", "path_token"}
+
+    def represents_source(
+        result: dict[str, Any],
+        source_name: str,
+    ) -> bool:
+        sources = result.get("candidate_sources") or {}
+        if source_name not in sources:
+            return False
+        return (
+            source_name not in file_level_sources
+            or set(sources) == {source_name}
+        )
+
+    for source in (
+        "vector",
+        "symbol",
+        "path",
+        "path_affinity",
+        "path_token",
+        "trigram",
+        "file_bm25",
+        "bm25",
+    ):
+        # File-level evidence is aligned onto the strongest existing chunk in
+        # the file before fusion. That agreement must not consume the branch's
+        # only preservation slot: retain one standalone candidate so the
+        # branch can introduce a genuinely new file into the rerank window.
         if any(
-            source in (result.get("candidate_sources") or {})
-            for result in selected
+            represents_source(result, source) for result in selected
         ):
             continue
 
@@ -1020,7 +1131,7 @@ def _select_source_diverse_results(
             (
                 result
                 for result in results
-                if source in (result.get("candidate_sources") or {})
+                if represents_source(result, source)
                 and id(result) not in selected_ids
             ),
             None,
@@ -1034,12 +1145,14 @@ def _select_source_diverse_results(
                 source_counts[result_source] = (
                     source_counts.get(result_source, 0) + 1
                 )
+        candidate_sources = set(candidate.get("candidate_sources") or {})
         replacement_index = next(
             (
                 index
                 for index in range(len(selected) - 1, -1, -1)
                 if all(
                     source_counts.get(result_source, 0) > 1
+                    or result_source in candidate_sources
                     for result_source in (
                         selected[index].get("candidate_sources") or {}
                     )
@@ -1055,7 +1168,7 @@ def _select_source_diverse_results(
         selected_ids.add(id(candidate))
 
     selected.sort(key=lambda result: original_rank[id(result)])
-    return selected
+    return _select_file_diverse_results(selected, top_k=len(selected))
 
 
 def _enrich_results_with_context(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1170,6 +1283,63 @@ def _enrich_results_with_context(results: list[dict[str, Any]]) -> list[dict[str
     return results
 
 
+def _retrieval_config_snapshot(
+    search_config: Any,
+    *,
+    use_hybrid: bool,
+    use_rerank: bool,
+    embedding_model: str,
+    repo_scoped: bool,
+) -> dict[str, Any]:
+    """Return the non-secret serving configuration that determined a ranking."""
+    from synsc.services.hybrid_retrieval import (
+        FILE_DIVERSE_BM25_WEIGHT,
+        PATH_TOKEN_WEIGHT,
+        RRF_K,
+        configured_weights,
+    )
+
+    file_bm25_active = (
+        use_hybrid and search_config.enable_file_diverse_bm25
+    )
+    path_token_active = (
+        use_hybrid
+        and repo_scoped
+        and search_config.enable_path_token_search
+    )
+    fusion_weights = dict(configured_weights()) if use_hybrid else {}
+    if file_bm25_active:
+        fusion_weights.setdefault("file_bm25", FILE_DIVERSE_BM25_WEIGHT)
+    else:
+        fusion_weights.pop("file_bm25", None)
+    if path_token_active:
+        fusion_weights.setdefault("path_token", PATH_TOKEN_WEIGHT)
+    else:
+        fusion_weights.pop("path_token", None)
+    return {
+        "vector_mode": "exact" if search_config.vector_exact_scan else "hnsw",
+        "hnsw_ef_search": search_config.hnsw_ef_search,
+        "embedding_model": embedding_model,
+        "hybrid_enabled": use_hybrid,
+        "hybrid_candidates": search_config.hybrid_candidates,
+        "hybrid_rerank_k": search_config.hybrid_rerank_k,
+        "file_diverse_bm25": file_bm25_active,
+        "path_token_search": path_token_active,
+        "fusion_weights": dict(sorted(fusion_weights.items())),
+        "rrf_k": RRF_K,
+        "reranker_enabled": use_rerank,
+        "reranker_model": search_config.reranker_model,
+        "reranker_blend_alpha": search_config.reranker_blend_alpha,
+        "code_reranker_enabled": search_config.use_code_reranker,
+        "query_expansion_enabled": search_config.enable_query_expansion,
+        "query_expansion_model": search_config.query_expansion_model,
+        "listwise_rerank_enabled": search_config.enable_listwise_rerank,
+        "listwise_rerank_model": search_config.listwise_rerank_model,
+        "listwise_rerank_k": search_config.listwise_rerank_k,
+        "llm_seed": search_config.llm_seed,
+    }
+
+
 class SearchService:
     """Service for semantic code search.
     
@@ -1216,9 +1386,10 @@ class SearchService:
 
         ACCESS CONTROL: Only searches repos in user's collection.
 
-        In agent quality mode (default for MCP), runs five retrieval branches
-        — vector, BM25, exact symbol, exact path, trigram — fuses them, and
-        preserves high-recall rank with stable file-level diversity.
+        In agent quality mode (default for MCP), runs vector, BM25, exact
+        symbol, exact path, related-path affinity, and trigram retrieval,
+        fuses them, and preserves high-recall rank with stable file-level
+        diversity. An optional file-level BM25 branch can also be enabled.
         Pure-vector search used to lose the identifier battle on queries like
         ``handleAuthCallback`` or ``go.mod``; hybrid recovers them.
 
@@ -1294,10 +1465,32 @@ class SearchService:
             # inventing terms for them would manufacture false precision.
             from synsc.services.query_expansion import embedding_text
 
-            embed_input, query_expanded = embedding_text(retrieval_query)
+            embed_input, query_expanded = embedding_text(
+                retrieval_query, raw_query=query
+            )
             t_embed = time.time()
-            query_embedding = self.embedding_generator.generate_single(
-                embed_input
+            # Hosted embedding APIs return slightly different floats for the
+            # same text, which moves near-tied candidates across the HNSW cut.
+            # Caching the first vector per exact input keeps repeated searches
+            # on one ranking and skips the round-trip.
+            from synsc.core.llm_cache import BoundedCache, get_cache
+
+            embed_cache = get_cache(
+                "query-embedding",
+                self.config.search.llm_cache_entries,
+                persistent_path=self.config.search.llm_cache_db,
+            )
+            embed_key = BoundedCache.key(
+                (
+                    f"{type(self.embedding_generator).__module__}."
+                    f"{type(self.embedding_generator).__qualname__}"
+                ),
+                getattr(self.embedding_generator, "model_name", "?"),
+                embed_input,
+            )
+            query_embedding = embed_cache.get_or_compute(
+                embed_key,
+                lambda: self.embedding_generator.generate_single(embed_input),
             )
             embed_ms = (time.time() - t_embed) * 1000
             if stopped():
@@ -1345,6 +1538,12 @@ class SearchService:
                         language=language,
                         file_pattern=effective_file_pattern,
                         top_k=fetch_k,
+                        enable_file_diverse_bm25=(
+                            self.config.search.enable_file_diverse_bm25
+                        ),
+                        enable_path_token_search=(
+                            self.config.search.enable_path_token_search
+                        ),
                     )
                 db_ms = (time.time() - t_db) * 1000
                 raw_results = [c.to_dict() for c in fused]
@@ -1352,7 +1551,16 @@ class SearchService:
                     "candidates": len(fused),
                     "sources_hit": {
                         src: sum(1 for c in fused if src in c.sources)
-                        for src in ("vector", "bm25", "symbol", "path", "trigram")
+                        for src in (
+                            "vector",
+                            "bm25",
+                            "file_bm25",
+                            "symbol",
+                            "path",
+                            "path_affinity",
+                            "path_token",
+                            "trigram",
+                        )
                     },
                 }
                 # Path filter is part of hybrid retrieval already, no need to
@@ -1401,8 +1609,16 @@ class SearchService:
             if not agent_mode:
                 _apply_metadata_scoring(raw_results, query=retrieval_query)
 
-            # Re-sort after boosting + metadata adjustments
-            raw_results.sort(key=lambda r: r["similarity"], reverse=True)
+            # Re-sort after boosting + metadata adjustments. Secondary keys
+            # give equal-scored chunks a total order so ties can never flip
+            # between otherwise-identical searches.
+            raw_results.sort(
+                key=lambda r: (
+                    -float(r.get("similarity") or 0.0),
+                    str(r.get("file_path") or ""),
+                    str(r.get("chunk_id") or ""),
+                )
+            )
 
             # 3. Optional cross-encoder reranking (blended with fused/vector
             #    similarity), gated by SYNSC_ENABLE_RERANKER.
@@ -1449,6 +1665,16 @@ class SearchService:
                     "error": "Search cancelled or timed out",
                     "results": [],
                 }
+
+            # A request that quotes evidence from a file (review comment with
+            # its diff hunk, failing command with its trace) is asking for the
+            # context *around* that file, not the file itself. Demote the
+            # quoted file's chunks below everything else — after the
+            # cross-encoder blend so nothing re-promotes them — so the final
+            # page and the listwise window carry new information.
+            raw_results = _demote_anchor_paths(
+                raw_results, _query_anchor_paths(query)
+            )
 
             if agent_mode:
                 # Keep high-recall branch candidates and avoid returning many
@@ -1562,6 +1788,17 @@ class SearchService:
                 "search_time_ms": elapsed_time,
                 "quality_mode": effective_mode,
                 "hybrid": hybrid_meta,
+                "retrieval_config": _retrieval_config_snapshot(
+                    self.config.search,
+                    use_hybrid=use_hybrid,
+                    use_rerank=use_rerank,
+                    embedding_model=getattr(
+                        self.embedding_generator,
+                        "model_name",
+                        type(self.embedding_generator).__name__,
+                    ),
+                    repo_scoped=bool(repo_ids),
+                ),
                 "timing": {
                     "embedding_ms": round(embed_ms, 1),
                     "db_search_ms": round(db_ms, 1),
@@ -1651,6 +1888,9 @@ class SearchService:
                     "error": "File not found",
                 }
             
+            indexed_chunks = session.query(CodeChunk).filter(
+                CodeChunk.file_id == db_file.file_id
+            ).count()
             content = None
             source = None
             
@@ -1715,6 +1955,7 @@ class SearchService:
                 "start_line": start_line or 1,
                 "end_line": end_line or total_lines,
                 "source": source,  # "local" or "chunks"
+                "indexed_chunks": indexed_chunks,
                 "is_public": repo.is_public,
             }
     

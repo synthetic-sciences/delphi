@@ -24,10 +24,12 @@ import httpx
 import structlog
 
 from synsc.config import get_config
+from synsc.core.llm_cache import BoundedCache, get_cache
 
 logger = structlog.get_logger(__name__)
 
 _ENDPOINT = "https://api.openai.com/v1/chat/completions"
+_PROMPT_REV = "listwise-v1"
 
 _SYSTEM_PROMPT = (
     "You rank candidate source files by how directly each one answers a "
@@ -111,28 +113,51 @@ def listwise_rerank(
     tail = results[depth:]
     prompt = build_prompt(query, head, config.search.listwise_excerpt_chars)
 
-    try:
-        response = httpx.post(
-            _ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": config.search.listwise_rerank_model,
-                "messages": [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_completion_tokens": 300,
-                "temperature": 0.0,
-            },
-            timeout=config.search.listwise_timeout_seconds,
-        )
-        response.raise_for_status()
-        reply = response.json()["choices"][0]["message"]["content"]
-    except Exception as exc:  # noqa: BLE001 - ranking must never fail a search
-        logger.warning("listwise rerank failed", error=str(exc)[:200])
+    # The model resamples even at temperature 0, so the same page of
+    # candidates can come back in a different order on the next call. Cache
+    # the reply per exact prompt: repeated searches reorder identically and
+    # skip the API round-trip entirely.
+    cache = get_cache(
+        "listwise-rerank",
+        config.search.llm_cache_entries,
+        persistent_path=config.search.llm_cache_db,
+    )
+    cache_key = BoundedCache.key(
+        _PROMPT_REV,
+        config.search.listwise_rerank_model,
+        str(config.search.llm_seed),
+        prompt,
+    )
+
+    def fetch_reply() -> str | None:
+        try:
+            response = httpx.post(
+                _ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": config.search.listwise_rerank_model,
+                    "messages": [
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_completion_tokens": 300,
+                    "temperature": 0.0,
+                    "seed": config.search.llm_seed,
+                },
+                timeout=config.search.listwise_timeout_seconds,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+            return content if isinstance(content, str) else None
+        except Exception as exc:  # noqa: BLE001 - ranking must never fail a search
+            logger.warning("listwise rerank failed", error=str(exc)[:200])
+            return None
+
+    reply = cache.get_or_compute(cache_key, fetch_reply)
+    if reply is None:
         return results
 
     order = parse_order(reply, len(head))

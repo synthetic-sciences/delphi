@@ -38,6 +38,7 @@ from synsc.database.models import (
 from synsc.embeddings.generator import get_embedding_generator
 from synsc.indexing.vector_store import get_vector_store
 from synsc.parsing.registry import get_parser_registry
+from synsc.services.indexing_service import _MAX_INDEXED_FILE_BYTES
 from synsc.services.job_queue_service import get_job_queue_service
 from synsc.workers.connector_worker import ConnectorSyncRunner
 from synsc.workers.research_worker import ResearchJobRunner
@@ -57,7 +58,19 @@ def _read_repository_file(
     file_path = file_info["path"]
     full_path = repo_path / file_path
     try:
+        if full_path.stat().st_size > _MAX_INDEXED_FILE_BYTES:
+            return {
+                "file_path": file_path,
+                "success": False,
+                "error": "file_too_large",
+            }
         content = full_path.read_text(errors="replace")
+        if "\x00" in content:
+            return {
+                "file_path": file_path,
+                "success": False,
+                "error": "binary_content",
+            }
         return {
             "file_path": file_path,
             "content": content,

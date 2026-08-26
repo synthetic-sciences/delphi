@@ -192,6 +192,143 @@ def test_source_diversity_prioritizes_typo_recovery_in_two_result_window() -> No
     ]
 
 
+def test_source_diversity_preserves_file_level_lexical_branch() -> None:
+    ranked = [
+        _result("vector-1", "src/vector_1.py", 0.9),
+        _result("vector-2", "src/vector_2.py", 0.8),
+        _result("vector-3", "src/vector_3.py", 0.7),
+        _result("bm25-1", "src/bm25.py", 0.6),
+        _result("trigram-1", "src/trigram.py", 0.5),
+        _result("file-bm25-1", "src/file_bm25.py", 0.4),
+    ]
+    for row in ranked[:3]:
+        row["candidate_sources"] = {"vector": 1.0}
+    ranked[3]["candidate_sources"] = {"bm25": 1.0}
+    ranked[4]["candidate_sources"] = {"trigram": 1.0}
+    ranked[5]["candidate_sources"] = {"file_bm25": 1.0}
+
+    selected = _select_source_diverse_results(ranked, top_k=3)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "vector-1",
+        "trigram-1",
+        "file-bm25-1",
+    ]
+
+
+def test_source_diversity_preserves_related_path_branch() -> None:
+    ranked = [
+        _result("vector-1", "src/vector_1.py", 0.9),
+        _result("vector-2", "src/vector_2.py", 0.8),
+        _result("path-affinity-1", "tests/test_related.py", 0.2),
+    ]
+    ranked[0]["candidate_sources"] = {"vector": 1.0}
+    ranked[1]["candidate_sources"] = {"vector": 0.9}
+    ranked[2]["candidate_sources"] = {"path_affinity": 0.8}
+
+    selected = _select_source_diverse_results(ranked, top_k=2)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "vector-1",
+        "path-affinity-1",
+    ]
+
+
+def test_source_diversity_preserves_path_token_branch() -> None:
+    ranked = [
+        _result("vector-1", "src/vector_1.py", 0.9),
+        _result("vector-2", "src/vector_2.py", 0.8),
+        _result("path-token-1", "src/direct_origin.py", 0.2),
+    ]
+    ranked[0]["candidate_sources"] = {"vector": 1.0}
+    ranked[1]["candidate_sources"] = {"vector": 0.9}
+    ranked[2]["candidate_sources"] = {"path_token": 0.8}
+
+    selected = _select_source_diverse_results(ranked, top_k=2)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "vector-1",
+        "path-token-1",
+    ]
+
+
+def test_source_diversity_preserves_novel_path_token_file() -> None:
+    ranked = [
+        _result("aligned-1", "src/types.py", 0.9),
+        _result("vector-2", "src/vector_2.py", 0.8),
+        _result("path-token-only", "src/default_types.py", 0.2),
+    ]
+    ranked[0]["candidate_sources"] = {"vector": 1.0, "path_token": 0.9}
+    ranked[1]["candidate_sources"] = {"vector": 0.8}
+    ranked[2]["candidate_sources"] = {"path_token": 0.7}
+
+    selected = _select_source_diverse_results(ranked, top_k=2)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "aligned-1",
+        "path-token-only",
+    ]
+
+
+def test_source_diversity_replaces_aligned_candidate_with_novel_file() -> None:
+    ranked = [
+        _result("aligned-1", "src/types.py", 0.9),
+        _result("vector-symbol", "src/parser.py", 0.8),
+        _result("path-token-only", "src/default_types.py", 0.2),
+    ]
+    ranked[0]["candidate_sources"] = {"vector": 1.0, "path_token": 0.9}
+    ranked[1]["candidate_sources"] = {"vector": 0.8, "symbol": 0.7}
+    ranked[2]["candidate_sources"] = {"path_token": 0.7}
+
+    selected = _select_source_diverse_results(ranked, top_k=2)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "vector-symbol",
+        "path-token-only",
+    ]
+
+
+def test_source_diversity_reorders_duplicate_files_without_truncation() -> None:
+    ranked = [
+        _result("a-1", "src/a.py", 0.9),
+        _result("a-2", "src/a.py", 0.85),
+        _result("b-1", "src/b.py", 0.8),
+        _result("c-1", "src/c.py", 0.7),
+    ]
+    for row in ranked:
+        row["candidate_sources"] = {"vector": 1.0}
+
+    selected = _select_source_diverse_results(ranked, top_k=len(ranked))
+
+    assert [row["chunk_id"] for row in selected] == [
+        "a-1",
+        "b-1",
+        "c-1",
+        "a-2",
+    ]
+
+
+def test_source_diversity_keeps_duplicate_files_deferred_after_selection() -> None:
+    ranked = [
+        _result("a-1", "src/a.py", 0.9),
+        _result("a-2", "src/a.py", 0.85),
+        _result("b-1", "src/b.py", 0.8),
+        _result("b-2", "src/b.py", 0.75),
+        _result("c-1", "src/c.py", 0.7),
+    ]
+    for row in ranked:
+        row["candidate_sources"] = {"vector": 1.0}
+
+    selected = _select_source_diverse_results(ranked, top_k=4)
+
+    assert [row["chunk_id"] for row in selected] == [
+        "a-1",
+        "b-1",
+        "c-1",
+        "a-2",
+    ]
+
+
 def test_source_diversity_top_one_preserves_best_ranked_result() -> None:
     ranked = [
         _result("vector-1", "src/vector.py", 0.9),
@@ -228,6 +365,184 @@ def test_agent_search_uses_high_recall_file_selection(monkeypatch) -> None:
     assert [row["chunk_id"] for row in result["results"]] == ["a-1", "b-1"]
 
 
+def test_agent_search_reports_related_path_branch_coverage(monkeypatch) -> None:
+    candidates = _agent_candidates()
+    candidates[2].sources["path_affinity"] = 0.75
+    search_module = _stub_agent_search(monkeypatch, candidates)
+
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    result = service.search_code(
+        query="find the related implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    assert result["success"] is True
+    assert result["hybrid"]["sources_hit"]["path_affinity"] == 1
+
+
+def test_agent_search_reports_path_token_branch_coverage(monkeypatch) -> None:
+    candidates = _agent_candidates()
+    candidates[2].sources["path_token"] = 0.75
+    search_module = _stub_agent_search(monkeypatch, candidates)
+
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    result = service.search_code(
+        query="find the direct origin implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    assert result["success"] is True
+    assert result["hybrid"]["sources_hit"]["path_token"] == 1
+
+
+def test_agent_search_reports_serving_retrieval_configuration(monkeypatch) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    monkeypatch.setenv(
+        "SYNSC_FUSION_WEIGHTS",
+        "file_bm25=0.17,path_token=0.11",
+    )
+
+    service = search_module.SearchService(user_id="user-id")
+    monkeypatch.setattr(service.config.search, "enable_reranker", False)
+    monkeypatch.setattr(service.config.search, "vector_exact_scan", True)
+    monkeypatch.setattr(service.config.search, "hnsw_ef_search", 321)
+    monkeypatch.setattr(
+        service.config.search,
+        "enable_file_diverse_bm25",
+        True,
+    )
+    monkeypatch.setattr(
+        service.config.search,
+        "enable_path_token_search",
+        True,
+    )
+    result = service.search_code(
+        query="find the related implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    assert result["retrieval_config"]["vector_mode"] == "exact"
+    assert result["retrieval_config"]["hnsw_ef_search"] == 321
+    assert result["retrieval_config"]["file_diverse_bm25"] is True
+    assert result["retrieval_config"]["fusion_weights"]["file_bm25"] == 0.17
+    assert result["retrieval_config"]["path_token_search"] is True
+    assert result["retrieval_config"]["fusion_weights"]["path_token"] == 0.11
+
+
+def test_path_token_default_fusion_weight_is_point_one(monkeypatch) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    monkeypatch.delenv("SYNSC_FUSION_WEIGHTS", raising=False)
+
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.config.search.enable_path_token_search = True
+    result = service.search_code(
+        query="find the related implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    assert result["retrieval_config"]["fusion_weights"]["path_token"] == 0.10
+
+
+def test_serving_configuration_omits_disabled_optional_branch_weights(
+    monkeypatch,
+) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    monkeypatch.setenv(
+        "SYNSC_FUSION_WEIGHTS",
+        "file_bm25=0.17,path_token=0.11",
+    )
+
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.config.search.enable_file_diverse_bm25 = False
+    service.config.search.enable_path_token_search = False
+    result = service.search_code(
+        query="find the related implementation",
+        repo_ids=["repo-id"],
+        top_k=3,
+        quality_mode="agent",
+    )
+
+    weights = result["retrieval_config"]["fusion_weights"]
+    assert "file_bm25" not in weights
+    assert "path_token" not in weights
+
+
+def test_serving_configuration_marks_path_token_inactive_without_scope_or_hybrid(
+    monkeypatch,
+) -> None:
+    from synsc.services.search_service import _retrieval_config_snapshot
+
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.config.search.enable_path_token_search = True
+
+    unscoped = service.search_code(
+        query="find the related implementation",
+        repo_ids=None,
+        top_k=3,
+        quality_mode="agent",
+    )
+    non_hybrid_config = _retrieval_config_snapshot(
+        service.config.search,
+        use_hybrid=False,
+        use_rerank=False,
+        embedding_model="fake-embedding",
+        repo_scoped=True,
+    )
+
+    for config in (unscoped["retrieval_config"], non_hybrid_config):
+        assert config["path_token_search"] is False
+        assert "path_token" not in config["fusion_weights"]
+
+
+def test_agent_search_uses_persistent_query_embedding_cache(
+    monkeypatch,
+) -> None:
+    import synsc.core.llm_cache as cache_module
+
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    cache_calls: list[tuple[str, dict[str, object]]] = []
+
+    class _ComputeCache:
+        def get_or_compute(self, _key, compute):
+            return compute()
+
+    def capture_cache(*_args, **kwargs):
+        cache_calls.append((str(_args[0]), kwargs))
+        return _ComputeCache()
+
+    monkeypatch.setattr(cache_module, "get_cache", capture_cache)
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.config.search.llm_cache_db = "/tmp/search-stage-cache.sqlite3"
+
+    service.search_code(
+        query="find the related implementation",
+        repo_ids=["repo-id"],
+        top_k=2,
+        quality_mode="agent",
+    )
+
+    assert (
+        "query-embedding",
+        {"persistent_path": "/tmp/search-stage-cache.sqlite3"},
+    ) in cache_calls
+
+
 def test_agent_search_probes_related_paths_from_structured_context(
     monkeypatch,
 ) -> None:
@@ -243,6 +558,7 @@ def test_agent_search_probes_related_paths_from_structured_context(
     monkeypatch.setattr(hybrid_module, "hybrid_retrieve", capture_hybrid)
     service = search_module.SearchService(user_id="user-id")
     service.config.search.enable_reranker = False
+    service.config.search.enable_file_diverse_bm25 = True
     result = service.search_code(
         query=json.dumps(
             {
@@ -257,6 +573,32 @@ def test_agent_search_probes_related_paths_from_structured_context(
 
     assert result["success"] is True
     assert captured["file_pattern"] == "*model*loading*"
+    assert captured["enable_file_diverse_bm25"] is True
+
+
+def test_agent_search_passes_path_token_flag(monkeypatch) -> None:
+    search_module = _stub_agent_search(monkeypatch, _agent_candidates())
+    captured: dict[str, object] = {}
+
+    def capture_hybrid(**kwargs):
+        captured.update(kwargs)
+        return _agent_candidates()
+
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    monkeypatch.setattr(hybrid_module, "hybrid_retrieve", capture_hybrid)
+    service = search_module.SearchService(user_id="user-id")
+    service.config.search.enable_reranker = False
+    service.config.search.enable_path_token_search = True
+    result = service.search_code(
+        query="find direct origin",
+        repo_ids=["repo-id"],
+        top_k=2,
+        quality_mode="agent",
+    )
+
+    assert result["success"] is True
+    assert captured["enable_path_token_search"] is True
 
 
 def test_agent_search_preserves_explicit_file_pattern(monkeypatch) -> None:
@@ -321,8 +663,8 @@ def test_agent_search_honors_explicit_reranker(monkeypatch) -> None:
         quality_mode="agent",
     )
 
-    assert calls == [["a-1", "a-2", "b-1"]]
-    assert [row["chunk_id"] for row in result["results"]] == ["b-1", "a-2"]
+    assert calls == [["a-1", "b-1", "a-2"]]
+    assert [row["chunk_id"] for row in result["results"]] == ["a-2", "b-1"]
 
 
 # ── Intent-aware demotion ────────────────────────────────────────────────────

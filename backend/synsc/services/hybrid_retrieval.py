@@ -14,17 +14,22 @@ Candidate sources:
   4. **Exact symbol**: lookup in the ``symbols`` table by name /
      qualified_name. Pinpoints function/class definitions on the first hit.
   5. **Exact path**: lookup in ``repository_files`` by path or glob.
+  6. **Path token** (opt-in): repository-local IDF overlap between query
+     tokens and normalized file paths. Recovers terse issue/commit vocabulary
+     that appears in a filename but not in chunk content.
 
 Each branch produces ``Candidate`` rows; we score-normalize per branch,
 union (keyed by chunk_id), then optionally rerank the top 50.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import time
+from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -304,7 +309,7 @@ def bm25_search(
         INNER JOIN repository_files rf ON cc.file_id = rf.file_id
         WHERE cc.content_tsv @@ websearch_to_tsquery('english', :query)
         {extra}
-        ORDER BY score DESC
+        ORDER BY score DESC, rf.file_path, cc.chunk_index, cc.repo_id, cc.chunk_id
         LIMIT :top_k
         """
     )
@@ -338,6 +343,107 @@ def bm25_search(
         # is exactly why fusion uses rank position rather than magnitude.
         c.sources["bm25"] = float(r["score"])
         out.append(c)
+    return out
+
+
+def file_diverse_bm25_search(
+    session: Session,
+    query: str,
+    user_id: str,
+    repo_ids: list[str] | None = None,
+    language: str | None = None,
+    top_k: int = 50,
+) -> list[Candidate]:
+    """Return the best lexical chunk from each of the top distinct files.
+
+    Chunk-level BM25 can spend most of its window on several chunks from one
+    large file. This branch uses the same indexed query but collapses matches
+    by ``file_id`` before applying ``top_k``, exposing file-diverse lexical
+    evidence to fusion without a benchmark-specific final-list quota.
+    """
+    if not query.strip():
+        return []
+
+    params: dict[str, Any] = {
+        "query": " or ".join(extract_identifiers(query)) or query,
+        "user_id": user_id,
+        "top_k": top_k,
+    }
+    extra = ""
+    if repo_ids:
+        ph = ", ".join([f":rid_{i}" for i in range(len(repo_ids))])
+        extra += f" AND cc.repo_id IN ({ph})"
+        for i, rid in enumerate(repo_ids):
+            params[f"rid_{i}"] = rid
+    if language:
+        extra += " AND cc.language = :language"
+        params["language"] = language
+
+    sql = text(
+        f"""
+        WITH lexical_chunks AS (
+            SELECT
+                cc.chunk_id, cc.repo_id, cc.file_id,
+                cc.content, cc.start_line, cc.end_line,
+                cc.chunk_index, cc.chunk_type, cc.language, cc.symbol_names,
+                rf.file_path,
+                r.owner || '/' || r.name AS repo_name,
+                r.is_public,
+                ts_rank_cd(
+                    cc.content_tsv,
+                    websearch_to_tsquery('english', :query)
+                ) AS score
+            FROM code_chunks cc
+            {_user_repo_filter()}
+            INNER JOIN repository_files rf ON cc.file_id = rf.file_id
+            WHERE cc.content_tsv @@ websearch_to_tsquery('english', :query)
+            {extra}
+        ),
+        ranked_files AS (
+            SELECT
+                lexical_chunks.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY file_id
+                    ORDER BY score DESC, chunk_index, repo_id, chunk_id
+                ) AS file_rank
+            FROM lexical_chunks
+        )
+        SELECT
+            chunk_id, repo_id, file_id,
+            content, start_line, end_line,
+            chunk_index, chunk_type, language, symbol_names,
+            file_path, repo_name, is_public, score
+        FROM ranked_files
+        WHERE file_rank = 1
+        ORDER BY score DESC, file_path, chunk_index, repo_id, chunk_id
+        LIMIT :top_k
+        """
+    )
+    try:
+        rows = session.execute(sql, params).mappings().all()
+    except Exception as e:
+        logger.warning("file-diverse BM25 branch failed", error=str(e))
+        return []
+
+    out: list[Candidate] = []
+    for row in rows:
+        candidate = Candidate(
+            chunk_id=str(row["chunk_id"]),
+            repo_id=str(row["repo_id"]),
+            file_id=str(row["file_id"]),
+            repo_name=row["repo_name"] or "",
+            file_path=row["file_path"] or "",
+            content=row["content"] or "",
+            start_line=row["start_line"],
+            end_line=row["end_line"],
+            chunk_index=row["chunk_index"],
+            chunk_type=row["chunk_type"] or "code",
+            language=row["language"],
+            symbol_names=row["symbol_names"],
+            is_public=bool(row["is_public"]),
+        )
+        candidate.sources["file_bm25"] = float(row["score"])
+        out.append(candidate)
     return out
 
 
@@ -504,7 +610,8 @@ def exact_symbol_search(
                 AND (r.is_public = TRUE OR r.indexed_by = :user_id)
             WHERE ({match_conditions})
             {extra}
-            ORDER BY sym_score DESC, s.start_line
+            ORDER BY sym_score DESC, s.repo_id, s.file_id,
+                     s.start_line, s.symbol_id
             LIMIT :top_k
         )
         SELECT
@@ -521,7 +628,8 @@ def exact_symbol_search(
             AND cc.end_line >= ms.start_line
         INNER JOIN repository_files rf ON cc.file_id = rf.file_id
         INNER JOIN repositories r ON cc.repo_id = r.repo_id
-        ORDER BY ms.sym_score DESC, cc.start_line
+        ORDER BY ms.sym_score DESC, rf.file_path, cc.chunk_index,
+                 cc.repo_id, cc.chunk_id, ms.symbol_id
         LIMIT :top_k
         """
     )
@@ -564,6 +672,223 @@ _PATH_EXT_RE = re.compile(
 def _normalize_path_token(value: str) -> str:
     """Casefold and drop separators so ``grpc_proxy`` matches ``grpcproxy``."""
     return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+_PATH_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_ACRONYM_BOUNDARY_RE = re.compile(r"([A-Z]+)([A-Z][a-z])")
+_CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
+PATH_TOKEN_MAX_FILES = 50_000
+
+
+def _path_tokens(value: str) -> list[str]:
+    """Split prose or paths on punctuation, separators, and camel case."""
+    value = _ACRONYM_BOUNDARY_RE.sub(r"\1 \2", value)
+    value = _CAMEL_BOUNDARY_RE.sub(r"\1 \2", value)
+    return [token.lower() for token in _PATH_TOKEN_RE.findall(value)]
+
+
+def _rank_path_token_files(
+    query: str,
+    files: list[dict[str, Any]],
+    *,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Rank repository paths by repository-local IDF token overlap.
+
+    The score deliberately mirrors the development diagnostic: repeated query
+    terms receive logarithmic weight, path terms use repository-local inverse
+    document frequency, and long paths receive square-root normalization.
+    """
+    if top_k <= 0 or not query.strip() or not files:
+        return []
+
+    query_counts = Counter(_path_tokens(query))
+    if not query_counts:
+        return []
+
+    by_repo: dict[str, list[tuple[dict[str, Any], set[str]]]] = {}
+    for row in files:
+        path_tokens = set(_path_tokens(str(row.get("file_path") or "")))
+        by_repo.setdefault(str(row.get("repo_id") or ""), []).append(
+            (row, path_tokens)
+        )
+
+    scored: list[tuple[float, str, str, str, dict[str, Any]]] = []
+    for repo_id, repo_files in by_repo.items():
+        document_frequency = Counter(
+            token for _, tokens in repo_files for token in tokens
+        )
+        repository_size = max(1, len(repo_files))
+        for row, path_tokens in repo_files:
+            score = sum(
+                (1.0 + math.log(count))
+                * math.log(
+                    (repository_size + 1)
+                    / (1 + document_frequency[token])
+                    + 1
+                )
+                for token, count in query_counts.items()
+                if token in path_tokens
+            ) / max(1.0, math.sqrt(len(path_tokens)))
+            if score <= 0:
+                continue
+            scored.append(
+                (
+                    -score,
+                    repo_id,
+                    str(row.get("file_path") or ""),
+                    str(row.get("file_id") or ""),
+                    row,
+                )
+            )
+
+    scored.sort(key=lambda item: item[:4])
+    ranked: list[dict[str, Any]] = []
+    for negative_score, _, _, _, row in scored[:top_k]:
+        ranked_row = dict(row)
+        ranked_row["path_token_score"] = -negative_score
+        ranked.append(ranked_row)
+    return ranked
+
+
+def path_token_search(
+    session: Session,
+    query: str,
+    user_id: str,
+    repo_ids: list[str] | None = None,
+    language: str | None = None,
+    top_k: int = 25,
+    max_files: int = PATH_TOKEN_MAX_FILES,
+) -> list[Candidate]:
+    """Return one representative chunk from paths sharing rare query tokens.
+
+    The branch is intentionally repository-scoped. Pulling every visible path
+    for an account-wide query would turn a bounded recall signal into an
+    unbounded scan.
+    """
+    if not repo_ids or top_k <= 0 or max_files <= 0 or not query.strip():
+        return []
+
+    params: dict[str, Any] = {
+        "user_id": user_id,
+        "path_scan_limit": max_files + 1,
+    }
+    repo_placeholders = ", ".join(
+        f":repo_id_{index}" for index in range(len(repo_ids))
+    )
+    for index, repo_id in enumerate(repo_ids):
+        params[f"repo_id_{index}"] = repo_id
+    language_filter = ""
+    if language:
+        language_filter = " AND rf.language = :language"
+        params["language"] = language
+
+    file_sql = text(
+        f"""
+        SELECT rf.file_id, rf.repo_id, rf.file_path
+        FROM repository_files rf
+        INNER JOIN user_repositories ur
+            ON rf.repo_id = ur.repo_id AND ur.user_id = :user_id
+        INNER JOIN repositories r
+            ON rf.repo_id = r.repo_id
+            AND (r.is_public = TRUE OR r.indexed_by = :user_id)
+        WHERE rf.repo_id IN ({repo_placeholders})
+        {language_filter}
+        AND EXISTS (
+            SELECT 1
+            FROM code_chunks path_chunk
+            WHERE path_chunk.file_id = rf.file_id
+        )
+        ORDER BY rf.repo_id, rf.file_path, rf.file_id
+        LIMIT :path_scan_limit
+        """
+    )
+    try:
+        file_rows = session.execute(file_sql, params).mappings().all()
+    except Exception as exc:
+        logger.warning("path-token file scan failed", error=str(exc))
+        return []
+
+    if len(file_rows) > max_files:
+        logger.warning(
+            "path-token file scan exceeded limit",
+            files_seen=len(file_rows),
+            max_files=max_files,
+        )
+        return []
+
+    ranked_files = _rank_path_token_files(
+        query,
+        [dict(row) for row in file_rows],
+        top_k=top_k,
+    )
+    if not ranked_files:
+        return []
+
+    chunk_params: dict[str, Any] = {}
+    file_placeholders = []
+    for index, row in enumerate(ranked_files):
+        placeholder = f"file_id_{index}"
+        file_placeholders.append(f":{placeholder}")
+        chunk_params[placeholder] = row["file_id"]
+
+    chunk_sql = text(
+        f"""
+        WITH ranked_chunks AS (
+            SELECT
+                cc.chunk_id, cc.repo_id, cc.file_id,
+                cc.content, cc.start_line, cc.end_line,
+                cc.chunk_index, cc.chunk_type, cc.language, cc.symbol_names,
+                rf.file_path,
+                r.owner || '/' || r.name AS repo_name,
+                r.is_public,
+                ROW_NUMBER() OVER (
+                    PARTITION BY cc.file_id
+                    ORDER BY cc.chunk_index, cc.repo_id, cc.chunk_id
+                ) AS file_chunk_rank
+            FROM code_chunks cc
+            INNER JOIN repository_files rf ON cc.file_id = rf.file_id
+            INNER JOIN repositories r ON cc.repo_id = r.repo_id
+            WHERE cc.file_id IN ({", ".join(file_placeholders)})
+        )
+        SELECT *
+        FROM ranked_chunks
+        WHERE file_chunk_rank = 1
+        ORDER BY repo_id, file_path, chunk_index, chunk_id
+        """
+    )
+    try:
+        chunk_rows = session.execute(chunk_sql, chunk_params).mappings().all()
+    except Exception as exc:
+        logger.warning("path-token chunk lookup failed", error=str(exc))
+        return []
+
+    chunks_by_file = {str(row["file_id"]): row for row in chunk_rows}
+    candidates: list[Candidate] = []
+    for file_row in ranked_files:
+        chunk_row = chunks_by_file.get(str(file_row["file_id"]))
+        if chunk_row is None:
+            continue
+        candidate = Candidate(
+            chunk_id=str(chunk_row["chunk_id"]),
+            repo_id=str(chunk_row["repo_id"]),
+            file_id=str(chunk_row["file_id"]),
+            repo_name=chunk_row["repo_name"] or "",
+            file_path=chunk_row["file_path"] or "",
+            content=chunk_row["content"] or "",
+            start_line=chunk_row["start_line"],
+            end_line=chunk_row["end_line"],
+            chunk_index=chunk_row["chunk_index"],
+            chunk_type=chunk_row["chunk_type"] or "code",
+            language=chunk_row["language"],
+            symbol_names=chunk_row["symbol_names"],
+            is_public=bool(chunk_row["is_public"]),
+        )
+        candidate.sources["path_token"] = float(
+            file_row["path_token_score"]
+        )
+        candidates.append(candidate)
+    return candidates
 
 
 # URLs in a pasted issue body or PR description carry filenames that have
@@ -651,7 +976,8 @@ def path_affinity_search(
                 r.is_public,
                 {best_score} AS score,
                 ROW_NUMBER() OVER (
-                    PARTITION BY cc.file_id ORDER BY cc.chunk_index
+                    PARTITION BY cc.file_id
+                    ORDER BY cc.chunk_index, cc.repo_id, cc.chunk_id
                 ) AS chunk_rank
             FROM code_chunks cc
             {_user_repo_filter()}
@@ -663,14 +989,15 @@ def path_affinity_search(
             SELECT *,
                 ROW_NUMBER() OVER (
                     PARTITION BY regexp_replace(file_path, '/[^/]*$', '')
-                    ORDER BY score DESC, length(file_path)
+                    ORDER BY score DESC, length(file_path), file_path,
+                             repo_id, chunk_id
                 ) AS dir_rank
             FROM scored
             WHERE chunk_rank = 1
         )
         SELECT * FROM per_directory
         WHERE dir_rank <= :per_dir
-        ORDER BY score DESC, length(file_path)
+        ORDER BY score DESC, length(file_path), file_path, repo_id, chunk_id
         LIMIT :top_k
         """
     )
@@ -750,7 +1077,7 @@ def exact_path_search(
         INNER JOIN repository_files rf ON cc.file_id = rf.file_id
         WHERE rf.file_path ILIKE :pattern
         {extra}
-        ORDER BY rf.file_path, cc.chunk_index
+        ORDER BY rf.file_path, cc.chunk_index, cc.repo_id, cc.chunk_id
         LIMIT :top_k
         """
     )
@@ -831,6 +1158,8 @@ DEFAULT_WEIGHTS = {
 # et al. (2009); large enough that the gap between rank 1 and rank 2 does not
 # dwarf the agreement signal from a second branch.
 RRF_K = 60
+FILE_DIVERSE_BM25_WEIGHT = 0.15
+PATH_TOKEN_WEIGHT = 0.10
 
 
 def configured_weights() -> dict[str, float]:
@@ -855,6 +1184,72 @@ def configured_weights() -> dict[str, float]:
         except ValueError:
             logger.warning("ignoring malformed fusion weight", entry=part)
     return weights
+
+
+def _align_file_level_candidates(
+    candidate_branches: list[list[Candidate]],
+    file_candidates: list[Candidate],
+    weights: dict[str, float],
+    rrf_k: int = RRF_K,
+) -> list[Candidate]:
+    """Attach one file-level signal to that file's strongest existing chunk.
+
+    Fusion is chunk-based so independently retrieved chunks from the same file
+    would otherwise fail to agree. For each file-level candidate, reuse the
+    identity of the strongest already retrieved chunk in that file while
+    retaining the file branch's own rank and score. Files absent from all
+    existing branches keep their lexical chunk and can still enter the union.
+    """
+    strength_by_chunk: dict[tuple[str, str], tuple[float, Candidate]] = {}
+    for branch in candidate_branches:
+        for rank, candidate in enumerate(branch, start=1):
+            if not candidate.file_id:
+                continue
+            contribution = sum(
+                weights.get(source, 0.0) / (rrf_k + rank)
+                for source in candidate.sources
+            )
+            key = (candidate.file_id, str(candidate.chunk_id))
+            current_chunk = strength_by_chunk.get(key)
+            if current_chunk is None:
+                strength_by_chunk[key] = (contribution, candidate)
+            else:
+                representative = current_chunk[1]
+                if len(candidate.content) > len(representative.content):
+                    representative = candidate
+                strength_by_chunk[key] = (
+                    current_chunk[0] + contribution,
+                    representative,
+                )
+
+    strongest_by_file: dict[str, tuple[float, Candidate]] = {}
+    for (file_id, _chunk_id), (strength, candidate) in strength_by_chunk.items():
+        current = strongest_by_file.get(file_id)
+        if (
+            current is None
+            or strength > current[0]
+            or (
+                strength == current[0]
+                and str(candidate.chunk_id) < str(current[1].chunk_id)
+            )
+        ):
+            strongest_by_file[file_id] = (strength, candidate)
+
+    aligned: list[Candidate] = []
+    for file_candidate in file_candidates:
+        existing = strongest_by_file.get(file_candidate.file_id)
+        if existing is None:
+            aligned.append(file_candidate)
+            continue
+        aligned.append(
+            replace(
+                existing[1],
+                sources=dict(file_candidate.sources),
+                source_ranks={},
+                fused_score=0.0,
+            )
+        )
+    return aligned
 
 
 def fuse_candidates(
@@ -919,12 +1314,16 @@ def fuse_candidates(
         )
         c.fused_score = raw / best_possible if best_possible > 0 else 0.0
 
-    # Ties on reciprocal rank fall back to the strongest raw branch score, so
-    # ordering stays deterministic instead of depending on dict insertion.
+    # Ties on reciprocal rank fall back to the strongest raw branch score and
+    # finally to chunk_id, so ordering is a total order that never depends on
+    # dict insertion (which itself inherits branch arrival order).
     out = sorted(
         by_chunk.values(),
-        key=lambda c: (c.fused_score, max(c.sources.values(), default=0.0)),
-        reverse=True,
+        key=lambda c: (
+            -c.fused_score,
+            -max(c.sources.values(), default=0.0),
+            str(c.chunk_id),
+        ),
     )
     return out
 
@@ -940,6 +1339,8 @@ def hybrid_retrieve(
     file_pattern: str | None = None,
     top_k: int = 50,
     enable_bm25: bool = True,
+    enable_file_diverse_bm25: bool = False,
+    enable_path_token_search: bool = False,
     enable_trigram: bool = True,
     enable_symbol: bool = True,
     enable_path: bool = True,
@@ -952,6 +1353,8 @@ def hybrid_retrieve(
     """
     t_start = time.time()
     branches: list[list[Candidate]] = []
+    file_bm25_candidates: list[Candidate] = []
+    path_token_candidates: list[Candidate] = []
     timing: dict[str, Any] = {}
 
     # 1. Vector (always — it's the baseline)
@@ -988,6 +1391,20 @@ def hybrid_retrieve(
         )
         timing["path_affinity_ms"] = (time.time() - t) * 1000
 
+    # 2c. Query/path token overlap — a bounded, repository-scoped file signal
+    # for terse requests whose vocabulary appears in the path but not content.
+    if enable_path_token_search:
+        t = time.time()
+        path_token_candidates = path_token_search(
+            session=session,
+            query=query,
+            user_id=user_id,
+            repo_ids=repo_ids,
+            language=language,
+            top_k=min(top_k, 25),
+        )
+        timing["path_token_ms"] = (time.time() - t) * 1000
+
     # 3. BM25
     if enable_bm25:
         t = time.time()
@@ -997,6 +1414,14 @@ def hybrid_retrieve(
             )
         )
         timing["bm25_ms"] = (time.time() - t) * 1000
+
+    # 3b. File-diverse BM25 — opt-in until the native ablation is complete.
+    if enable_file_diverse_bm25:
+        t = time.time()
+        file_bm25_candidates = file_diverse_bm25_search(
+            session, query, user_id, repo_ids, language, top_k=top_k
+        )
+        timing["file_bm25_ms"] = (time.time() - t) * 1000
 
     # 4. Exact symbol — biggest precision win for identifier queries
     if enable_symbol:
@@ -1018,15 +1443,40 @@ def hybrid_retrieve(
         )
         timing["trigram_ms"] = (time.time() - t) * 1000
 
-    fused = fuse_candidates(branches)
+    weights = dict(configured_weights())
+    if enable_file_diverse_bm25 and file_bm25_candidates:
+        weights.setdefault("file_bm25", FILE_DIVERSE_BM25_WEIGHT)
+        branches.append(
+            _align_file_level_candidates(
+                branches,
+                file_bm25_candidates,
+                weights,
+            )
+        )
+    else:
+        weights.pop("file_bm25", None)
+    if enable_path_token_search and path_token_candidates:
+        weights.setdefault("path_token", PATH_TOKEN_WEIGHT)
+        branches.append(
+            _align_file_level_candidates(
+                branches,
+                path_token_candidates,
+                weights,
+            )
+        )
+    else:
+        weights.pop("path_token", None)
+    fused = fuse_candidates(branches, weights=weights)
     timing["total_ms"] = (time.time() - t_start) * 1000
     timing["candidates"] = len(fused)
     timing["sources"] = {
         "vector": sum(1 for c in fused if "vector" in c.sources),
         "bm25": sum(1 for c in fused if "bm25" in c.sources),
+        "file_bm25": sum(1 for c in fused if "file_bm25" in c.sources),
         "symbol": sum(1 for c in fused if "symbol" in c.sources),
         "path": sum(1 for c in fused if "path" in c.sources),
         "path_affinity": sum(1 for c in fused if "path_affinity" in c.sources),
+        "path_token": sum(1 for c in fused if "path_token" in c.sources),
         "trigram": sum(1 for c in fused if "trigram" in c.sources),
     }
     logger.debug("hybrid_retrieve timing", **timing)

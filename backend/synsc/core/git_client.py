@@ -24,6 +24,18 @@ from synsc.config import get_config
 logger = structlog.get_logger(__name__)
 
 _FULL_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_AGENT_GENERATED_SOURCE_PATTERNS = frozenset(
+    {
+        "*.generated.*",
+        "*.gen.*",
+        "*-generated.*",
+        "*_generated.*",
+        "*.g.dart",
+        "*.g.go",
+        "*.pb.go",
+        "*_pb2.py",
+    }
+)
 
 
 class GitClient:
@@ -487,6 +499,12 @@ class GitClient:
 
         # Combine patterns
         patterns = list(self.git_config.exclude_patterns)
+        if self.effective_quality_mode == "agent":
+            patterns = [
+                pattern
+                for pattern in patterns
+                if pattern not in _AGENT_GENERATED_SOURCE_PATTERNS
+            ]
 
         # In agent mode, never apply fast_mode_skip_patterns even if fast_mode
         # is on globally — agent mode is opinionated about keeping tests/docs.

@@ -120,6 +120,42 @@ def test_read_repository_file_detects_language_from_path(tmp_path: Path) -> None
     }
 
 
+def test_read_repository_file_rejects_oversized_generated_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "channelz.pb.go"
+    source.write_text("x" * 101)
+    monkeypatch.setattr(indexing_worker, "_MAX_INDEXED_FILE_BYTES", 100)
+
+    result = indexing_worker._read_repository_file(
+        tmp_path,
+        {"path": "channelz.pb.go"},
+    )
+
+    assert result == {
+        "file_path": "channelz.pb.go",
+        "success": False,
+        "error": "file_too_large",
+    }
+
+
+def test_read_repository_file_rejects_nul_generated_source(tmp_path: Path) -> None:
+    source = tmp_path / "messages_pb2.py"
+    source.write_bytes(b"prefix\x00suffix")
+
+    result = indexing_worker._read_repository_file(
+        tmp_path,
+        {"path": "messages_pb2.py"},
+    )
+
+    assert result == {
+        "file_path": "messages_pb2.py",
+        "success": False,
+        "error": "binary_content",
+    }
+
+
 def test_create_repository_job_forwards_requested_branch(client, monkeypatch) -> None:
     """The job API preserves an explicitly requested non-main branch."""
     service = SimpleNamespace(create_job=Mock(return_value={"success": True}))

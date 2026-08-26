@@ -1820,56 +1820,63 @@ class IndexingService:
                     total_files=total_files,
                 )
 
-            if not content:
-                continue
-            if len(content.encode("utf-8", errors="ignore")) > _MAX_INDEXED_FILE_BYTES:
+            skip_file = not content
+            if (
+                not skip_file
+                and len(content.encode("utf-8", errors="ignore"))
+                > _MAX_INDEXED_FILE_BYTES
+            ):
                 logger.info(
                     "skipping oversized file (would overflow tsvector limit)",
                     file_path=file_path, bytes=len(content), cap=_MAX_INDEXED_FILE_BYTES,
                 )
-                continue
+                skip_file = True
             # Postgres TEXT columns cannot store NUL (0x00) bytes — any file
             # that contains them is almost always a misdetected binary blob
             # (pandas ships pickled fixtures and Parquet/Arrow data, NumPy
             # ships .npy/.npz). Skipping is the right move; even if we
             # sanitized the NULs out, embedding/chunking a binary file
             # produces garbage hits.
-            if "\x00" in content:
+            if not skip_file and "\x00" in content:
                 logger.info(
                     "skipping binary-content file (contains NUL bytes)",
                     file_path=file_path,
                 )
-                continue
+                skip_file = True
 
-            # Detect language
-            language = detect_language(file_path)
+            if not skip_file:
+                # Detect language
+                language = detect_language(file_path)
 
-            # Create file record
-            db_file = RepositoryFile(
-                repo_id=repo.repo_id,
-                file_path=file_path,
-                file_name=Path(file_path).name,
-                language=language,
-                line_count=content.count("\n") + 1,
-                token_count=self.chunker.count_tokens(content),
-                size_bytes=file_info["size_bytes"],
-                content_hash=self.chunker.compute_hash(content),
-            )
-            session.add(db_file)
+                # Create file record
+                db_file = RepositoryFile(
+                    repo_id=repo.repo_id,
+                    file_path=file_path,
+                    file_name=Path(file_path).name,
+                    language=language,
+                    line_count=content.count("\n") + 1,
+                    token_count=self.chunker.count_tokens(content),
+                    size_bytes=file_info["size_bytes"],
+                    content_hash=self.chunker.compute_hash(content),
+                )
+                session.add(db_file)
 
-            # Track stats
-            total_lines += db_file.line_count
-            total_tokens += db_file.token_count
-            if language:
-                language_lines[language] += db_file.line_count
+                # Track stats
+                total_lines += db_file.line_count
+                total_tokens += db_file.token_count
+                if language:
+                    language_lines[language] += db_file.line_count
 
-            # Add to batch for processing after flush
-            current_batch_files.append((db_file, file_info, content))
+                # Add to batch for processing after flush
+                current_batch_files.append((db_file, file_info, content))
 
             # OPTIMIZATION: Batch flush - flush files, then process chunks for the batch
             # This reduces database round-trips while ensuring file_id is set before chunks
-            should_flush = (file_idx + 1) % FLUSH_BATCH_SIZE == 0 or file_idx == total_files - 1
-            if should_flush:
+            should_flush = (
+                len(current_batch_files) >= FLUSH_BATCH_SIZE
+                or file_idx == total_files - 1
+            )
+            if should_flush and current_batch_files:
                 # Drain any completed embeddings before flushing — gives the
                 # embed thread the full file-processing window to finish batches
                 _drain_embed_results()

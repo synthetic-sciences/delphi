@@ -13,12 +13,16 @@ from __future__ import annotations
 from synsc.services.hybrid_retrieval import (
     DEFAULT_WEIGHTS,
     Candidate,
+    _align_file_level_candidates,
     _symbol_search_needles,
     _trigram_search_needles,
     bm25_search,
+    exact_path_search,
     exact_symbol_search,
     extract_identifiers,
+    file_diverse_bm25_search,
     fuse_candidates,
+    path_affinity_search,
     vector_to_candidates,
 )
 
@@ -126,8 +130,10 @@ def test_bm25_search_uses_websearch_or_syntax_for_multiple_terms():
 
     class RecordingSession:
         params = None
+        statement = ""
 
-        def execute(self, _statement, params):
+        def execute(self, statement, params):
+            self.statement = str(statement)
             self.params = params
             return EmptyRows()
 
@@ -135,6 +141,94 @@ def test_bm25_search_uses_websearch_or_syntax_for_multiple_terms():
 
     assert bm25_search(session, "alpha beta", "user-id") == []
     assert session.params["query"] == "alpha or beta"
+    assert (
+        "ORDER BY score DESC, rf.file_path, cc.chunk_index, "
+        "cc.repo_id, cc.chunk_id"
+    ) in session.statement
+
+
+def test_file_diverse_bm25_selects_one_totally_ordered_chunk_per_file():
+    class EmptyRows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class RecordingSession:
+        params = None
+        statement = ""
+
+        def execute(self, statement, params):
+            self.statement = " ".join(str(statement).split())
+            self.params = params
+            return EmptyRows()
+
+    session = RecordingSession()
+
+    assert file_diverse_bm25_search(
+        session,
+        "alpha beta",
+        "user-id",
+    ) == []
+    assert session.params["query"] == "alpha or beta"
+    assert (
+        "ROW_NUMBER() OVER ( PARTITION BY file_id "
+        "ORDER BY score DESC, chunk_index, repo_id, chunk_id )"
+    ) in session.statement
+    assert (
+        "ORDER BY score DESC, file_path, chunk_index, repo_id, chunk_id"
+    ) in session.statement
+
+
+def test_symbol_and_path_queries_use_total_sql_orders():
+    class EmptyRows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+
+    class RecordingSession:
+        statements = []
+
+        def execute(self, statement, _params):
+            self.statements.append(str(statement))
+            return EmptyRows()
+
+    symbol_session = RecordingSession()
+    assert exact_symbol_search(symbol_session, "click.Context", "user-id") == []
+    symbol_sql = " ".join(symbol_session.statements[-1].split())
+    assert (
+        "ORDER BY sym_score DESC, s.repo_id, s.file_id, "
+        "s.start_line, s.symbol_id"
+    ) in symbol_sql
+    assert (
+        "ORDER BY ms.sym_score DESC, rf.file_path, cc.chunk_index, "
+        "cc.repo_id, cc.chunk_id, ms.symbol_id"
+    ) in symbol_sql
+
+    affinity_session = RecordingSession()
+    assert (
+        path_affinity_search(
+            affinity_session,
+            "update server/grpc_proxy.go",
+            "user-id",
+        )
+        == []
+    )
+    affinity_sql = " ".join(affinity_session.statements[-1].split())
+    assert (
+        "ORDER BY score DESC, length(file_path), file_path, "
+        "repo_id, chunk_id"
+    ) in affinity_sql
+
+    exact_path_session = RecordingSession()
+    assert exact_path_search(exact_path_session, "*.py", "user-id") == []
+    exact_path_sql = " ".join(exact_path_session.statements[-1].split())
+    assert (
+        "ORDER BY rf.file_path, cc.chunk_index, cc.repo_id, cc.chunk_id"
+    ) in exact_path_sql
 
 
 def test_vector_to_candidates_keeps_raw_similarity():
@@ -156,6 +250,33 @@ def test_vector_to_candidates_keeps_raw_similarity():
 def test_vector_to_candidates_handles_empty():
     assert vector_to_candidates([]) == []
     assert vector_to_candidates(None or []) == []
+
+
+def test_file_level_branch_aligns_to_strongest_existing_chunk_in_file():
+    vector = Candidate(chunk_id="vector-a", file_id="file-a")
+    vector.sources["vector"] = 0.8
+    shared_vector = Candidate(chunk_id="shared-a", file_id="file-a")
+    shared_vector.sources["vector"] = 0.7
+    shared_bm25 = Candidate(chunk_id="shared-a", file_id="file-a")
+    shared_bm25.sources["bm25"] = 9.0
+    lexical_a = Candidate(chunk_id="lexical-a", file_id="file-a")
+    lexical_a.sources["file_bm25"] = 4.0
+    lexical_b = Candidate(chunk_id="lexical-b", file_id="file-b")
+    lexical_b.sources["file_bm25"] = 3.0
+
+    aligned = _align_file_level_candidates(
+        [[vector, shared_vector], [shared_bm25]],
+        [lexical_a, lexical_b],
+        {**DEFAULT_WEIGHTS, "file_bm25": 0.15},
+    )
+
+    assert [candidate.chunk_id for candidate in aligned] == [
+        "shared-a",
+        "lexical-b",
+    ]
+    assert aligned[0].sources == {"file_bm25": 4.0}
+    assert vector.sources == {"vector": 0.8}
+    assert shared_vector.sources == {"vector": 0.7}
 
 
 def _vector_branch(*scores: float) -> list[Candidate]:
@@ -350,3 +471,303 @@ def test_path_stems_ignores_filenames_inside_urls():
     )
     assert "grpcproxy" in stems
     assert "contributing" not in stems
+
+
+def test_path_token_ranking_matches_query_words_to_normalized_paths():
+    from synsc.services.hybrid_retrieval import _rank_path_token_files
+
+    files = [
+        {
+            "file_id": "default-types",
+            "repo_id": "repo",
+            "file_path": "crates/ignore/src/default_types.rs",
+        },
+        {
+            "file_id": "types",
+            "repo_id": "repo",
+            "file_path": "crates/ignore/src/types.rs",
+        },
+        {
+            "file_id": "unrelated",
+            "repo_id": "repo",
+            "file_path": "crates/printer/src/termcolor.rs",
+        },
+    ]
+
+    ranked = _rank_path_token_files(
+        "ignore/types: add PKGBUILD type",
+        files,
+        top_k=3,
+    )
+
+    assert [row["file_id"] for row in ranked] == ["types", "default-types"]
+    assert all(row["path_token_score"] > 0 for row in ranked)
+
+
+def test_path_token_ranking_splits_punctuation_and_snake_case():
+    from synsc.services.hybrid_retrieval import _rank_path_token_files
+
+    files = [
+        {
+            "file_id": "origin",
+            "repo_id": "repo",
+            "file_path": "src/poetry/utils/authenticator/direct_origin.py",
+        },
+        {
+            "file_id": "other",
+            "repo_id": "repo",
+            "file_path": "src/poetry/utils/authenticator/request.py",
+        },
+    ]
+
+    ranked = _rank_path_token_files(
+        "direct-origin: add size to file info",
+        files,
+        top_k=1,
+    )
+
+    assert [row["file_id"] for row in ranked] == ["origin"]
+
+
+def test_path_token_ranking_splits_acronym_prefixed_camel_case():
+    from synsc.services.hybrid_retrieval import _rank_path_token_files
+
+    files = [
+        {
+            "file_id": "http-server",
+            "repo_id": "repo",
+            "file_path": "src/HTTPServer.py",
+        },
+        {
+            "file_id": "other",
+            "repo_id": "repo",
+            "file_path": "src/socket.py",
+        },
+    ]
+
+    ranked = _rank_path_token_files("HTTP server", files, top_k=1)
+
+    assert [row["file_id"] for row in ranked] == ["http-server"]
+
+
+def test_path_token_ranking_is_repository_local_and_totally_ordered():
+    from synsc.services.hybrid_retrieval import _rank_path_token_files
+
+    files = [
+        {"file_id": "b", "repo_id": "repo-b", "file_path": "src/direct.py"},
+        {"file_id": "z", "repo_id": "repo-a", "file_path": "z/direct.py"},
+        {"file_id": "a", "repo_id": "repo-a", "file_path": "a/direct.py"},
+    ]
+
+    ranked = _rank_path_token_files("direct", files, top_k=3)
+
+    assert [(row["repo_id"], row["file_id"]) for row in ranked] == [
+        ("repo-a", "a"),
+        ("repo-a", "z"),
+        ("repo-b", "b"),
+    ]
+
+
+def test_path_token_search_returns_first_chunk_from_ranked_file():
+    from synsc.services.hybrid_retrieval import path_token_search
+
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def mappings(self):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class RecordingSession:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params):
+            self.calls.append((" ".join(str(statement).split()), params))
+            if len(self.calls) == 1:
+                return Rows(
+                    [
+                        {
+                            "file_id": "request",
+                            "repo_id": "repo",
+                            "file_path": "src/authenticator/request.py",
+                        },
+                        {
+                            "file_id": "origin",
+                            "repo_id": "repo",
+                            "file_path": "src/authenticator/direct_origin.py",
+                        },
+                    ]
+                )
+            return Rows(
+                [
+                    {
+                        "chunk_id": "origin-0",
+                        "repo_id": "repo",
+                        "file_id": "origin",
+                        "content": "class DirectOrigin: ...",
+                        "start_line": 1,
+                        "end_line": 10,
+                        "chunk_index": 0,
+                        "chunk_type": "code",
+                        "language": "python",
+                        "symbol_names": "DirectOrigin",
+                        "file_path": "src/authenticator/direct_origin.py",
+                        "repo_name": "python-poetry/poetry",
+                        "is_public": True,
+                    }
+                ]
+            )
+
+    session = RecordingSession()
+    results = path_token_search(
+        session,
+        "direct-origin: add size to file info",
+        "user-id",
+        repo_ids=["repo"],
+        top_k=1,
+    )
+
+    assert [candidate.chunk_id for candidate in results] == ["origin-0"]
+    assert results[0].sources["path_token"] > 0
+    assert "ORDER BY rf.repo_id, rf.file_path, rf.file_id" in session.calls[0][0]
+    assert "EXISTS (" in session.calls[0][0]
+    assert "LIMIT :path_scan_limit" in session.calls[0][0]
+    assert "ur.user_id = :user_id" in session.calls[0][0]
+    assert "r.is_public = TRUE OR r.indexed_by = :user_id" in session.calls[0][0]
+
+
+def test_path_token_search_skips_unscoped_queries():
+    from synsc.services.hybrid_retrieval import path_token_search
+
+    class Session:
+        def execute(self, *args, **kwargs):  # pragma: no cover
+            raise AssertionError("unscoped path-token search must not scan files")
+
+    assert path_token_search(Session(), "direct origin", "user-id") == []
+
+
+def test_path_token_search_fails_closed_when_scope_exceeds_file_limit():
+    from synsc.services.hybrid_retrieval import path_token_search
+
+    class Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [
+                {"file_id": "one", "repo_id": "repo", "file_path": "one.py"},
+                {"file_id": "two", "repo_id": "repo", "file_path": "two.py"},
+            ]
+
+    class Session:
+        calls = 0
+
+        def execute(self, *_args, **_kwargs):
+            self.calls += 1
+            return Rows()
+
+    session = Session()
+    results = path_token_search(
+        session,
+        "one two",
+        "user-id",
+        repo_ids=["repo"],
+        top_k=1,
+        max_files=1,
+    )
+
+    assert results == []
+    assert session.calls == 1
+
+
+def test_hybrid_retrieve_runs_opt_in_path_token_branch(monkeypatch):
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    called = {}
+
+    def fake_path_token_search(*args, **kwargs):
+        called.update(kwargs)
+        candidate = Candidate(chunk_id="path-token", file_path="src/direct.py")
+        candidate.sources["path_token"] = 1.0
+        return [candidate]
+
+    monkeypatch.setattr(
+        hybrid_module,
+        "path_token_search",
+        fake_path_token_search,
+    )
+
+    results = hybrid_module.hybrid_retrieve(
+        session=object(),
+        query="direct origin",
+        query_embedding=object(),
+        vector_search_fn=lambda **kwargs: [],
+        user_id="user-id",
+        repo_ids=["repo-id"],
+        top_k=20,
+        enable_bm25=False,
+        enable_trigram=False,
+        enable_symbol=False,
+        enable_path=False,
+        enable_path_token_search=True,
+    )
+
+    assert [candidate.chunk_id for candidate in results] == ["path-token"]
+    assert called["repo_ids"] == ["repo-id"]
+    assert called["top_k"] == 20
+
+
+def test_zero_hit_path_token_branch_does_not_rescale_fusion(monkeypatch):
+    import synsc.services.hybrid_retrieval as hybrid_module
+
+    calls = 0
+
+    def empty_path_token_search(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(
+        hybrid_module,
+        "path_token_search",
+        empty_path_token_search,
+    )
+
+    def vector_search(**kwargs):
+        return [
+            {
+                "chunk_id": "vector-1",
+                "file_id": "file-1",
+                "file_path": "src/vector.py",
+                "similarity": 0.9,
+            }
+        ]
+
+    common = {
+        "session": object(),
+        "query": "direct origin",
+        "query_embedding": object(),
+        "vector_search_fn": vector_search,
+        "user_id": "user-id",
+        "repo_ids": ["repo-id"],
+        "top_k": 20,
+        "enable_bm25": False,
+        "enable_trigram": False,
+        "enable_symbol": False,
+        "enable_path": False,
+    }
+    disabled = hybrid_module.hybrid_retrieve(
+        **common,
+        enable_path_token_search=False,
+    )
+    enabled_without_hits = hybrid_module.hybrid_retrieve(
+        **common,
+        enable_path_token_search=True,
+    )
+
+    assert enabled_without_hits[0].fused_score == disabled[0].fused_score
+    assert calls == 1

@@ -107,6 +107,47 @@ def test_provider_policy_rejects_invalid_network_policy(monkeypatch):
         SynscConfig.from_env()
 
 
+def test_search_persistent_cache_path_loads_from_environment(monkeypatch):
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv(
+        "SYNSC_LLM_CACHE_DB",
+        "/var/lib/delphi/search-stage-cache.sqlite3",
+    )
+
+    assert SynscConfig.from_env().search.llm_cache_db == (
+        "/var/lib/delphi/search-stage-cache.sqlite3"
+    )
+
+
+def test_hnsw_ef_search_loads_from_environment(monkeypatch):
+    from synsc.config import SynscConfig
+
+    monkeypatch.setenv("SYNSC_HNSW_EF_SEARCH", "400")
+
+    assert SynscConfig.from_env().search.hnsw_ef_search == 400
+
+
+def test_file_diverse_bm25_is_opt_in(monkeypatch):
+    from synsc.config import SynscConfig
+
+    monkeypatch.delenv("SYNSC_FILE_DIVERSE_BM25", raising=False)
+    assert SynscConfig.from_env().search.enable_file_diverse_bm25 is False
+
+    monkeypatch.setenv("SYNSC_FILE_DIVERSE_BM25", "true")
+    assert SynscConfig.from_env().search.enable_file_diverse_bm25 is True
+
+
+def test_path_token_search_is_opt_in(monkeypatch):
+    from synsc.config import SynscConfig
+
+    monkeypatch.delenv("SYNSC_PATH_TOKEN_SEARCH", raising=False)
+    assert SynscConfig.from_env().search.enable_path_token_search is False
+
+    monkeypatch.setenv("SYNSC_PATH_TOKEN_SEARCH", "true")
+    assert SynscConfig.from_env().search.enable_path_token_search is True
+
+
 def test_provider_policy_model_contains_no_credential_fields():
     from synsc.config import ProviderPolicyConfig
 

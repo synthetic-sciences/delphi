@@ -122,6 +122,38 @@ def test_should_exclude_keeps_tests_in_agent_mode(tmp_path):
     assert agent._should_exclude(test_file, tmp_path) is False
 
 
+def test_should_exclude_keeps_generated_source_only_in_agent_mode(tmp_path):
+    from synsc.core.git_client import GitClient
+
+    agent = GitClient(repos_dir=tmp_path, quality_mode="agent")
+    fast = GitClient(repos_dir=tmp_path, quality_mode="fast")
+    for name in (
+        "channelz.pb.go",
+        "messages_pb2.py",
+        "model.g.go",
+        "client.generated.ts",
+    ):
+        path = tmp_path / name
+        path.write_text("// generated source")
+        assert agent._should_include(path) is True
+        assert agent._should_exclude(path, tmp_path) is False
+        assert fast._should_exclude(path, tmp_path) is True
+
+
+def test_agent_mode_keeps_non_source_and_minified_exclusions(tmp_path):
+    from synsc.core.git_client import GitClient
+
+    agent = GitClient(repos_dir=tmp_path, quality_mode="agent")
+    for name in ("app.min.js", "bundle.js.map", "package-lock.json", "asset.png"):
+        path = tmp_path / name
+        path.write_text("excluded")
+        assert agent._should_exclude(path, tmp_path) is True
+
+    unsupported = tmp_path / "payload.generated.xyz"
+    unsupported.write_text("unsupported")
+    assert agent._should_include(unsupported) is False
+
+
 def test_language_detector_recognizes_basenames():
     from synsc.core.language_detector import detect_language
 
