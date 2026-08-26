@@ -150,7 +150,8 @@ def listwise_rerank(
                 timeout=config.search.listwise_timeout_seconds,
             )
             response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"]
+            content = response.json()["choices"][0]["message"]["content"]
+            return content if isinstance(content, str) else None
         except Exception as exc:  # noqa: BLE001 - ranking must never fail a search
             logger.warning("listwise rerank failed", error=str(exc)[:200])
             return None

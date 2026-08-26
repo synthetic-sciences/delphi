@@ -866,23 +866,23 @@ def path_token_search(
     chunks_by_file = {str(row["file_id"]): row for row in chunk_rows}
     candidates: list[Candidate] = []
     for file_row in ranked_files:
-        row = chunks_by_file.get(str(file_row["file_id"]))
-        if row is None:
+        chunk_row = chunks_by_file.get(str(file_row["file_id"]))
+        if chunk_row is None:
             continue
         candidate = Candidate(
-            chunk_id=str(row["chunk_id"]),
-            repo_id=str(row["repo_id"]),
-            file_id=str(row["file_id"]),
-            repo_name=row["repo_name"] or "",
-            file_path=row["file_path"] or "",
-            content=row["content"] or "",
-            start_line=row["start_line"],
-            end_line=row["end_line"],
-            chunk_index=row["chunk_index"],
-            chunk_type=row["chunk_type"] or "code",
-            language=row["language"],
-            symbol_names=row["symbol_names"],
-            is_public=bool(row["is_public"]),
+            chunk_id=str(chunk_row["chunk_id"]),
+            repo_id=str(chunk_row["repo_id"]),
+            file_id=str(chunk_row["file_id"]),
+            repo_name=chunk_row["repo_name"] or "",
+            file_path=chunk_row["file_path"] or "",
+            content=chunk_row["content"] or "",
+            start_line=chunk_row["start_line"],
+            end_line=chunk_row["end_line"],
+            chunk_index=chunk_row["chunk_index"],
+            chunk_type=chunk_row["chunk_type"] or "code",
+            language=chunk_row["language"],
+            symbol_names=chunk_row["symbol_names"],
+            is_public=bool(chunk_row["is_public"]),
         )
         candidate.sources["path_token"] = float(
             file_row["path_token_score"]

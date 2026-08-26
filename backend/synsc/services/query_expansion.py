@@ -193,9 +193,10 @@ def expand_query(
             return None
 
         try:
-            return payload["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError, AttributeError):
+            content = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError):
             return None
+        return content.strip() if isinstance(content, str) else None
 
     content = cache.get_or_compute(cache_key, fetch_expansion)
     return content or None
