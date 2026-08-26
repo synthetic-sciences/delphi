@@ -1,6 +1,14 @@
 """Tests for Alembic migration setup."""
 
+import os
 from pathlib import Path
+
+import pytest
+from alembic.config import Config
+from sqlalchemy import create_engine, text
+
+from alembic import command
+from synsc.database.connection import EXPECTED_ALEMBIC_REVISION
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -99,9 +107,98 @@ def test_research_jobs_migration_exists():
     assert "drop_table" in content  # downgrade is wired
 
 
+def test_file_okapi_compact_migration_chains_after_symbol_parent_index():
+    compact_path = PROJECT_ROOT / "alembic" / "versions" / "021_file_okapi_compact.py"
+    assert compact_path.is_file()
+    compact_content = compact_path.read_text()
+    assert 'revision: str = "021_file_okapi_compact"' in compact_content
+    assert 'down_revision: Union[str, None] = "020_symbol_parent_index"' in compact_content
+
+    head_path = PROJECT_ROOT / "alembic" / "versions" / "020_symbol_parent_index.py"
+    head_content = head_path.read_text()
+    assert 'revision: str = "020_symbol_parent_index"' in head_content
+    assert 'down_revision: Union[str, None] = "019_file_okapi"' in head_content
+    assert EXPECTED_ALEMBIC_REVISION == "022_file_okapi_repo_scope_index"
+
+
+def test_file_okapi_migration_defines_persistent_schema():
+    path = PROJECT_ROOT / "alembic" / "versions" / "019_file_okapi.py"
+    content = " ".join(path.read_text().split())
+
+    assert "ADD COLUMN IF NOT EXISTS file_okapi_index_version VARCHAR(32)" in content
+    assert (
+        "ADD COLUMN IF NOT EXISTS file_okapi_documents_count "
+        "INTEGER NOT NULL DEFAULT 0"
+    ) in content
+    assert "CREATE TABLE IF NOT EXISTS repository_file_lexical_documents" in content
+    assert "CREATE TABLE IF NOT EXISTS repository_file_lexical_terms" in content
+    assert (
+        "file_id UUID PRIMARY KEY REFERENCES repository_files(file_id) "
+        "ON DELETE CASCADE"
+    ) in content
+    assert content.count(
+        "repo_id UUID NOT NULL REFERENCES repositories(repo_id) "
+        "ON DELETE CASCADE"
+    ) == 2
+    assert (
+        "file_id UUID NOT NULL REFERENCES repository_files(file_id) "
+        "ON DELETE CASCADE"
+    ) in content
+    assert (
+        "CREATE INDEX IF NOT EXISTS idx_file_lexical_terms_scope "
+        "ON repository_file_lexical_terms (repo_id, term, file_id)"
+    ) in content
+
+
 def test_alembic_config_importable():
     """Alembic configuration should be loadable."""
     from alembic.config import Config
 
     alembic_cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
     assert alembic_cfg.get_main_option("script_location") == "alembic"
+
+
+def _postgres_reachable() -> bool:
+    url = os.environ.get("DATABASE_URL", "")
+    if not url.startswith("postgresql"):
+        return False
+    try:
+        import psycopg2
+
+        connection = psycopg2.connect(url, connect_timeout=2)
+        connection.close()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(
+    not _postgres_reachable(),
+    reason="No real Postgres at DATABASE_URL — skipping migration apply test.",
+)
+def test_file_okapi_migration_applies_uuid_foreign_keys() -> None:
+    """Regression: 019 must apply on UUID repository_files/repos schemas."""
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+
+    try:
+        command.downgrade(cfg, "018_context_sessions")
+        command.upgrade(cfg, "019_file_okapi")
+
+        engine = create_engine(os.environ["DATABASE_URL"])
+        with engine.connect() as conn:
+            file_id_type = conn.execute(
+                text(
+                    """
+                    SELECT data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'repository_file_lexical_documents'
+                      AND column_name = 'file_id'
+                    """
+                )
+            ).scalar_one()
+            assert file_id_type == "uuid"
+    finally:
+        command.upgrade(cfg, "head")

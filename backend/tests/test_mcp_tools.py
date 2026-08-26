@@ -91,6 +91,35 @@ def _init_real_db():
 
 _DB_READY = _init_real_db()
 
+_MCP_PROFILE_GROUPS: dict[str, set[str]] = {
+    "all": {
+        "code",
+        "papers",
+        "datasets",
+        "research",
+        "docs",
+        "atlas",
+        "contexts",
+        "sources",
+        "minimal",
+    },
+    "code": {"code", "contexts", "sources", "minimal"},
+    "papers": {"papers", "research", "datasets", "contexts", "sources", "minimal"},
+    "docs": {"docs", "contexts", "sources", "minimal"},
+    "atlas": {"atlas", "contexts", "sources", "minimal"},
+    "minimal": {"minimal"},
+}
+
+
+def _active_mcp_profile() -> str:
+    return os.environ.get("SYNSC_MCP_PROFILE", "code").strip().lower()
+
+
+def _profile_includes_papers(profile: str | None = None) -> bool:
+    profile_key = (profile or _active_mcp_profile()).strip().lower()
+    enabled = _MCP_PROFILE_GROUPS.get(profile_key, _MCP_PROFILE_GROUPS["code"])
+    return "papers" in enabled
+
 
 # ---------------------------------------------------------------------------
 # MCP tool extraction
@@ -144,6 +173,37 @@ def mcp_tools() -> dict[str, Any]:
 
 
 @pytest.fixture(scope="session")
+def paper_mcp_tools() -> dict[str, Any]:
+    """Paper MCP tools require a profile that enables the ``papers`` group."""
+    if not _DB_READY:
+        pytest.skip("Real database not available — skipping MCP integration tests")
+
+    original_profile = os.environ.get("SYNSC_MCP_PROFILE")
+    profile_for_papers = original_profile
+    if not _profile_includes_papers(original_profile):
+        os.environ["SYNSC_MCP_PROFILE"] = "papers"
+        profile_for_papers = "papers"
+
+    try:
+        tools = _extract_tools()
+    finally:
+        if profile_for_papers != original_profile:
+            if original_profile is None:
+                os.environ.pop("SYNSC_MCP_PROFILE", None)
+            else:
+                os.environ["SYNSC_MCP_PROFILE"] = original_profile
+
+    if not tools:
+        pytest.skip("Could not extract MCP tool functions from FastMCP server")
+    if "list_papers" not in tools:
+        pytest.skip(
+            "Paper MCP tools are not registered under "
+            f"SYNSC_MCP_PROFILE={profile_for_papers!r}"
+        )
+    return tools
+
+
+@pytest.fixture(scope="session")
 def existing_repo_id(mcp_tools) -> str:
     """Get a real repo_id from the database."""
     result = mcp_tools["list_repositories"](1, 0)
@@ -154,9 +214,9 @@ def existing_repo_id(mcp_tools) -> str:
 
 
 @pytest.fixture(scope="session")
-def existing_paper_id(mcp_tools) -> str:
+def existing_paper_id(paper_mcp_tools) -> str:
     """Get a real paper_id from the database."""
-    result = mcp_tools["list_papers"](1, 0)
+    result = paper_mcp_tools["list_papers"](1, 0)
     papers = result.get("papers", [])
     if not papers:
         pytest.skip("No papers indexed")
@@ -198,14 +258,19 @@ class TestToolRegistration:
         for name in self.EXPECTED_CODE_TOOLS:
             assert name in mcp_tools, f"Code tool '{name}' not registered"
 
-    def test_all_paper_tools_registered(self, mcp_tools):
+    def test_all_paper_tools_registered(self, paper_mcp_tools):
         for name in self.EXPECTED_PAPER_TOOLS:
-            assert name in mcp_tools, f"Paper tool '{name}' not registered"
+            assert name in paper_mcp_tools, f"Paper tool '{name}' not registered"
 
-    def test_total_tool_count(self, mcp_tools):
-        expected = len(self.EXPECTED_CODE_TOOLS) + len(self.EXPECTED_PAPER_TOOLS)
-        assert len(mcp_tools) >= expected, (
-            f"Expected ≥{expected} tools, got {len(mcp_tools)}: {sorted(mcp_tools)}"
+    def test_total_tool_count(self, mcp_tools, paper_mcp_tools):
+        assert len(mcp_tools) >= len(self.EXPECTED_CODE_TOOLS), (
+            f"Expected ≥{len(self.EXPECTED_CODE_TOOLS)} code tools under the "
+            f"active profile, got {len(mcp_tools)}: {sorted(mcp_tools)}"
+        )
+        assert len(paper_mcp_tools) >= len(self.EXPECTED_PAPER_TOOLS), (
+            f"Expected ≥{len(self.EXPECTED_PAPER_TOOLS)} paper tools when the "
+            f"papers profile is active, got {len(paper_mcp_tools)}: "
+            f"{sorted(paper_mcp_tools)}"
         )
 
 
@@ -301,78 +366,86 @@ class TestCodeTools:
 class TestPaperTools:
     """Call each paper MCP tool against the real database."""
 
-    def test_list_papers(self, mcp_tools):
-        result = mcp_tools["list_papers"](50, 0)
+    @pytest.fixture(autouse=True)
+    def _authenticated_user(self) -> None:
+        from synsc.api.mcp_server import set_current_user_id
+
+        set_current_user_id("00000000-0000-0000-0000-000000000001")
+        yield
+        set_current_user_id(None)
+
+    def test_list_papers(self, paper_mcp_tools):
+        result = paper_mcp_tools["list_papers"](50, 0)
         assert isinstance(result, dict)
         assert result["success"] is True
         assert isinstance(result["papers"], list)
 
-    def test_get_paper(self, mcp_tools, existing_paper_id: str):
-        result = mcp_tools["get_paper"](existing_paper_id)
+    def test_get_paper(self, paper_mcp_tools, existing_paper_id: str):
+        result = paper_mcp_tools["get_paper"](existing_paper_id)
         assert isinstance(result, dict)
         assert result["success"] is True
         assert "title" in result
 
-    def test_get_paper_not_found(self, mcp_tools):
+    def test_get_paper_not_found(self, paper_mcp_tools):
         import uuid
         fake_id = str(uuid.uuid4())
-        result = mcp_tools["get_paper"](fake_id)
+        result = paper_mcp_tools["get_paper"](fake_id)
         assert isinstance(result, dict)
         assert result["success"] is False
 
-    def test_search_papers(self, mcp_tools):
-        result = mcp_tools["search_papers"]("encryption", top_k=3)
+    def test_search_papers(self, paper_mcp_tools):
+        result = paper_mcp_tools["search_papers"]("encryption", top_k=3)
         assert isinstance(result, dict)
         assert "results" in result
 
-    def test_get_citations(self, mcp_tools, existing_paper_id: str):
-        result = mcp_tools["get_citations"](existing_paper_id)
+    def test_get_citations(self, paper_mcp_tools, existing_paper_id: str):
+        result = paper_mcp_tools["get_citations"](existing_paper_id)
         assert isinstance(result, dict)
         assert result["success"] is True
         assert "citations" in result
         assert isinstance(result["citations"], list)
         assert "total_citations" in result
 
-    def test_get_equations(self, mcp_tools, existing_paper_id: str):
-        result = mcp_tools["get_equations"](existing_paper_id)
+    def test_get_equations(self, paper_mcp_tools, existing_paper_id: str):
+        result = paper_mcp_tools["get_equations"](existing_paper_id)
         assert isinstance(result, dict)
         assert result["success"] is True
         assert "equations" in result
         assert isinstance(result["equations"], list)
 
-    def test_get_code_snippets(self, mcp_tools, existing_paper_id: str):
-        result = mcp_tools["get_code_snippets"](existing_paper_id)
+    def test_get_code_snippets(self, paper_mcp_tools, existing_paper_id: str):
+        result = paper_mcp_tools["get_code_snippets"](existing_paper_id)
         assert isinstance(result, dict)
         assert result["success"] is True
         assert "snippets" in result
 
-    def test_generate_report(self, mcp_tools, existing_paper_id: str):
-        result = mcp_tools["generate_report"](existing_paper_id)
+    def test_generate_report(self, paper_mcp_tools, existing_paper_id: str):
+        result = paper_mcp_tools["generate_report"](existing_paper_id)
         assert isinstance(result, dict)
         assert result["success"] is True
         assert "report" in result
         assert isinstance(result["report"], str)
         assert len(result["report"]) > 0
 
-    def test_generate_report_not_found(self, mcp_tools):
+    def test_generate_report_not_found(self, paper_mcp_tools):
         import uuid
-        result = mcp_tools["generate_report"](str(uuid.uuid4()))
+        result = paper_mcp_tools["generate_report"](str(uuid.uuid4()))
         assert isinstance(result, dict)
         assert result["success"] is False
 
-    def test_compare_papers_too_few(self, mcp_tools):
-        result = mcp_tools["compare_papers"](["only-one"])
+    def test_compare_papers_too_few(self, paper_mcp_tools):
+        result = paper_mcp_tools["compare_papers"](["only-one"])
         assert result["success"] is False
         assert "at least 2" in result["error"].lower()
 
-    def test_compare_papers_too_many(self, mcp_tools):
+    def test_compare_papers_too_many(self, paper_mcp_tools):
         ids = [f"p{i}" for i in range(6)]
-        result = mcp_tools["compare_papers"](ids)
+        result = paper_mcp_tools["compare_papers"](ids)
         assert result["success"] is False
 
-    def test_compare_papers(self, mcp_tools, existing_paper_id: str):
+    def test_compare_papers(self, paper_mcp_tools, existing_paper_id: str):
         # Compare the same paper with itself (simplest test with 1 paper)
-        result = mcp_tools["compare_papers"]([existing_paper_id, existing_paper_id])
+        result = paper_mcp_tools["compare_papers"]([existing_paper_id, existing_paper_id])
         assert isinstance(result, dict)
         assert result["success"] is True
         assert result["count"] == 2

@@ -157,6 +157,8 @@ CREATE TABLE IF NOT EXISTS repositories (
     symbols_count INTEGER DEFAULT 0,
     total_lines INTEGER DEFAULT 0,
     total_tokens INTEGER DEFAULT 0,
+    file_okapi_index_version VARCHAR(32),
+    file_okapi_documents_count INTEGER NOT NULL DEFAULT 0,
     languages JSONB DEFAULT '{}',
 
     -- Optional metadata
@@ -236,6 +238,35 @@ CREATE TABLE IF NOT EXISTS repository_files (
 
 CREATE INDEX IF NOT EXISTS idx_files_repo ON repository_files(repo_id);
 CREATE INDEX IF NOT EXISTS idx_files_language ON repository_files(language);
+
+
+-- ============================================================================
+-- PART 6A: FILE-LEVEL OKAPI LEXICAL STATISTICS
+-- ============================================================================
+-- Bootstrap uses UUID FK columns (consistent with repository_files/repos).
+-- Alembic migration 019 uses UUID for the same logical identifiers.
+
+CREATE TABLE IF NOT EXISTS repository_file_lexical_documents (
+    file_id UUID PRIMARY KEY
+        REFERENCES repository_files(file_id) ON DELETE CASCADE,
+    repo_id UUID NOT NULL
+        REFERENCES repositories(repo_id) ON DELETE CASCADE,
+    document_length INTEGER NOT NULL CHECK (document_length > 0),
+    content_hash VARCHAR(64) NOT NULL,
+    index_version VARCHAR(32) NOT NULL,
+    term_frequencies JSONB NOT NULL
+        CHECK (
+            jsonb_typeof(term_frequencies) = 'object'
+            AND term_frequencies <> '{}'::jsonb
+        )
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_lexical_documents_repo
+    ON repository_file_lexical_documents (repo_id, index_version);
+
+CREATE INDEX IF NOT EXISTS idx_file_lexical_term_keys
+    ON repository_file_lexical_documents
+    USING GIN (term_frequencies);
 
 
 -- ============================================================================
@@ -335,6 +366,7 @@ CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
 CREATE INDEX IF NOT EXISTS idx_symbols_qualified ON symbols(qualified_name);
+CREATE INDEX IF NOT EXISTS idx_symbols_parent ON symbols(parent_symbol_id);
 
 
 -- ============================================================================

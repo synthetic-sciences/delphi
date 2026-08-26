@@ -125,6 +125,10 @@ class Repository(Base):
     symbols_count: Mapped[int] = mapped_column(Integer, default=0)
     total_lines: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    file_okapi_index_version: Mapped[str | None] = mapped_column(String(32))
+    file_okapi_documents_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
     
     languages: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     local_path: Mapped[str | None] = mapped_column(Text)
@@ -146,6 +150,14 @@ class Repository(Base):
     # Relationships
     files: Mapped[list["RepositoryFile"]] = relationship(
         "RepositoryFile", back_populates="repository", cascade="all, delete-orphan"
+    )
+    file_lexical_documents: Mapped[list["RepositoryFileLexicalDocument"]] = (
+        relationship(
+            "RepositoryFileLexicalDocument",
+            back_populates="repository",
+            cascade="all, delete-orphan",
+            passive_deletes=True,
+        )
     )
     chunks: Mapped[list["CodeChunk"]] = relationship(
         "CodeChunk", back_populates="repository", cascade="all, delete-orphan"
@@ -270,6 +282,58 @@ class RepositoryFile(Base):
     symbols: Mapped[list["Symbol"]] = relationship(
         "Symbol", back_populates="file", cascade="all, delete-orphan"
     )
+    lexical_document: Mapped["RepositoryFileLexicalDocument | None"] = relationship(
+        "RepositoryFileLexicalDocument",
+        back_populates="file",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+
+
+class RepositoryFileLexicalDocument(Base):
+    """File-level document statistics used by Okapi BM25 retrieval."""
+
+    __tablename__ = "repository_file_lexical_documents"
+    __table_args__ = (
+        CheckConstraint(
+            "document_length > 0",
+            name="ck_file_lexical_documents_positive_length",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(term_frequencies) = 'object' "
+            "AND term_frequencies <> '{}'::jsonb",
+            name="ck_file_lexical_documents_nonempty_terms",
+        ),
+        Index("idx_file_lexical_documents_repo", "repo_id", "index_version"),
+        Index(
+            "idx_file_lexical_term_keys",
+            "term_frequencies",
+            postgresql_using="gin",
+        ),
+    )
+
+    file_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("repository_files.file_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    repo_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("repositories.repo_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    document_length: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    index_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    term_frequencies: Mapped[dict[str, int]] = mapped_column(JSONB, nullable=False)
+
+    repository: Mapped["Repository"] = relationship(
+        "Repository", back_populates="file_lexical_documents"
+    )
+    file: Mapped["RepositoryFile"] = relationship(
+        "RepositoryFile", back_populates="lexical_document"
+    )
 
 
 class CodeChunk(Base):
@@ -362,6 +426,7 @@ class Symbol(Base):
         Index("idx_symbols_name", "name"),
         Index("idx_symbols_type", "symbol_type"),
         Index("idx_symbols_qualified", "qualified_name"),
+        Index("idx_symbols_parent", "parent_symbol_id"),
     )
 
     symbol_id: Mapped[str] = mapped_column(

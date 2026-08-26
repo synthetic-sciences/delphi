@@ -316,6 +316,13 @@ class SearchConfig(BaseModel):
             "code-aware query-token overlap before fusion."
         ),
     )
+    enable_file_okapi: bool = Field(
+        default=False,
+        description=(
+            "Add an opt-in repository-scoped branch that ranks files by "
+            "file-level Okapi BM25 before fusion."
+        ),
+    )
     hybrid_candidates: int = Field(
         default=50,
         description="Top-K per branch before fusion (also the rerank window).",
@@ -625,6 +632,12 @@ class SynscConfig(BaseModel):
             )
         if path_tokens := os.getenv("SYNSC_PATH_TOKEN_SEARCH"):
             config.search.enable_path_token_search = path_tokens.lower() in (
+                "true",
+                "1",
+                "yes",
+            )
+        if file_okapi := os.getenv("SYNSC_FILE_OKAPI"):
+            config.search.enable_file_okapi = file_okapi.lower() in (
                 "true",
                 "1",
                 "yes",

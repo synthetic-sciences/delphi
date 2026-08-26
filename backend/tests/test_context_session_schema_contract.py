@@ -57,16 +57,15 @@ def test_context_session_models_are_registered() -> None:
         assert column in ContextRevision.__table__.columns
 
 
-def test_context_session_migration_is_current_head() -> None:
+def test_context_session_migration_chains_before_file_okapi_head() -> None:
     migration = _load_migration(MIGRATION, "context_session_migration")
     assert migration.revision == "018_context_sessions"
     assert migration.down_revision == "017_connector_sync"
-    assert migration.revision == EXPECTED_ALEMBIC_REVISION
 
     config = Config(str(BACKEND_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
     assert ScriptDirectory.from_config(config).get_current_head() == (
-        migration.revision
+        EXPECTED_ALEMBIC_REVISION
     )
 
 

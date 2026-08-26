@@ -37,6 +37,14 @@ import structlog
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from synsc.services.file_okapi import (
+    FILE_OKAPI_B,
+    FILE_OKAPI_INDEX_VERSION,
+    FILE_OKAPI_K1,
+    FILE_OKAPI_QUERY_TERM_CAP,
+    tokenize_file_okapi,
+)
+
 logger = structlog.get_logger(__name__)
 
 
@@ -44,6 +52,52 @@ logger = structlog.get_logger(__name__)
 # ``fastapi.routing.APIRouter`` come through as a single token (matches the
 # behavior of the legacy ``_extract_query_symbols`` in search_service.py).
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.]*")
+
+
+@dataclass
+class FileOkapiSearchResult:
+    """Scoped file-level Okapi search outcome plus inactive-branch metadata."""
+
+    candidates: list[Candidate] = field(default_factory=list)
+    inactive_reason: str | None = None
+    inactive_details: dict[str, Any] | None = None
+
+    def __iter__(self) -> Any:
+        return iter(self.candidates)
+
+    def __len__(self) -> int:
+        return len(self.candidates)
+
+    def __getitem__(self, index: int) -> Candidate:
+        return self.candidates[index]
+
+    def __eq__(self, other: object) -> bool:
+        if other == []:
+            return len(self.candidates) == 0
+        if isinstance(other, FileOkapiSearchResult):
+            return (
+                self.candidates == other.candidates
+                and self.inactive_reason == other.inactive_reason
+                and self.inactive_details == other.inactive_details
+            )
+        return NotImplemented
+
+
+@dataclass
+class HybridRetrieveResult:
+    """Fused hybrid candidates plus branch-level serving metadata."""
+
+    candidates: list[Candidate]
+    file_okapi_inactive: dict[str, Any] | None = None
+
+    def __iter__(self) -> Any:
+        return iter(self.candidates)
+
+    def __len__(self) -> int:
+        return len(self.candidates)
+
+    def __getitem__(self, index: int) -> Candidate:
+        return self.candidates[index]
 
 
 @dataclass
@@ -678,6 +732,9 @@ _PATH_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 _ACRONYM_BOUNDARY_RE = re.compile(r"([A-Z]+)([A-Z][a-z])")
 _CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
 PATH_TOKEN_MAX_FILES = 50_000
+FILE_OKAPI_WEIGHT = 0.15
+FILE_OKAPI_MAX_FILES = 50_000
+FILE_OKAPI_CANDIDATES = 50
 
 
 def _path_tokens(value: str) -> list[str]:
@@ -863,7 +920,7 @@ def path_token_search(
         logger.warning("path-token chunk lookup failed", error=str(exc))
         return []
 
-    chunks_by_file = {str(row["file_id"]): row for row in chunk_rows}
+    chunks_by_file: dict[str, Any] = {str(row["file_id"]): row for row in chunk_rows}
     candidates: list[Candidate] = []
     for file_row in ranked_files:
         chunk_row = chunks_by_file.get(str(file_row["file_id"]))
@@ -889,6 +946,383 @@ def path_token_search(
         )
         candidates.append(candidate)
     return candidates
+
+
+def _file_okapi_repo_placeholders(
+    repo_ids: list[str],
+    params: dict[str, Any],
+    *,
+    prefix: str = "repo_id",
+) -> str:
+    placeholders = []
+    for index, repo_id in enumerate(repo_ids):
+        key = f"{prefix}_{index}"
+        placeholders.append(f":{key}")
+        params[key] = repo_id
+    return ", ".join(placeholders)
+
+
+def _file_okapi_query_term_cte(terms: list[str], params: dict[str, Any]) -> str:
+    selects = []
+    for index, term in enumerate(terms):
+        key = f"okapi_term_{index}"
+        params[key] = term
+        selects.append(f"SELECT :{key} AS term")
+    return "\n            UNION ALL\n            ".join(selects)
+
+
+def _file_okapi_rollback(session: Session) -> None:
+    rollback = getattr(session, "rollback", None)
+    if callable(rollback):
+        rollback()
+
+
+def _file_okapi_scope_document_from_and_where(
+    repo_placeholders: str,
+    language_filter: str,
+    *,
+    extra_docs_predicates: str = "",
+) -> str:
+    """Shared scoped-document join/filter for scope_docs and matching_docs."""
+    return f"""
+            FROM repository_file_lexical_documents docs
+            INNER JOIN repository_files rf ON docs.file_id = rf.file_id
+            INNER JOIN repositories r ON docs.repo_id = r.repo_id
+            INNER JOIN user_repositories ur
+                ON r.repo_id = ur.repo_id AND ur.user_id = :user_id
+            WHERE docs.repo_id IN ({repo_placeholders})
+              AND (r.is_public = TRUE OR r.indexed_by = :user_id)
+              AND docs.index_version = :index_version
+              AND EXISTS (
+                  SELECT 1
+                  FROM code_chunks searchable_chunks
+                  WHERE searchable_chunks.file_id = docs.file_id
+              )
+              {extra_docs_predicates}
+              {language_filter}"""
+
+
+def _file_okapi_search_sql(
+    repo_placeholders: str,
+    language_filter: str,
+    query_terms_cte: str,
+) -> str:
+    """Production file-Okapi search statement (used by file_okapi_search)."""
+    scope_from = _file_okapi_scope_document_from_and_where(
+        repo_placeholders,
+        language_filter,
+    )
+    matching_from = _file_okapi_scope_document_from_and_where(
+        repo_placeholders,
+        language_filter,
+        extra_docs_predicates=(
+            "AND docs.term_frequencies ?| CAST(:query_terms AS text[])"
+        ),
+    )
+    return f"""
+        WITH scope_docs AS NOT MATERIALIZED (
+            SELECT
+                docs.file_id,
+                docs.repo_id,
+                docs.document_length,
+                docs.term_frequencies,
+                rf.file_path,
+                rf.language
+            {scope_from}
+        ),
+        scope_stats AS (
+            SELECT
+                COUNT(*)::int AS document_count,
+                AVG(scope_docs.document_length)::float AS average_document_length
+            FROM scope_docs
+        ),
+        query_terms AS (
+            {query_terms_cte}
+        ),
+        matching_docs AS (
+            SELECT
+                docs.file_id,
+                docs.repo_id,
+                docs.document_length,
+                docs.term_frequencies,
+                rf.file_path,
+                rf.language
+            {matching_from}
+        ),
+        term_stats AS (
+            SELECT
+                query_terms.term,
+                COUNT(DISTINCT scope_docs.file_id)::int AS document_frequency
+            FROM query_terms
+            LEFT JOIN scope_docs
+                ON scope_docs.term_frequencies ? query_terms.term
+            GROUP BY query_terms.term
+        ),
+        file_scores AS (
+            SELECT
+                matching_docs.file_id,
+                matching_docs.repo_id,
+                matching_docs.file_path,
+                SUM(
+                    LN(1 + (
+                        stats.document_count - term_stats.document_frequency + 0.5
+                    ) / (term_stats.document_frequency + 0.5))
+                    * term_kv.freq_text::int * (:k1 + 1)
+                    / (
+                        term_kv.freq_text::int
+                        + :k1 * (
+                            1 - :b
+                            + :b * matching_docs.document_length
+                              / stats.average_document_length
+                        )
+                    )
+                ) AS score
+            FROM matching_docs
+            CROSS JOIN scope_stats stats
+            CROSS JOIN LATERAL jsonb_each_text(matching_docs.term_frequencies) AS term_kv(term, freq_text)
+            INNER JOIN query_terms ON term_kv.term = query_terms.term
+            INNER JOIN term_stats ON term_stats.term = query_terms.term
+            GROUP BY
+                matching_docs.file_id,
+                matching_docs.repo_id,
+                matching_docs.file_path,
+                stats.document_count,
+                stats.average_document_length
+        ),
+        ranked_files AS (
+            SELECT file_scores.*
+            FROM file_scores
+            WHERE score > 0
+            ORDER BY score DESC, file_path, repo_id, file_id
+            LIMIT :top_k
+        ),
+        chunk_ranks AS (
+            SELECT
+                cc.chunk_id,
+                cc.repo_id,
+                cc.file_id,
+                cc.content,
+                cc.start_line,
+                cc.end_line,
+                cc.chunk_index,
+                cc.chunk_type,
+                cc.language,
+                cc.symbol_names,
+                rf.file_path,
+                r.owner || '/' || r.name AS repo_name,
+                r.is_public,
+                ts_rank_cd(
+                    cc.content_tsv,
+                    plainto_tsquery('english', :search_query)
+                ) AS chunk_score
+            FROM code_chunks cc
+            INNER JOIN repository_files rf ON cc.file_id = rf.file_id
+            INNER JOIN repositories r ON cc.repo_id = r.repo_id
+            WHERE cc.file_id IN (SELECT file_id FROM ranked_files)
+        ),
+        best_chunks AS (
+            SELECT
+                chunk_ranks.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY file_id
+                    ORDER BY
+                        chunk_score DESC,
+                        chunk_index,
+                        repo_id,
+                        chunk_id
+                ) AS file_chunk_rank
+            FROM chunk_ranks
+        )
+        SELECT
+            best_chunks.chunk_id,
+            best_chunks.repo_id,
+            best_chunks.file_id,
+            best_chunks.content,
+            best_chunks.start_line,
+            best_chunks.end_line,
+            best_chunks.chunk_index,
+            best_chunks.chunk_type,
+            best_chunks.language,
+            best_chunks.symbol_names,
+            best_chunks.file_path,
+            best_chunks.repo_name,
+            best_chunks.is_public,
+            rf.score
+        FROM ranked_files rf
+        INNER JOIN best_chunks
+            ON best_chunks.file_id = rf.file_id
+            AND best_chunks.file_chunk_rank = 1
+        ORDER BY score DESC, rf.file_path, chunk_index, repo_id, chunk_id
+        LIMIT :top_k
+        """
+
+
+def file_okapi_search(
+    session: Session,
+    query: str,
+    user_id: str,
+    repo_ids: list[str] | None = None,
+    language: str | None = None,
+    top_k: int = FILE_OKAPI_CANDIDATES,
+) -> FileOkapiSearchResult:
+    """Return one representative chunk per file ranked by scoped Okapi BM25.
+
+    Requires an explicit repository scope. Every requested repository must be
+    accessible to the caller and indexed at ``FILE_OKAPI_INDEX_VERSION``; the
+    total lexical document count across the scope must not exceed
+    ``FILE_OKAPI_MAX_FILES``.
+    """
+    if not repo_ids:
+        return FileOkapiSearchResult()
+
+    repo_ids = list(dict.fromkeys(repo_ids))
+    top_k = min(top_k, FILE_OKAPI_CANDIDATES)
+    if top_k <= 0:
+        return FileOkapiSearchResult()
+
+    terms = tokenize_file_okapi(query, limit=FILE_OKAPI_QUERY_TERM_CAP)
+    if not terms:
+        return FileOkapiSearchResult()
+
+    params: dict[str, Any] = {
+        "user_id": user_id,
+        "index_version": FILE_OKAPI_INDEX_VERSION,
+        "k1": FILE_OKAPI_K1,
+        "b": FILE_OKAPI_B,
+        "top_k": top_k,
+        "search_query": " ".join(terms),
+        "query_terms": terms,
+    }
+    repo_placeholders = _file_okapi_repo_placeholders(repo_ids, params)
+    language_filter = ""
+    if language:
+        language_filter = " AND rf.language = :language"
+        params["language"] = language
+
+    scope_sql = text(
+        f"""
+        WITH requested_repos AS (
+            SELECT repo_id
+            FROM repositories
+            WHERE repo_id IN ({repo_placeholders})
+        ),
+        accessible_repos AS (
+            SELECT r.repo_id
+            FROM repositories r
+            INNER JOIN user_repositories ur
+                ON r.repo_id = ur.repo_id AND ur.user_id = :user_id
+            INNER JOIN requested_repos req ON r.repo_id = req.repo_id
+            WHERE (r.is_public = TRUE OR r.indexed_by = :user_id)
+              AND r.file_okapi_index_version = :index_version
+        )
+        SELECT
+            (SELECT COUNT(*) FROM requested_repos) AS requested_count,
+            (SELECT COUNT(*) FROM accessible_repos) AS accessible_count,
+            (
+                SELECT COUNT(*)
+                FROM repository_file_lexical_documents d
+                INNER JOIN accessible_repos ar ON d.repo_id = ar.repo_id
+                WHERE d.index_version = :index_version
+            ) AS indexed_document_count,
+            (
+                SELECT COUNT(*)
+                FROM repository_file_lexical_documents d
+                INNER JOIN repository_files rf ON d.file_id = rf.file_id
+                INNER JOIN accessible_repos ar ON d.repo_id = ar.repo_id
+                WHERE d.index_version = :index_version
+                  AND EXISTS (
+                      SELECT 1
+                      FROM code_chunks searchable_chunks
+                      WHERE searchable_chunks.file_id = d.file_id
+                  )
+                  {language_filter}
+            ) AS document_count
+        """
+    )
+    try:
+        scope_rows = session.execute(scope_sql, params).mappings().all()
+    except Exception as exc:
+        logger.warning("file-okapi scope validation failed", error=str(exc))
+        _file_okapi_rollback(session)
+        return FileOkapiSearchResult(
+            inactive_reason="scope_validation_failed",
+            inactive_details={"error": str(exc)},
+        )
+
+    scope_row = scope_rows[0]
+
+    requested_count = int(scope_row["requested_count"] or 0)
+    accessible_count = int(scope_row["accessible_count"] or 0)
+    document_count = int(scope_row["document_count"] or 0)
+    indexed_document_count = int(
+        scope_row.get("indexed_document_count", document_count) or 0
+    )
+    if (
+        requested_count != len(repo_ids)
+        or accessible_count != len(repo_ids)
+        or indexed_document_count == 0
+        or document_count > FILE_OKAPI_MAX_FILES
+    ):
+        if requested_count != len(repo_ids) or accessible_count != len(repo_ids):
+            inactive_reason = "scope_incomplete"
+        elif indexed_document_count == 0:
+            inactive_reason = "index_missing_or_stale"
+        else:
+            inactive_reason = "scope_over_cap"
+        inactive_details = {
+            "requested_repositories": requested_count,
+            "accessible_repositories": accessible_count,
+            "indexed_document_count": indexed_document_count,
+            "document_count": document_count,
+            "repository_count": len(repo_ids),
+            "max_files": FILE_OKAPI_MAX_FILES,
+        }
+        logger.warning(
+            "file-okapi branch inactive",
+            reason=inactive_reason,
+            **inactive_details,
+        )
+        return FileOkapiSearchResult(
+            inactive_reason=inactive_reason,
+            inactive_details=inactive_details,
+        )
+    if document_count == 0:
+        return FileOkapiSearchResult()
+
+    query_terms_cte = _file_okapi_query_term_cte(terms, params)
+    search_sql = text(
+        _file_okapi_search_sql(repo_placeholders, language_filter, query_terms_cte)
+    )
+    try:
+        rows = session.execute(search_sql, params).mappings().all()
+    except Exception as exc:
+        logger.warning("file-okapi search failed", error=str(exc))
+        _file_okapi_rollback(session)
+        return FileOkapiSearchResult(
+            inactive_reason="search_failed",
+            inactive_details={"error": str(exc)},
+        )
+
+    candidates: list[Candidate] = []
+    for row in rows:
+        candidate = Candidate(
+            chunk_id=str(row["chunk_id"]),
+            repo_id=str(row["repo_id"]),
+            file_id=str(row["file_id"]),
+            repo_name=row["repo_name"] or "",
+            file_path=row["file_path"] or "",
+            content=row["content"] or "",
+            start_line=row["start_line"],
+            end_line=row["end_line"],
+            chunk_index=row["chunk_index"],
+            chunk_type=row["chunk_type"] or "code",
+            language=row["language"],
+            symbol_names=row["symbol_names"],
+            is_public=bool(row["is_public"]),
+        )
+        candidate.sources["file_okapi"] = float(row["score"])
+        candidates.append(candidate)
+    return FileOkapiSearchResult(candidates=candidates)
 
 
 # URLs in a pasted issue body or PR description carry filenames that have
@@ -1341,10 +1775,11 @@ def hybrid_retrieve(
     enable_bm25: bool = True,
     enable_file_diverse_bm25: bool = False,
     enable_path_token_search: bool = False,
+    enable_file_okapi: bool = False,
     enable_trigram: bool = True,
     enable_symbol: bool = True,
     enable_path: bool = True,
-) -> list[Candidate]:
+) -> HybridRetrieveResult:
     """Run all retrieval branches and return fused candidates.
 
     ``vector_search_fn`` is a callable that accepts the same args as
@@ -1355,6 +1790,8 @@ def hybrid_retrieve(
     branches: list[list[Candidate]] = []
     file_bm25_candidates: list[Candidate] = []
     path_token_candidates: list[Candidate] = []
+    file_okapi_candidates: list[Candidate] = []
+    file_okapi_inactive: dict[str, Any] | None = None
     timing: dict[str, Any] = {}
 
     # 1. Vector (always — it's the baseline)
@@ -1423,6 +1860,25 @@ def hybrid_retrieve(
         )
         timing["file_bm25_ms"] = (time.time() - t) * 1000
 
+    # 3c. File-level Okapi — repository-scoped, opt-in until ablation is complete.
+    if enable_file_okapi and repo_ids:
+        t = time.time()
+        file_okapi_result = file_okapi_search(
+            session,
+            query,
+            user_id,
+            repo_ids,
+            language,
+            top_k=min(top_k, FILE_OKAPI_CANDIDATES),
+        )
+        file_okapi_candidates = file_okapi_result.candidates
+        if file_okapi_result.inactive_reason:
+            file_okapi_inactive = {
+                "reason": file_okapi_result.inactive_reason,
+                **(file_okapi_result.inactive_details or {}),
+            }
+        timing["file_okapi_ms"] = (time.time() - t) * 1000
+
     # 4. Exact symbol — biggest precision win for identifier queries
     if enable_symbol:
         t = time.time()
@@ -1466,6 +1922,17 @@ def hybrid_retrieve(
         )
     else:
         weights.pop("path_token", None)
+    if enable_file_okapi and file_okapi_candidates:
+        weights["file_okapi"] = FILE_OKAPI_WEIGHT
+        branches.append(
+            _align_file_level_candidates(
+                branches,
+                file_okapi_candidates,
+                weights,
+            )
+        )
+    else:
+        weights.pop("file_okapi", None)
     fused = fuse_candidates(branches, weights=weights)
     timing["total_ms"] = (time.time() - t_start) * 1000
     timing["candidates"] = len(fused)
@@ -1477,7 +1944,11 @@ def hybrid_retrieve(
         "path": sum(1 for c in fused if "path" in c.sources),
         "path_affinity": sum(1 for c in fused if "path_affinity" in c.sources),
         "path_token": sum(1 for c in fused if "path_token" in c.sources),
+        "file_okapi": sum(1 for c in fused if "file_okapi" in c.sources),
         "trigram": sum(1 for c in fused if "trigram" in c.sources),
     }
     logger.debug("hybrid_retrieve timing", **timing)
-    return fused
+    return HybridRetrieveResult(
+        candidates=fused,
+        file_okapi_inactive=file_okapi_inactive,
+    )

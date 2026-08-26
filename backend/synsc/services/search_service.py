@@ -1094,7 +1094,7 @@ def _select_source_diverse_results(
     # Preserve the semantic baseline first, then the highest-precision
     # lexical branches. Trigram precedes broad BM25 so small result windows
     # still retain the only branch able to recover a misspelled identifier.
-    file_level_sources = {"file_bm25", "path_token"}
+    file_level_sources = {"file_bm25", "path_token", "file_okapi"}
 
     def represents_source(
         result: dict[str, Any],
@@ -1114,6 +1114,7 @@ def _select_source_diverse_results(
         "path",
         "path_affinity",
         "path_token",
+        "file_okapi",
         "trigram",
         "file_bm25",
         "bm25",
@@ -1290,10 +1291,18 @@ def _retrieval_config_snapshot(
     use_rerank: bool,
     embedding_model: str,
     repo_scoped: bool,
+    file_okapi_effective: bool = False,
 ) -> dict[str, Any]:
     """Return the non-secret serving configuration that determined a ranking."""
+    from synsc.services.file_okapi import (
+        FILE_OKAPI_B,
+        FILE_OKAPI_INDEX_VERSION,
+        FILE_OKAPI_K1,
+    )
     from synsc.services.hybrid_retrieval import (
         FILE_DIVERSE_BM25_WEIGHT,
+        FILE_OKAPI_CANDIDATES,
+        FILE_OKAPI_WEIGHT,
         PATH_TOKEN_WEIGHT,
         RRF_K,
         configured_weights,
@@ -1307,6 +1316,11 @@ def _retrieval_config_snapshot(
         and repo_scoped
         and search_config.enable_path_token_search
     )
+    file_okapi_configured = (
+        use_hybrid
+        and repo_scoped
+        and search_config.enable_file_okapi
+    )
     fusion_weights = dict(configured_weights()) if use_hybrid else {}
     if file_bm25_active:
         fusion_weights.setdefault("file_bm25", FILE_DIVERSE_BM25_WEIGHT)
@@ -1316,7 +1330,11 @@ def _retrieval_config_snapshot(
         fusion_weights.setdefault("path_token", PATH_TOKEN_WEIGHT)
     else:
         fusion_weights.pop("path_token", None)
-    return {
+    if file_okapi_effective:
+        fusion_weights["file_okapi"] = FILE_OKAPI_WEIGHT
+    else:
+        fusion_weights.pop("file_okapi", None)
+    snapshot: dict[str, Any] = {
         "vector_mode": "exact" if search_config.vector_exact_scan else "hnsw",
         "hnsw_ef_search": search_config.hnsw_ef_search,
         "embedding_model": embedding_model,
@@ -1325,6 +1343,8 @@ def _retrieval_config_snapshot(
         "hybrid_rerank_k": search_config.hybrid_rerank_k,
         "file_diverse_bm25": file_bm25_active,
         "path_token_search": path_token_active,
+        "file_okapi_configured": file_okapi_configured,
+        "file_okapi": file_okapi_effective,
         "fusion_weights": dict(sorted(fusion_weights.items())),
         "rrf_k": RRF_K,
         "reranker_enabled": use_rerank,
@@ -1338,6 +1358,16 @@ def _retrieval_config_snapshot(
         "listwise_rerank_k": search_config.listwise_rerank_k,
         "llm_seed": search_config.llm_seed,
     }
+    if file_okapi_configured:
+        snapshot.update(
+            {
+                "file_okapi_candidates": FILE_OKAPI_CANDIDATES,
+                "file_okapi_index_version": FILE_OKAPI_INDEX_VERSION,
+                "file_okapi_k1": FILE_OKAPI_K1,
+                "file_okapi_b": FILE_OKAPI_B,
+            }
+        )
+    return snapshot
 
 
 class SearchService:
@@ -1509,6 +1539,7 @@ class SearchService:
 
             db_ms = 0.0
             hybrid_meta: dict[str, Any] | None = None
+            file_okapi_inactive: dict[str, Any] | None = None
 
             if use_hybrid:
                 # Hybrid: vector + BM25 + symbol + path + trigram, fused.
@@ -1523,7 +1554,7 @@ class SearchService:
                         ),
                         {"timeout": f"{remaining_timeout_ms()}ms"},
                     )
-                    fused = hybrid_retrieve(
+                    hybrid_result = hybrid_retrieve(
                         session=hsess,
                         query=retrieval_query,
                         query_embedding=query_embedding,
@@ -1544,8 +1575,12 @@ class SearchService:
                         enable_path_token_search=(
                             self.config.search.enable_path_token_search
                         ),
+                        enable_file_okapi=(
+                            self.config.search.enable_file_okapi
+                        ),
                     )
                 db_ms = (time.time() - t_db) * 1000
+                fused = hybrid_result.candidates
                 raw_results = [c.to_dict() for c in fused]
                 hybrid_meta = {
                     "candidates": len(fused),
@@ -1559,10 +1594,12 @@ class SearchService:
                             "path",
                             "path_affinity",
                             "path_token",
+                            "file_okapi",
                             "trigram",
                         )
                     },
                 }
+                file_okapi_inactive = hybrid_result.file_okapi_inactive
                 # Path filter is part of hybrid retrieval already, no need to
                 # re-filter here (it would also throw away same-file siblings
                 # the path branch surfaced).
@@ -1777,6 +1814,16 @@ class SearchService:
             except Exception:
                 pass
 
+            if file_okapi_inactive is not None:
+                warnings.append(
+                    {"code": "file_okapi_inactive", **file_okapi_inactive}
+                )
+
+            file_okapi_effective = bool(
+                hybrid_meta
+                and hybrid_meta.get("sources_hit", {}).get("file_okapi", 0) > 0
+            )
+
             payload = {
                 "success": True,
                 "query": query,
@@ -1798,6 +1845,7 @@ class SearchService:
                         type(self.embedding_generator).__name__,
                     ),
                     repo_scoped=bool(repo_ids),
+                    file_okapi_effective=file_okapi_effective,
                 ),
                 "timing": {
                     "embedding_ms": round(embed_ms, 1),
