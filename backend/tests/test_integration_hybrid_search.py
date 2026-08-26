@@ -1118,7 +1118,15 @@ def test_file_okapi_search_plan_uses_gin_index_for_matching_docs(
     search_sql = _file_okapi_search_sql(repo_placeholders, "", query_terms_cte)
 
     with get_session() as session:
+        # Restrict the planner to bitmap access paths. On small fixtures the
+        # repo-scope btree (idx_file_lexical_documents_repo) can win a plain
+        # index scan on cost alone, which hides the property under test: the
+        # ?| term predicate must stay servable by the GIN key index. Bitmap
+        # mode keeps that choice stable across Postgres versions and row
+        # counts while still proving GIN pushdown.
         session.execute(text("SET LOCAL enable_seqscan = off"))
+        session.execute(text("SET LOCAL enable_indexscan = off"))
+        session.execute(text("SET LOCAL enable_indexonlyscan = off"))
         plan_rows = session.execute(
             text(f"EXPLAIN {search_sql}"),
             params,
