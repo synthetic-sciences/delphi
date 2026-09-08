@@ -2,14 +2,15 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ImageResponse } from "next/og";
 
-export const alt = "Delphi. The right context, before the code.";
+export const alt = "Delphi: a local-first context engine for coding agents";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
 export default async function OG() {
-  const cmu = await readFile(
-    join(process.cwd(), "public/fonts/cmu-concrete-roman.woff"),
-  );
+  const [roman, bold] = await Promise.all([
+    readFile(join(process.cwd(), "public/fonts/cmu-concrete-roman.woff")),
+    readFile(join(process.cwd(), "public/fonts/cmu-concrete-bold.woff")),
+  ]);
 
   return new ImageResponse(
     (
@@ -19,63 +20,63 @@ export default async function OG() {
           height: "100%",
           display: "flex",
           flexDirection: "column",
-          justifyContent: "space-between",
-          padding: "64px 78px",
-          background: "#141110",
-          color: "#ede7d7",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "72px 96px",
+          background: "#fdfcf9",
+          color: "#16150f",
           fontFamily: "CMU Concrete",
+          textAlign: "center",
         }}
       >
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
+            fontSize: 22,
+            letterSpacing: 2,
+            textTransform: "uppercase",
+            color: "#625d54",
           }}
         >
-          <div style={{ display: "flex", fontSize: 40 }}>delphi</div>
-          <div style={{ display: "flex", fontSize: 20, color: "#9b8f74" }}>
-            by Synthetic Sciences
-          </div>
+          Open-source software
         </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 30 }}>
-          <div
-            style={{
-              display: "flex",
-              fontSize: 100,
-              lineHeight: 1.02,
-              letterSpacing: -2.4,
-              maxWidth: 980,
-            }}
-          >
-            The right context, before the code.
-          </div>
-          <div
-            style={{
-              display: "flex",
-              fontSize: 30,
-              lineHeight: 1.4,
-              color: "#c9bda0",
-              maxWidth: 900,
-            }}
-          >
-            Local search for your agent&apos;s code, docs, and papers.
-          </div>
-        </div>
-
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            fontSize: 19,
-            color: "#9b8f74",
-            borderTop: "1px solid #2e2921",
-            paddingTop: 28,
+            fontSize: 128,
+            fontWeight: 700,
+            lineHeight: 1,
+            letterSpacing: -3,
+            marginTop: 28,
           }}
         >
-          <div style={{ display: "flex" }}>$ npx @synsci/delphi</div>
+          Delphi
+        </div>
+        <div
+          style={{
+            display: "flex",
+            fontSize: 42,
+            lineHeight: 1.25,
+            marginTop: 26,
+            maxWidth: 860,
+          }}
+        >
+          A local-first context engine for coding agents
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 40,
+            fontSize: 24,
+            color: "#625d54",
+            marginTop: 54,
+            paddingTop: 26,
+            borderTop: "1px solid #d8d3c7",
+            width: 720,
+            justifyContent: "center",
+          }}
+        >
+          <div style={{ display: "flex" }}>Synthetic Sciences</div>
           <div style={{ display: "flex" }}>trydelphi.ai</div>
         </div>
       </div>
@@ -83,12 +84,8 @@ export default async function OG() {
     {
       ...size,
       fonts: [
-        {
-          name: "CMU Concrete",
-          data: cmu,
-          weight: 400,
-          style: "normal",
-        },
+        { name: "CMU Concrete", data: roman, weight: 400, style: "normal" },
+        { name: "CMU Concrete", data: bold, weight: 700, style: "normal" },
       ],
     },
   );
