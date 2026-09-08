@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════
-#  SynSc Context — .gitignore
+#  Delphi — .gitignore
 # ═══════════════════════════════════════════════════════════════
 
 # ─── Environment & secrets ────────────────────────────────────
@@ -99,6 +99,7 @@ docs/*
 !docs/gpu.md
 !docs/cold-start.md
 !docs/deployment-lite.md
+!docs/atlas-integration.md
 !frontend/src/app/docs/
 CLAUDE.md
 
@@ -109,3 +110,9 @@ delphi.md
 # Local evaluation workspace. Runs materialise corpora, snapshots, and provider
 # outputs here. They must not enter the repository.
 new/
+
+# ─── Benchmark & paper archive ───────────────────────────────
+# Round-3 evaluation archive (paper, research blog, run artifacts, harness,
+# journals). It is its own private git repository and must never enter this
+# public one.
+benchmark-paper/
