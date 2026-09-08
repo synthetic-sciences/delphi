@@ -234,7 +234,7 @@ jobs:
         run: pnpm audit --prod
       - name: Build production site
         run: pnpm build
-      - name: Smoke test production image optimization
+      - name: Smoke test production server
         run: |
           pnpm start --hostname 127.0.0.1 > /tmp/delphi-landing.log 2>&1 &
           server_pid=$!
@@ -244,18 +244,20 @@ jobs:
           }
           trap cleanup EXIT
 
+          body="$(mktemp)"
           if ! curl --retry 30 --retry-connrefused --retry-delay 1 \
             --fail --silent --show-error \
-            http://127.0.0.1:3000/ --output /dev/null; then
+            http://127.0.0.1:3000/ --output "$body"; then
             cat /tmp/delphi-landing.log
             exit 1
           fi
+          grep --quiet "A local-first context engine for coding agents" "$body"
 
+          # The Open Graph image is rendered at request time from the bundled
+          # fonts; a PNG response proves the font files ship with the build.
           headers="$(mktemp)"
           curl --fail --silent --show-error \
-            --header "Accept: image/webp" \
             --dump-header "$headers" \
             --output /dev/null \
-            "http://127.0.0.1:3000/_next/image?url=%2Fimg%2Fheroes%2Fsacred-way.png&w=828&q=75"
-          grep --extended-regexp --ignore-case \
-            "^content-type: image/(avif|webp)" "$headers"
+            http://127.0.0.1:3000/opengraph-image
+          grep --extended-regexp --ignore-case "^content-type: image/png" "$headers"

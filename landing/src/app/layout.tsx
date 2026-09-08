@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
 const cmu = localFont({
@@ -12,33 +11,28 @@ const cmu = localFont({
   ],
 });
 
-const mono = JetBrains_Mono({
-  variable: "--font-jbmono",
-  subsets: ["latin"],
-  display: "swap",
-});
+const TITLE = "Delphi: a local-first context engine for coding agents";
+const DESCRIPTION =
+  "Delphi indexes repositories, documentation, papers, and datasets on your own machine and serves search, code structure, and context packs to coding agents over MCP. Open source, Apache 2.0.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://trydelphi.ai"),
   title: {
-    default: "Delphi. The right context, before the code.",
+    default: TITLE,
     template: "%s",
   },
-  description:
-    "Delphi indexes your repos, docs, papers, and datasets, then hands your coding agent precise, cited context over MCP. Open source and local first.",
+  description: DESCRIPTION,
   openGraph: {
-    title: "Delphi. The right context, before the code.",
-    description:
-      "Local search for your agent's code, docs, and papers. Open source, self-hosted, MCP native.",
+    title: TITLE,
+    description: DESCRIPTION,
     type: "website",
     url: "https://trydelphi.ai",
     siteName: "Delphi",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Delphi. The right context, before the code.",
-    description:
-      "Local search for your agent's code, docs, and papers. Open source, self-hosted, MCP native.",
+    title: TITLE,
+    description: DESCRIPTION,
   },
   robots: {
     index: true,
@@ -52,10 +46,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${cmu.variable} ${mono.variable}`}>
-      <body className="min-h-full bg-background text-foreground antialiased">
-        {children}
-      </body>
+    <html lang="en" className={cmu.variable}>
+      <body>{children}</body>
     </html>
   );
 }
