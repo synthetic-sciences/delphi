@@ -95,4 +95,8 @@ def test_package_and_frontend_jobs_use_reproducible_checks() -> None:
     assert "pnpm install --frozen-lockfile" in landing
     assert "pnpm audit --prod" in landing
     assert "pnpm build" in landing
-    assert "/_next/image" in landing
+    # The production server is smoke-tested: the home page must render its
+    # tagline and the Open Graph image must be produced from the bundled fonts.
+    assert "A local-first context engine for coding agents" in landing
+    assert "/opengraph-image" in landing
+    assert "image/png" in landing
