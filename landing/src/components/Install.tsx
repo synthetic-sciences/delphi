@@ -2,30 +2,26 @@
 
 import { useState } from "react";
 
-type Item = { key: string; label: string; before: string; highlight: string; after?: string; note: string };
+type Item = { key: string; label: string; command: string; dim?: string; note: string };
 
-/* Install command per tab. `highlight` is the part set in ink. */
 const INSTALL: Item[] = [
   {
     key: "npx",
     label: "npx",
-    before: "npx ",
-    highlight: "@synsci/delphi",
+    command: "npx @synsci/delphi",
     note: "Starts the local stack and registers Delphi with Claude Code, Cursor, Windsurf, or Claude Desktop. Needs Docker and Git; the default embeddings model runs locally, so no API key is required.",
   },
   {
     key: "proxy",
     label: "MCP proxy",
-    before: "uvx ",
-    highlight: "synsci-delphi-proxy",
+    command: "uvx synsci-delphi-proxy",
     note: "Connects any other MCP client to a running Delphi over stdio. Set SYNSC_API_KEY from the dashboard and SYNSC_API_URL to http://localhost:8742.",
   },
   {
     key: "source",
     label: "from source",
-    before: "git clone ",
-    highlight: "https://github.com/synthetic-sciences/delphi",
-    after: " && cd delphi && ./scripts/launch_app.sh",
+    command: "git clone https://github.com/synthetic-sciences/delphi",
+    dim: " && cd delphi && ./scripts/launch_app.sh",
     note: "Runs the API, workers, PostgreSQL, and dashboard from a checkout. Copy env.example to .env first to change providers or ports.",
   },
 ];
@@ -65,14 +61,16 @@ function CopyStatus({ copied }: { copied: boolean }) {
 }
 
 function Command({ item }: { item: Item }) {
-  const command = `${item.before}${item.highlight}${item.after ?? ""}`;
-  const { copied, copy } = useCopy(command);
+  const full = `${item.command}${item.dim ?? ""}`;
+  const { copied, copy } = useCopy(full);
   return (
-    <button type="button" className="command" onClick={copy} aria-label={`Copy: ${command}`}>
+    <button type="button" className="command" onClick={copy} aria-label={`Copy: ${full}`}>
+      <span className="prompt" aria-hidden="true">
+        $
+      </span>
       <span className="command-script">
-        <span>{item.before}</span>
-        <span className="highlight">{item.highlight}</span>
-        {item.after ? <span>{item.after}</span> : null}
+        {item.command}
+        {item.dim ? <span className="dim">{item.dim}</span> : null}
       </span>
       <CopyStatus copied={copied} />
     </button>
@@ -83,37 +81,33 @@ export function Install() {
   const [active, setActive] = useState(INSTALL[0].key);
   const item = INSTALL.find((entry) => entry.key === active) ?? INSTALL[0];
   return (
-    <div className="installation">
-      <section className="tabs" aria-label="Install options">
-        <div role="tablist" aria-orientation="horizontal" className="tablist">
-          {INSTALL.map((entry) => (
-            <button
-              key={entry.key}
-              type="button"
-              role="tab"
-              id={`install-tab-${entry.key}`}
-              aria-selected={entry.key === active}
-              aria-controls={`install-panel-${entry.key}`}
-              className="tab"
-              tabIndex={entry.key === active ? 0 : -1}
-              onClick={() => setActive(entry.key)}
-              onKeyDown={(event) => {
-                const index = INSTALL.findIndex((candidate) => candidate.key === active);
-                if (event.key === "ArrowRight") setActive(INSTALL[(index + 1) % INSTALL.length].key);
-                if (event.key === "ArrowLeft") setActive(INSTALL[(index - 1 + INSTALL.length) % INSTALL.length].key);
-              }}
-            >
-              {entry.label}
-            </button>
-          ))}
-        </div>
-        <div className="panels">
-          <div id={`install-panel-${item.key}`} role="tabpanel" aria-labelledby={`install-tab-${item.key}`} className="panel">
-            <Command item={item} />
-            <p className="note">{item.note}</p>
-          </div>
-        </div>
-      </section>
+    <div className="install" id="install">
+      <div role="tablist" aria-orientation="horizontal" aria-label="Install options" className="tablist">
+        {INSTALL.map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            role="tab"
+            id={`install-tab-${entry.key}`}
+            aria-selected={entry.key === active}
+            aria-controls="install-panel"
+            className="tab"
+            tabIndex={entry.key === active ? 0 : -1}
+            onClick={() => setActive(entry.key)}
+            onKeyDown={(event) => {
+              const index = INSTALL.findIndex((candidate) => candidate.key === active);
+              if (event.key === "ArrowRight") setActive(INSTALL[(index + 1) % INSTALL.length].key);
+              if (event.key === "ArrowLeft") setActive(INSTALL[(index - 1 + INSTALL.length) % INSTALL.length].key);
+            }}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+      <div id="install-panel" role="tabpanel" aria-labelledby={`install-tab-${item.key}`}>
+        <Command item={item} />
+        <p className="note">{item.note}</p>
+      </div>
     </div>
   );
 }
