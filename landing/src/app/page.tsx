@@ -1,293 +1,276 @@
 import Link from "next/link";
-import { ArchitectureFigure, RetrievalFigure } from "@/components/Figures";
+import { Faq } from "@/components/Faq";
+import { ArchitectureFigure, FactorialChart, HeroFigure } from "@/components/Figures";
+import { Install } from "@/components/Install";
+import { Mark } from "@/components/Mark";
+import { Stars } from "@/components/Stars";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const GITHUB = "https://github.com/synthetic-sciences/delphi";
+const DOCS = `${GITHUB}/tree/master/docs`;
+const README = `${GITHUB}#readme`;
+const LICENSE = `${GITHUB}/blob/master/LICENSE`;
 const NPM = "https://www.npmjs.com/package/@synsci/delphi";
 const PYPI = "https://pypi.org/project/synsci-delphi-proxy/";
-const README = `${GITHUB}#readme`;
-const ENV_DOCS = `${GITHUB}/blob/master/docs/env-advanced.md`;
+const SYNTHETIC_SCIENCES = "https://syntheticsciences.ai";
+const BENCHMARK = "https://github.com/aayambansal/delphi-benchmark";
+const DATASET = "https://huggingface.co/datasets/aayambansall/delphi-benchmark-traces";
+const PDF = "/papers/context-engine-gains.pdf";
 
-const SOURCES: [string, string][] = [
-  ["Repositories", "Code search, symbols, call graphs, and the tests and documentation related to a file"],
-  ["Documentation", "Versioned pages from documentation sites, with full-text search"],
-  ["Papers", "Sections, citations, equations, and quoted evidence from arXiv or uploaded PDFs"],
-  ["Datasets", "Hugging Face dataset cards and metadata"],
-  ["Local folders", "Private, in-progress work that has no Git remote"],
+const WHAT: [string, string][] = [
+  ["Six-way retrieval", "Dense vectors, BM25, trigram symbols, exact symbols, paths, and path tokens, fused by reciprocal rank"],
+  ["Deterministic", "The same query returns the same results across requests and restarts"],
+  ["Call graphs", "Who calls a function, what it calls, and what changing it affects, for eleven languages"],
+  ["Context packs", "Ranked files and excerpts sized to a token budget, with the snapshot each came from"],
+  ["Immutable snapshots", "A finished index is a snapshot; a failed run leaves the previous one searchable"],
+  ["Local by default", "API, workers, PostgreSQL, and dashboard on your machine; nothing leaves unless you allow it"],
 ];
 
-const TOOLS: [string, string[]][] = [
-  ["Indexing", ["index_repository", "index_local_folder", "index_paper", "index_dataset", "index_source"]],
-  ["Search", ["search_code", "search_symbols", "search_papers", "grep_source", "search"]],
-  ["Code structure", ["find_callers", "find_callees", "impact_analysis", "build_code_graph", "get_symbol"]],
-  ["Context", ["build_context_pack", "get_context", "context_session_create", "context_session_handoff"]],
-  ["Sources", ["resolve_source", "read_source", "tree_source", "check_freshness", "list_stale_sources"]],
-  ["Research (opt-in)", ["research", "research_start", "research_status", "research_followup"]],
+const CLIENTS = ["Claude Code", "Cursor", "Windsurf", "Claude Desktop", "any MCP client"];
+
+const FAQ: { q: string; a: React.ReactNode }[] = [
+  {
+    q: "What is Delphi?",
+    a: (
+      <p>
+        An open-source context engine that runs on your machine. It indexes repositories,
+        documentation sites, research papers, datasets, and local folders into PostgreSQL, and
+        exposes them to coding agents over MCP as tools for indexing, searching, following call
+        graphs, and assembling context packs under a token budget.
+      </p>
+    ),
+  },
+  {
+    q: "How do I install it?",
+    a: (
+      <p>
+        Run <code>npx @synsci/delphi</code>. The installer starts the local stack and can register
+        Delphi with Claude Code, Cursor, Windsurf, or Claude Desktop. It needs Docker and Git; the
+        default embeddings model runs locally, so no API key is required. The{" "}
+        <a href={README}>README</a> covers running from source.
+      </p>
+    ),
+  },
+  {
+    q: "Which agents and editors work with it?",
+    a: (
+      <p>
+        Any MCP client. Claude Code, Cursor, Windsurf, and Claude Desktop register in one step;
+        everything else connects through the <code>synsci-delphi-proxy</code> stdio proxy. The same
+        operations are available over HTTP at <code>localhost:8742</code>, and a dashboard at{" "}
+        <code>localhost:3000</code> shows indexed sources, jobs, and API keys.
+      </p>
+    ),
+  },
+  {
+    q: "Does my code leave my machine?",
+    a: (
+      <p>
+        Not unless you allow it. The default network policy is <code>local_only</code>: no remote
+        provider is called unless the deployment allowlists it, and a per-request policy can only
+        narrow that ceiling. Hosted web search and crawling exist but are off by default and, when
+        enabled, send only the query, never indexed content.
+      </p>
+    ),
+  },
+  {
+    q: "Do I need an API key or a model subscription?",
+    a: (
+      <p>
+        No. Embeddings default to a local sentence-transformers model, and retrieval works without
+        any hosted model. OpenAI or Gemini embeddings, a cross-encoder or listwise reranker, and
+        query expansion are optional and use your own keys if you turn them on.
+      </p>
+    ),
+  },
+  {
+    q: "How is this different from vector search?",
+    a: (
+      <p>
+        Dense retrieval alone is a poor fit for code: an agent asking for a function by name should
+        get that function, not a list of semantically similar middleware. Delphi treats retrieval as
+        candidate generation followed by fusion, so identifier-heavy and prose queries share one
+        pipeline, and the fused list is diversified across files so one large file cannot fill it.
+      </p>
+    ),
+  },
+  {
+    q: "Has the retrieval been evaluated?",
+    a: (
+      <p>
+        Yes. <Link href="/research">Where Do Context-Engine Gains Come From?</Link> decomposes Delphi
+        against conventional retrieval built from its own parts, on SWE-bench Verified instances its
+        development never saw, and releases the code, per-case artifacts, exposure ledger, and all
+        620 agent trajectories. It claims no state of the art and reports its null results with the
+        same prominence as the positive ones.
+      </p>
+    ),
+  },
+  {
+    q: "What does it cost, and how is it licensed?",
+    a: (
+      <p>
+        Delphi is free and open source under <a href={LICENSE}>Apache 2.0</a>. The only costs are
+        those of hosted providers you choose to enable, billed by them directly.
+      </p>
+    ),
+  },
 ];
 
-const UPDATES: [string, string][] = [
-  [
-    "Sep 2026",
-    "Preprint: a component-level decomposition of Delphi's retrieval against matched conventional baselines on SWE-bench Verified, with code, per-case artifacts, and 620 agent trajectories released.",
-  ],
-  [
-    "Aug 2026",
-    "Deterministic hybrid retrieval: identical searches return identical results. Agent mode now indexes generated source files. A file-level BM25 candidate source ships opt-in.",
-  ],
-  [
-    "Jul 2026",
-    "Immutable source snapshots, reproducible context sessions, durable connector synchronization, policy-gated web search and crawl, query expansion, and listwise reranking.",
-  ],
-  [
-    "Jun 2026",
-    "Code dependency graph (callers, callees, impact analysis), symbol extraction for eleven languages, local-folder indexing, index drift detection, and a lite deployment mode.",
-  ],
-];
-
-function Caption({ label, children }: { label: string; children: React.ReactNode }) {
+function Arrow() {
   return (
-    <>
-      <b>{label}:</b> {children}
-    </>
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6.5 12L17 12M13 16.5L17.5 12L13 7.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
+    </svg>
   );
 }
 
 export default function Home() {
   return (
-    <>
-      <a className="skip-link" href="#abstract">
+    <div className="site">
+      <a className="skip-link" href="#main">
         Skip to content
       </a>
 
-      <main className="paper">
-        <header className="titleblock">
-          <p className="eyebrow">Open-source software</p>
-          <h1>Delphi</h1>
-          <p className="subtitle">A local-first context engine for coding agents</p>
-          <p className="authors">Aayam Bansal</p>
-          <p className="affiliation">
-            <a href="https://syntheticsciences.ai">Synthetic Sciences</a>
-          </p>
-          <nav className="links" aria-label="Project links">
-            <a href={GITHUB}>Code</a>
-            <a href={NPM}>npm</a>
-            <a href={PYPI}>PyPI</a>
-            <a href={README}>Documentation</a>
+      <div className="container">
+        <header className="top">
+          <Link href="/" className="wordmark" aria-label="Delphi home">
+            <Mark size={26} />
+            <span>Delphi</span>
+          </Link>
+          <nav className="nav" aria-label="Site">
             <Link href="/research">Research</Link>
+            <a href={DOCS} className="optional">
+              Docs
+            </a>
+            <a href={GITHUB}>GitHub</a>
+            <a href={NPM} className="optional">
+              npm
+            </a>
+            <ThemeToggle />
+            <a href={README} className="cta">
+              Get started
+              <Arrow />
+            </a>
           </nav>
         </header>
 
-        <figure className="figure wide">
-          <div className="figure-scroll">
-            <ArchitectureFigure />
-          </div>
-          <figcaption>
-            <Caption label="Figure 1">
-              Delphi sits between a coding agent and the sources it works from. Everything is
-              indexed into a PostgreSQL database on the user&apos;s machine and exposed over MCP.
-            </Caption>
-          </figcaption>
-        </figure>
-
-        <section className="abstract" id="abstract">
-          <h2>Abstract</h2>
-          <p>
-            Coding agents work from what they can see, and most of what they need is not in their
-            training data: the repository in front of them, the documentation for the exact library
-            version it depends on, the paper a method came from. Delphi is an open-source context
-            engine that indexes repositories, documentation sites, research papers, datasets, and
-            local folders into a PostgreSQL database on the user&apos;s own machine and exposes them
-            to any MCP client as a small set of tools for indexing, searching, following call
-            graphs, and assembling context packs under a token budget. Retrieval fans a query out to
-            six candidate sources, dense vectors, BM25 full text, trigram symbol matching, exact
-            symbol and path lookup, and path tokens, and fuses them by reciprocal rank, so
-            identifier-heavy and prose queries share one pipeline. Identical requests return
-            identical results, completed indexing runs produce immutable snapshots, and saved
-            context sessions record exactly which snapshot an agent used. No source content leaves
-            the machine unless a remote provider is explicitly allowed.
-          </p>
-        </section>
-
-        <section id="sources">
-          <h2>
-            <span className="num">1</span>
-            <span>What Delphi indexes</span>
-          </h2>
-          <p>
-            A source is anything an agent might need to read while working. Each source type has
-            its own parser and produces the kind of context that is useful for it (Table 1).
-            Repositories are cloned with Git and parsed with tree-sitter, so functions, classes,
-            and their call relationships are available in addition to text. Documentation is
-            crawled within the requested scope and kept per version. Papers are split into
-            sections with their citations and equations preserved, so an agent can quote evidence
-            with its anchor.
-          </p>
-          <div className="table-wrap">
-            <p className="tablecaption">
-              <Caption label="Table 1">Source types and the context available for each.</Caption>
+        <main id="main">
+          <section className="hero">
+            <a className="kicker" href={LICENSE}>
+              Open source under Apache 2.0
+            </a>
+            <h1>A local-first context engine for coding agents</h1>
+            <p className="lede">
+              Delphi indexes your repositories, documentation, papers, datasets, and local folders
+              into PostgreSQL on your own machine.
+              <span className="br" />
+              It serves search, call graphs, and context packs to any MCP client, and nothing you
+              index leaves the machine unless you allow it.
             </p>
-            <table className="booktabs">
-              <thead>
-                <tr>
-                  <th scope="col">Source</th>
-                  <th scope="col">Available context</th>
-                </tr>
-              </thead>
-              <tbody>
-                {SOURCES.map(([source, context]) => (
-                  <tr key={source}>
-                    <td>{source}</td>
-                    <td>{context}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p>
-            Every index lives in the user&apos;s PostgreSQL database. When an indexing run
-            completes, it publishes an immutable snapshot of the source; a failed or cancelled run
-            leaves the previous snapshot searchable. Repositories can be indexed at a branch or at
-            an exact commit, and a freshness check reports when a local folder or repository has
-            drifted from its index.
-          </p>
-        </section>
+            <Install />
+          </section>
 
-        <section id="retrieval">
-          <h2>
-            <span className="num">2</span>
-            <span>Retrieval</span>
-          </h2>
-          <p>
-            Dense retrieval alone is a poor fit for code. An agent asking for{" "}
-            <code>handleAuthCallback</code> should get that function on the first try, not a list
-            of semantically similar middleware. Delphi therefore treats retrieval as candidate
-            generation followed by fusion (Figure 2). A query is sent to six candidate sources at
-            once: cosine similarity over pgvector embeddings, BM25 over a full-text index of the
-            chunks, trigram similarity over symbol names for partial and misspelled identifiers,
-            exact lookup of symbols by name or qualified name, exact lookup of files by path or
-            glob, and an opt-in overlap between query tokens and normalized file paths.
-          </p>
-          <figure className="figure wide">
-            <div className="figure-scroll">
-              <RetrievalFigure />
+          <figure className="fig">
+            <div className="fig-scroll">
+              <HeroFigure />
             </div>
             <figcaption>
-              <Caption label="Figure 2">
-                The hybrid retrieval pipeline. Candidate sources are scored independently and fused
-                by weighted reciprocal rank, because ranks are comparable across sources and raw
-                scores are not.
-              </Caption>
+              <b>Fig. 1</b>
+              How a search runs. One query fans out to six candidate sources, their rankings fuse by
+              reciprocal rank into one list, and the same query replayed returns the same list.
             </figcaption>
           </figure>
-          <p>
-            Candidates are fused by weighted reciprocal rank. A chunk found by several sources
-            rises; a chunk found by one strong source is kept rather than averaged away. The fused
-            list is diversified across files so a single large file cannot fill the result set,
-            and it can optionally pass through a cross-encoder or a listwise reranker over the
-            head of the list. Prose questions can optionally be expanded with a hypothetical
-            document before embedding.
-          </p>
-          <h3>Determinism</h3>
-          <p>
-            An agent that reruns a search should see the same answer. Every candidate query has a
-            total ordering, concurrent identical requests share a single execution, and the outputs
-            of any optional model providers are cached on disk, so a search repeats exactly across
-            requests and across restarts of the service. Vector search can run as an exact scan
-            rather than an approximate index when exact repeatability matters more than latency.
-          </p>
-          <h3>Code structure</h3>
-          <p>
-            Symbol extraction runs through tree-sitter for Python, JavaScript, TypeScript, Go,
-            Rust, Java, C, C++, C#, Ruby, and PHP. From the extracted definitions and references
-            Delphi builds a dependency graph per repository, which answers who calls a function,
-            what it calls, and what would be affected by changing it.
-          </p>
-          <h3>Context packs</h3>
-          <p>
-            A context pack takes a task description and a token budget and returns a ranked set of
-            files and excerpts sized to fit the agent&apos;s next call, together with the snapshot
-            each item came from. A context session saves that pack so another agent, or the same
-            agent later, can rehydrate exactly the same view.
-          </p>
-        </section>
 
-        <section id="interface">
-          <h2>
-            <span className="num">3</span>
-            <span>Agent interface</span>
-          </h2>
-          <p>
-            Delphi is an MCP server. Its tools are grouped, and a profile selects which groups are
-            advertised to the agent, since every tool definition costs tokens on each handshake.
-            The default <code>code</code> profile exposes repository indexing, search, code
-            structure, and context tools; <code>papers</code>, <code>docs</code>,{" "}
-            <code>minimal</code>, and <code>all</code> select other subsets. Table 2 lists
-            representative tools.
-          </p>
-          <div className="table-wrap">
-            <p className="tablecaption">
-              <Caption label="Table 2">Representative MCP tools by group.</Caption>
-            </p>
-            <table className="booktabs">
-              <thead>
-                <tr>
-                  <th scope="col">Group</th>
-                  <th scope="col">Tools</th>
-                </tr>
-              </thead>
-              <tbody>
-                {TOOLS.map(([group, tools]) => (
-                  <tr key={group}>
-                    <td>{group}</td>
-                    <td className="tool-list">
-                      {tools.map((tool, i) => (
-                        <span key={tool}>
-                          <code>{tool}</code>
-                          {i < tools.length - 1 ? ", " : ""}
-                        </span>
-                      ))}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <p>
-            The same operations are available over HTTP at <code>localhost:8742</code>, and a local
-            dashboard at <code>localhost:3000</code> shows indexed sources, jobs, and API keys.
-          </p>
-        </section>
+          <section className="section" id="what">
+            <div className="section-title">
+              <h2>What is Delphi?</h2>
+              <p>
+                Delphi is an open-source context engine that gives a coding agent the files,
+                symbols, and documents it needs, from an index that lives on your machine.
+              </p>
+            </div>
+            <ul className="list">
+              {WHAT.map(([term, body]) => (
+                <li key={term}>
+                  <span className="marker">•</span>
+                  <div>
+                    <strong>{term}</strong>
+                    {body}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <a href={DOCS} className="button">
+              <span>Read the docs</span>
+              <Arrow />
+            </a>
+          </section>
 
-        <section id="install">
-          <h2>
-            <span className="num">4</span>
-            <span>Getting started</span>
-          </h2>
-          <p>
-            The installer starts the local stack and can register Delphi with Claude Code, Cursor,
-            Windsurf, or Claude Desktop. It needs Docker, Git, and one embeddings provider; the
-            default local sentence-transformers model needs no API key.
-          </p>
-          <pre className="codeblock">
-            <span className="prompt">$ </span>npx @synsci/delphi
-          </pre>
-          <pre className="codeblock">
-            <span className="prompt">$ </span>delphi
-            <span className="comment">            # open the dashboard</span>
-            {"\n"}
-            <span className="prompt">$ </span>delphi status
-            <span className="comment">     # check the stack</span>
-            {"\n"}
-            <span className="prompt">$ </span>delphi logs -f
-            <span className="comment">    # follow logs</span>
-            {"\n"}
-            <span className="prompt">$ </span>delphi stop
-            <span className="comment">       # stop services</span>
-          </pre>
-          <p>
-            Any other MCP client connects through a small stdio proxy. Create an API key in the
-            dashboard, then add:
-          </p>
-          <pre className="codeblock">{`{
+          <section className="section" id="research">
+            <div className="section-title">
+              <h2>Where the gains come from</h2>
+              <div className="prose">
+                <p>
+                  We decomposed Delphi against conventional retrieval built from its own parts, on
+                  SWE-bench Verified instances its development never saw. The advantage is the
+                  candidate pool, not the reranker: Delphi&apos;s candidates lead by{" "}
+                  <strong>+0.19 MRR</strong> and <strong>+0.07 Recall@20</strong> before any
+                  reranking. The shared rerankers help the weaker conventional pool more, so after
+                  reranking MRR ties while the recall gap (<strong>+0.09</strong>) stays.
+                </p>
+                <p>
+                  The pool advantage comes from chunking, indexing, and weighting rather than any
+                  single structural branch, and it inverts on commit-to-files queries. The paper
+                  claims no state of the art and gives its null results the same billing as the
+                  positive ones.
+                </p>
+              </div>
+            </div>
+            <figure className="fig inset">
+              <div className="fig-scroll">
+                <FactorialChart />
+              </div>
+              <figcaption>
+                <b>Fig. 2</b>
+                Candidate pool × learned reranking on 98 SWE-bench Verified instances that
+                development never saw. Delphi&apos;s pool leads before reranking; the rerankers close
+                the MRR gap but not the recall gap.
+              </figcaption>
+            </figure>
+            <div className="buttons">
+              <Link href="/research" className="button">
+                <span>Read the paper</span>
+                <Arrow />
+              </Link>
+              <a href={PDF} className="button-light">
+                <span>PDF</span>
+              </a>
+              <a href={BENCHMARK} className="button-light">
+                <span>Code and artifacts</span>
+              </a>
+              <a href={DATASET} className="button-light">
+                <span>620 agent trajectories</span>
+              </a>
+            </div>
+          </section>
+
+          <section className="section" id="agents">
+            <div className="section-title">
+              <h2>Plugs into the agent you already use</h2>
+              <p>
+                The installer registers Delphi with your editor in one step; every other MCP client
+                connects through a small stdio proxy. Tools are grouped into profiles (
+                <code>code</code>, <code>papers</code>, <code>docs</code>, <code>minimal</code>,{" "}
+                <code>all</code>) so the handshake only advertises what the agent needs.
+              </p>
+            </div>
+            <ul className="clients" aria-label="Supported clients">
+              {CLIENTS.map((c) => (
+                <li key={c}>{c}</li>
+              ))}
+            </ul>
+            <pre className="code">{`{
   "mcpServers": {
     "delphi": {
       "command": "uvx",
@@ -299,114 +282,78 @@ export default function Home() {
     }
   }
 }`}</pre>
-          <p>
-            To run from source, clone the <a href={GITHUB}>repository</a>, copy{" "}
-            <code>env.example</code> to <code>.env</code>, and run{" "}
-            <code>./scripts/launch_app.sh</code>. Configuration is documented in the{" "}
-            <a href={ENV_DOCS}>advanced environment reference</a>.
-          </p>
-        </section>
-
-        <section id="local">
-          <h2>
-            <span className="num">5</span>
-            <span>Local-first execution</span>
-          </h2>
-          <p>
-            The API, workers, database, and dashboard all run on the user&apos;s machine. The
-            default network policy is <code>local_only</code>: no remote provider is called unless
-            the deployment allowlists it, and a per-request policy can only narrow that ceiling,
-            never widen it. Embeddings default to a local sentence-transformers model; OpenAI and
-            Gemini embeddings, and a keyless hash embedding for constrained machines, are
-            alternatives. Hosted web search and crawling exist but are off by default and, when
-            enabled, send only the query, never indexed content.
-          </p>
-          <p>
-            Delphi is licensed under Apache 2.0 and developed in the open at{" "}
-            <a href={GITHUB}>github.com/synthetic-sciences/delphi</a>.
-          </p>
-        </section>
-
-        <section id="evaluation">
-          <h2>
-            <span className="num">6</span>
-            <span>Evaluation</span>
-          </h2>
-          <p>
-            Delphi&apos;s retrieval has been decomposed against conventional baselines built from
-            its own parts, on SWE-bench Verified instances that its development never saw. The
-            preprint{" "}
-            <Link href="/research">
-              <i>Where Do Context-Engine Gains Come From?</i>
-            </Link>{" "}
-            finds that Delphi&apos;s advantage over a dense+BM25 stack is its candidate pool (+0.19
-            MRR and +0.07 Recall@20 before reranking); that the shared rerankers close the MRR gap
-            but not the recall gap; and that the pool advantage comes mostly from chunking,
-            indexing, and weighting rather than from any single structural branch. On
-            commit-to-files queries the pattern inverts. The paper claims no state of the art and
-            reports its null and negative results with the same prominence as the positive ones.
-          </p>
-          <p>
-            The code, per-case artifacts, exposure ledger, and all 620 agent trajectories are
-            public; see the <Link href="/research">research page</Link> for the paper, the
-            artifacts, and how to cite it.
-          </p>
-        </section>
-
-        <section id="updates">
-          <h2>Updates</h2>
-          <dl className="updates">
-            {UPDATES.map(([date, text]) => (
-              <div key={date}>
-                <dt>{date}</dt>
-                <dd>{text}</dd>
+            <figure className="fig inset">
+              <div className="fig-scroll">
+                <ArchitectureFigure />
               </div>
-            ))}
-          </dl>
-        </section>
+              <figcaption>
+                <b>Fig. 3</b>
+                Everything runs on the user&apos;s machine: the agent talks to Delphi over MCP, and
+                Delphi indexes sources into PostgreSQL with pgvector.
+              </figcaption>
+            </figure>
+          </section>
 
-        <section id="citation">
-          <h2>Citation</h2>
-          <p>
-            To cite the software; the evaluation paper has its own entry on the{" "}
-            <Link href="/research#citation">research page</Link>.
-          </p>
-          <pre className="codeblock">{`@software{delphi2026,
-  title   = {Delphi: a local-first context engine for coding agents},
-  author  = {Bansal, Aayam},
-  year    = {2026},
-  url     = {https://github.com/synthetic-sciences/delphi},
-  license = {Apache-2.0}
-}`}</pre>
-        </section>
+          <section className="section faq" id="faq">
+            <div className="section-title">
+              <h2>FAQ</h2>
+            </div>
+            <ul>
+              {FAQ.map((item) => (
+                <li key={item.q}>
+                  <Faq question={item.q}>{item.a}</Faq>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </main>
 
-        <footer className="colophon">
-          <div>
-            <span>
-              Delphi is a <a href="https://syntheticsciences.ai">Synthetic Sciences</a>
-              {" project. "}
-            </span>
-            <span>&copy; {new Date().getFullYear()} InkVell Inc.</span>
+        <p className="giant" aria-hidden="true">
+          Delphi
+        </p>
+
+        <footer className="footer">
+          <div className="cell">
+            <a href={GITHUB}>
+              GitHub
+              <Stars repo="synthetic-sciences/delphi" />
+            </a>
           </div>
-          <ul>
-            <li>
-              <a href={GITHUB}>GitHub</a>
-            </li>
-            <li>
-              <a href={NPM}>npm</a>
-            </li>
-            <li>
-              <a href="mailto:team@syntheticsciences.ai">Contact</a>
-            </li>
-            <li>
-              <a href="https://syntheticsciences.ai/privacy">Privacy</a>
-            </li>
-            <li>
-              <a href="https://syntheticsciences.ai/terms">Terms</a>
-            </li>
-          </ul>
+          <div className="cell">
+            <a href={DOCS}>Docs</a>
+          </div>
+          <div className="cell">
+            <a href={NPM}>npm</a>
+          </div>
+          <div className="cell">
+            <a href={PYPI}>PyPI</a>
+          </div>
+          <div className="cell">
+            <Link href="/research">Research</Link>
+          </div>
+          <div className="cell">
+            <a href={SYNTHETIC_SCIENCES}>Synthetic Sciences</a>
+          </div>
         </footer>
-      </main>
-    </>
+      </div>
+
+      <div className="legal">
+        <span>
+          &copy; {new Date().getFullYear()} <a href={SYNTHETIC_SCIENCES}>Synthetic Sciences</a>
+        </span>
+        <span>
+          <a href="mailto:team@syntheticsciences.ai">Contact</a>
+        </span>
+        <span>
+          <a href="https://syntheticsciences.ai/privacy">Privacy</a>
+        </span>
+        <span>
+          <a href="https://syntheticsciences.ai/terms">Terms</a>
+        </span>
+        <span>
+          <a href={LICENSE}>Apache 2.0</a>
+        </span>
+      </div>
+    </div>
   );
 }

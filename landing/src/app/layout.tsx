@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import localFont from "next/font/local";
+import Script from "next/script";
 import "./globals.css";
 
 const cmu = localFont({
@@ -40,14 +41,30 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  colorScheme: "light dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#fbfaf7" },
+    { media: "(prefers-color-scheme: dark)", color: "#0c0c0c" },
+  ],
+};
+
+// Applies the saved or system color theme before first paint.
+const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem("delphi-theme");if(t!=="light"&&t!=="dark"){t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}document.documentElement.dataset.theme=t}catch(e){}})();`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={cmu.variable}>
-      <body>{children}</body>
+    <html lang="en" className={cmu.variable} suppressHydrationWarning>
+      <body>
+        <Script id="delphi-theme" strategy="beforeInteractive">
+          {THEME_SCRIPT}
+        </Script>
+        {children}
+      </body>
     </html>
   );
 }
