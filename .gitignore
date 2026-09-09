@@ -115,4 +115,4 @@ new/
 # Round-3 evaluation archive (paper, research blog, run artifacts, harness,
 # journals). It is its own private git repository and must never enter this
 # public one.
-benchmark-paper/
+delphi-benchmark/

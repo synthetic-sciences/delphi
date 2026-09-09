@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ArchitectureFigure, RetrievalFigure } from "@/components/Figures";
 
 const GITHUB = "https://github.com/synthetic-sciences/delphi";
@@ -24,6 +25,10 @@ const TOOLS: [string, string[]][] = [
 ];
 
 const UPDATES: [string, string][] = [
+  [
+    "Sep 2026",
+    "Preprint: a component-level decomposition of Delphi's retrieval against matched conventional baselines on SWE-bench Verified, with code, per-case artifacts, and 620 agent trajectories released.",
+  ],
   [
     "Aug 2026",
     "Deterministic hybrid retrieval: identical searches return identical results. Agent mode now indexes generated source files. A file-level BM25 candidate source ships opt-in.",
@@ -67,6 +72,7 @@ export default function Home() {
             <a href={NPM}>npm</a>
             <a href={PYPI}>PyPI</a>
             <a href={README}>Documentation</a>
+            <Link href="/research">Research</Link>
           </nav>
         </header>
 
@@ -321,6 +327,32 @@ export default function Home() {
           </p>
         </section>
 
+        <section id="evaluation">
+          <h2>
+            <span className="num">6</span>
+            <span>Evaluation</span>
+          </h2>
+          <p>
+            Delphi&apos;s retrieval has been decomposed against conventional baselines built from
+            its own parts, on SWE-bench Verified instances that its development never saw. The
+            preprint{" "}
+            <Link href="/research">
+              <i>Where Do Context-Engine Gains Come From?</i>
+            </Link>{" "}
+            finds that Delphi&apos;s advantage over a dense+BM25 stack is its candidate pool (+0.19
+            MRR and +0.07 Recall@20 before reranking); that the shared rerankers close the MRR gap
+            but not the recall gap; and that the pool advantage comes mostly from chunking,
+            indexing, and weighting rather than from any single structural branch. On
+            commit-to-files queries the pattern inverts. The paper claims no state of the art and
+            reports its null and negative results with the same prominence as the positive ones.
+          </p>
+          <p>
+            The code, per-case artifacts, exposure ledger, and all 620 agent trajectories are
+            public; see the <Link href="/research">research page</Link> for the paper, the
+            artifacts, and how to cite it.
+          </p>
+        </section>
+
         <section id="updates">
           <h2>Updates</h2>
           <dl className="updates">
@@ -335,6 +367,10 @@ export default function Home() {
 
         <section id="citation">
           <h2>Citation</h2>
+          <p>
+            To cite the software; the evaluation paper has its own entry on the{" "}
+            <Link href="/research#citation">research page</Link>.
+          </p>
           <pre className="codeblock">{`@software{delphi2026,
   title   = {Delphi: a local-first context engine for coding agents},
   author  = {Bansal, Aayam},

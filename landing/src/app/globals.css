@@ -113,6 +113,17 @@
     max-width: 30ch;
     text-wrap: balance;
   }
+  /* A paper title runs to several words; set it like an article heading. */
+  .titleblock h1.paper-title {
+    font-size: clamp(30px, 4.8vw, 42px);
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+  .titleblock .subtitle.paper-subtitle {
+    font-size: clamp(18px, 2.4vw, 21px);
+    max-width: 46ch;
+  }
   .titleblock .authors {
     margin-top: 26px;
     font-size: 18px;
