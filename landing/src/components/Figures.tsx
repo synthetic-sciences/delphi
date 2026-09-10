@@ -141,38 +141,40 @@ const RESULTS: [string, number][] = [
 
 /**
  * One query fans out to six candidate sources, the six rankings fuse into
- * one list, and the same query replayed returns the same list. Draws itself
- * once on load; `prefers-reduced-motion` shows the finished drawing.
+ * one list, and the same query replayed returns the same list. Composed as
+ * a portrait to sit beside the hero copy. Draws itself once on load;
+ * `prefers-reduced-motion` shows the finished drawing.
  */
 export function HeroFigure() {
-  const queryX = 2;
-  const queryW = 176;
-  const queryH = 46;
-  const queryY = 176;
-  const qy = queryY + queryH / 2;
+  const W = 440;
+  const cx = W / 2;
 
-  const srcX = 250;
-  const srcW = 214;
-  const srcH = 34;
-  const srcTop = 22;
-  const srcGap = 60;
+  const queryW = 208;
+  const queryH = 42;
+  const queryY = 22;
+  const queryX = cx - queryW / 2;
 
-  const fuseX = 534;
-  const fuseW = 148;
-  const fuseH = 56;
-  const fuseY = 171;
-  const fy = fuseY + fuseH / 2;
+  const colW = 196;
+  const colX = [14, W - 14 - colW];
+  const rowH = 32;
+  const rowTop = 118;
+  const rowGap = 14;
 
-  const resX = 732;
-  const resW = 130;
-  const resTop = 120;
-  const resGap = 46;
-  const noteY = fuseY + fuseH + 46;
+  const fuseW = 164;
+  const fuseH = 48;
+  const fuseY = 286;
+  const fuseX = cx - fuseW / 2;
+
+  const listX = 40;
+  const listW = W - 2 * listX;
+  const listTop = 392;
+  const listGap = 38;
+  const noteY = listTop + RESULTS.length * listGap + 12;
 
   return (
     <svg
       className="hero-figure"
-      viewBox="0 0 864 392"
+      viewBox={`0 0 ${W} ${noteY + 40}`}
       role="img"
       aria-labelledby="hero-title hero-desc"
     >
@@ -186,107 +188,111 @@ export function HeroFigure() {
 
       {/* Query */}
       <g className="hf-fade" style={{ animationDelay: "0ms" }}>
-        <text x={queryX} y={queryY - 14} fontSize="13" className="hf-muted">
+        <text x={queryX} y={queryY - 8} fontSize="11" className="hf-muted">
           query
         </text>
-        <rect x={queryX} y={queryY} width={queryW} height={queryH} rx="4" className="hf-box hf-box-strong" />
-        <text x={queryX + queryW / 2} y={qy + 5} textAnchor="middle" fontSize="14.5">
+        <rect x={queryX} y={queryY} width={queryW} height={queryH} rx="2" className="hf-box hf-box-strong" />
+        <text x={cx} y={queryY + queryH / 2 + 4.5} textAnchor="middle" fontSize="13.5">
           handleAuthCallback
         </text>
       </g>
 
-      {/* Fan-out */}
+      {/* Fan-out to a 2 x 3 grid of candidate sources */}
       {SOURCES.map((label, i) => {
-        const y = srcTop + i * srcGap;
-        const cy = y + srcH / 2;
+        const col = i % 2;
+        const row = Math.floor(i / 2);
+        const x = colX[col];
+        const y = rowTop + row * (rowH + rowGap);
+        const mid = x + colW / 2;
         return (
           <g key={label}>
             <path
-              d={`M${queryX + queryW} ${qy} C ${queryX + queryW + 36} ${qy}, ${srcX - 36} ${cy}, ${srcX} ${cy}`}
+              d={`M${cx} ${queryY + queryH} C ${cx} ${queryY + queryH + 30}, ${mid} ${y - 30}, ${mid} ${y}`}
               pathLength={1}
               className="hf-path"
-              style={{ animationDelay: `${180 + i * 80}ms` }}
+              style={{ animationDelay: `${180 + i * 70}ms` }}
             />
-            <g className="hf-fade" style={{ animationDelay: `${520 + i * 80}ms` }}>
-              <rect x={srcX} y={y} width={srcW} height={srcH} rx="4" className="hf-box" />
-              <text x={srcX + srcW / 2} y={cy + 5} textAnchor="middle" fontSize="14">
+            <g className="hf-fade" style={{ animationDelay: `${480 + i * 70}ms` }}>
+              <rect x={x} y={y} width={colW} height={rowH} rx="2" className="hf-box" />
+              <text x={mid} y={y + rowH / 2 + 4.5} textAnchor="middle" fontSize="12.5">
                 {label}
               </text>
             </g>
             <path
-              d={`M${srcX + srcW} ${cy} C ${srcX + srcW + 34} ${cy}, ${fuseX - 34} ${fy}, ${fuseX} ${fy}`}
+              d={`M${mid} ${y + rowH} C ${mid} ${y + rowH + 26}, ${cx} ${fuseY - 26}, ${cx} ${fuseY}`}
               pathLength={1}
               className="hf-path"
-              style={{ animationDelay: `${980 + i * 70}ms` }}
+              style={{ animationDelay: `${900 + i * 60}ms` }}
             />
           </g>
         );
       })}
 
       {/* Fusion */}
-      <g className="hf-fade" style={{ animationDelay: "1500ms" }}>
-        <rect x={fuseX} y={fuseY} width={fuseW} height={fuseH} rx="4" className="hf-box" />
-        <text x={fuseX + fuseW / 2} y={fy - 3} textAnchor="middle" fontSize="15" fontWeight="700">
+      <g className="hf-fade" style={{ animationDelay: "1400ms" }}>
+        <rect x={fuseX} y={fuseY} width={fuseW} height={fuseH} rx="2" className="hf-box" />
+        <text x={cx} y={fuseY + 20} textAnchor="middle" fontSize="13" fontWeight="700">
           rank fusion
         </text>
-        <text x={fuseX + fuseW / 2} y={fy + 15} textAnchor="middle" fontSize="12.5" className="hf-muted">
+        <text x={cx} y={fuseY + 36} textAnchor="middle" fontSize="11" className="hf-muted">
           reciprocal rank
         </text>
       </g>
+      <path
+        d={`M${cx} ${fuseY + fuseH} L${cx} ${listTop - 26}`}
+        pathLength={1}
+        className="hf-path"
+        style={{ animationDelay: "1700ms" }}
+      />
 
-      {/* Results */}
+      {/* Ranked results */}
       <text
-        x={resX}
-        y={resTop - 14}
-        fontSize="13"
+        x={listX}
+        y={listTop - 10}
+        fontSize="11"
         className="hf-muted hf-fade"
-        style={{ animationDelay: "2060ms" }}
+        style={{ animationDelay: "1900ms" }}
       >
         ranked results
       </text>
       {RESULTS.map(([file, score], i) => {
-        const y = resTop + i * resGap;
+        const y = listTop + i * listGap;
         return (
-          <g key={file}>
-            <path
-              d={`M${fuseX + fuseW} ${fy} C ${fuseX + fuseW + 24} ${fy}, ${resX - 24} ${y + 16}, ${resX} ${y + 16}`}
-              pathLength={1}
-              className="hf-path"
-              style={{ animationDelay: `${1780 + i * 60}ms` }}
+          <g key={file} className="hf-fade" style={{ animationDelay: `${1960 + i * 70}ms` }}>
+            <text x={listX} y={y + 8} fontSize="12.5" className={i === 0 ? "hf-strong" : undefined}>
+              {file}
+            </text>
+            <text x={listX + listW} y={y + 8} fontSize="11" textAnchor="end" className="hf-muted">
+              {i + 1}
+            </text>
+            <rect x={listX} y={y + 16} width={listW} height="5" rx="2.5" className="hf-track" />
+            <rect
+              x={listX}
+              y={y + 16}
+              width={listW * score}
+              height="5"
+              rx="2.5"
+              className={i === 0 ? "hf-bar hf-bar-strong" : "hf-bar"}
+              style={{ animationDelay: `${2020 + i * 70}ms` }}
             />
-            <g className="hf-fade" style={{ animationDelay: `${2060 + i * 60}ms` }}>
-              <text x={resX} y={y + 6} fontSize="13.5" className={i === 0 ? "hf-strong" : undefined}>
-                {file}
-              </text>
-              <rect x={resX} y={y + 16} width={resW} height="6" rx="3" className="hf-track" />
-              <rect
-                x={resX}
-                y={y + 16}
-                width={resW * score}
-                height="6"
-                rx="3"
-                className={i === 0 ? "hf-bar hf-bar-strong" : "hf-bar"}
-                style={{ animationDelay: `${2120 + i * 60}ms` }}
-              />
-            </g>
           </g>
         );
       })}
 
-      {/* Determinism, under the fusion node where nothing else runs */}
-      <g className="hf-fade" style={{ animationDelay: "2700ms" }}>
+      {/* Determinism */}
+      <g className="hf-fade" style={{ animationDelay: "2600ms" }}>
         <path
-          d={`M${fuseX} ${noteY + 4} l5 5 l10 -11`}
+          d={`M${listX} ${noteY + 3} l4.5 4.5 l9 -10`}
           fill="none"
           stroke="currentColor"
-          strokeWidth="1.8"
+          strokeWidth="1.6"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        <text x={fuseX + 22} y={noteY + 7} fontSize="13">
+        <text x={listX + 20} y={noteY + 6} fontSize="12">
           same query, same results
         </text>
-        <text x={fuseX + 22} y={noteY + 25} fontSize="12" className="hf-muted">
+        <text x={listX + 20} y={noteY + 23} fontSize="11" className="hf-muted">
           across requests and restarts
         </text>
       </g>
@@ -337,10 +343,10 @@ function Panel({ title, cells, x }: { title: string; cells: Cell[]; x: number })
         );
       })}
       <text x={(xs[0] + xs[1] + barW) / 2} y={base + 22} textAnchor="middle" fontSize="13" className="hf-muted">
-        conventional candidates
+        conventional
       </text>
       <text x={(xs[2] + xs[3] + barW) / 2} y={base + 22} textAnchor="middle" fontSize="13" className="hf-muted">
-        Delphi candidates
+        Delphi
       </text>
     </g>
   );
